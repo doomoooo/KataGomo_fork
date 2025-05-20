@@ -38,8 +38,8 @@ struct Rules {
 
   float komi;
   //Min and max acceptable komi in various places involving user input validation
-  static constexpr float MIN_USER_KOMI = -150.0f;
-  static constexpr float MAX_USER_KOMI = 150.0f;
+  static constexpr float MIN_USER_KOMI = -15000.0f;
+  static constexpr float MAX_USER_KOMI = 15000.0f;
 
   Rules();
   Rules(
