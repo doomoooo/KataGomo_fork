@@ -28,7 +28,7 @@ using namespace nvinfer1;
 // Define this to print out some of the intermediate values of the neural net
 //#define DEBUG_INTERMEDIATE_VALUES
 
-//#define CACHE_TENSORRT_PLAN
+#define CACHE_TENSORRT_PLAN
 
 const int TensorRT_BuilderOptimizationLevel = 2; //0 for fast init, 2 is default, 5 is max
 
@@ -1183,22 +1183,89 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
       
       if (packedC != numInputChannels) throw StringError("binaryInputNCHWPacked channel mismatch");
       
+      // Determine file spatial dimensions
+      int fileMaxLen = Board::MAX_LEN;
+      int fileSpatialSize = fileMaxLen * fileMaxLen;
+      int expectedPackedArea = (fileSpatialSize + 7) / 8;
+      
+      if (packedArea != expectedPackedArea) {
+          throw StringError("binaryInputNCHWPacked packedArea mismatch with Board::MAX_LEN");
+      }
+      
+      std::vector<int> validIndices;
+      const uint8_t* packedData = (const uint8_t*)(binaryBuf.data() + offset);
+      
+      for(int i=0; i<fileRows; i++) {
+        const uint8_t* packedPtr = packedData + (size_t)i * packedC * packedArea; // Channel 0 is at offset 0 of this row
+        bool possible = true;
+        for(int y=0; y<fileMaxLen; y++) {
+            for(int x=0; x<fileMaxLen; x++) {
+               int srcPos = y * fileMaxLen + x;
+               int byteIdx = srcPos >> 3;
+               int bitIdx = 7 - (srcPos & 7);
+               bool bit = false;
+               if(byteIdx < packedArea) {
+                   bit = (packedPtr[byteIdx] >> bitIdx) & 1;
+               }
+               
+               bool inside = (x < nnXLen && y < nnYLen);
+               if (inside) {
+                   if (requireExactNNLen && !bit) {
+                       possible = false;
+                       break;
+                   }
+               } else {
+                   if (bit) {
+                       possible = false;
+                       break;
+                   }
+               }
+            }
+            if(!possible) break;
+        }
+        
+        if (possible) {
+            validIndices.push_back(i);
+            if((int)validIndices.size() >= maxRows) 
+            {
+              std::cerr << "Successfully found " << mTotalRows << " valid int8 calibration samples in first " << i << " samples" << std::endl;
+              break;
+            }
+        }
+      }
+      
+      mTotalRows = validIndices.size();
+      if(mTotalRows < 128) throw StringError("Too few valid calibration samples found: " + Global::intToString(mTotalRows) + " (minimum 128 required)");
+      if(mTotalRows < maxRows) std::cerr << "Warning: calibration samples found: " << mTotalRows << " (less than requested " << maxRows << ")" << std::endl;
+
       size_t spatialSize = (size_t)mTotalRows * numInputChannels * nnYLen * nnXLen;
       mInputSpatialData.resize(spatialSize);
       
-      const uint8_t* packedData = (const uint8_t*)(binaryBuf.data() + offset);
       int posArea = nnXLen * nnYLen;
       
       for(int i=0; i<mTotalRows; i++) {
+        int fileIdx = validIndices[i];
         for(int c=0; c<numInputChannels; c++) {
-           const uint8_t* packedPtr = packedData + (size_t)i * packedC * packedArea + c * packedArea;
+           const uint8_t* packedPtr = packedData + (size_t)fileIdx * packedC * packedArea + c * packedArea;
            float* unpackedPtr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea + c * posArea;
            
-           for(int j=0; j<posArea; j++) {
-              int byteIdx = j >> 3;
-              int bitIdx = 7 - (j & 7);
-              bool bit = (packedPtr[byteIdx] >> bitIdx) & 1;
-              unpackedPtr[j] = bit ? 1.0f : 0.0f;
+           for(int y=0; y<nnYLen; y++) {
+               for(int x=0; x<nnXLen; x++) {
+                   int srcPos = y * fileMaxLen + x;
+                   int dstPos = y * nnXLen + x;
+                   
+                   if(srcPos < fileSpatialSize) {
+                       int byteIdx = srcPos >> 3;
+                       int bitIdx = 7 - (srcPos & 7);
+                       bool bit = false;
+                       if(byteIdx < packedArea) {
+                           bit = (packedPtr[byteIdx] >> bitIdx) & 1;
+                       }
+                       unpackedPtr[dstPos] = bit ? 1.0f : 0.0f;
+                   } else {
+                       unpackedPtr[dstPos] = 0.0f;
+                   }
+               }
            }
         }
       }
@@ -1206,9 +1273,11 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
       if (requireExactNNLen) {
         int posArea = nnXLen * nnYLen;
         for(int i=0; i<mTotalRows; i++) {
-           float* ptr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea;
+           const float* ptr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea; // Channel 0
            for(int j=0; j<posArea; j++) {
-               ptr[j] = 1.0f;
+               if(ptr[j] != 1.0f) {
+                   throw StringError("requireExactNNLen check failed: loaded data channel 0 is not all 1s in nnXLen*nnYLen area for sample " + Global::intToString(i));
+               }
            }
         }
       }
@@ -1217,21 +1286,35 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
       if (!parseNumpyHeader(globalBuf, offset, shape, dtype))
          throw StringError("Failed to parse globalInputNC.npy header");
       if (shape.size() != 2) throw StringError("globalInputNC.npy shape mismatch");
-      if (shape[0] < mTotalRows) throw StringError("globalInputNC.npy row mismatch");
+      // shape[0] is fileRows. We need validIndices.
+      if (shape[0] < fileRows) throw StringError("globalInputNC.npy row mismatch with binary input");
       if (shape[1] != numInputGlobalChannels) throw StringError("globalInputNC.npy channel mismatch");
       
       size_t globalSize = (size_t)mTotalRows * numInputGlobalChannels;
       mInputGlobalData.resize(globalSize);
-      std::memcpy(mInputGlobalData.data(), globalBuf.data() + offset, globalSize * sizeof(float));
+      
+      const float* globalSrc = (const float*)(globalBuf.data() + offset);
+      for(int i=0; i<mTotalRows; i++) {
+          int fileIdx = validIndices[i];
+          std::memcpy(mInputGlobalData.data() + (size_t)i * numInputGlobalChannels, 
+                      globalSrc + (size_t)fileIdx * numInputGlobalChannels, 
+                      numInputGlobalChannels * sizeof(float));
+      }
 
       if (numInputMetaChannels > 0) {
           if (zip.readBuffer("metadataInputNC.npy", metaBuf)) {
              shape.clear();
              if (parseNumpyHeader(metaBuf, offset, shape, dtype)) {
-                 if (shape[0] >= mTotalRows) {
+                 if (shape[0] >= fileRows) {
                      size_t metaSize = (size_t)mTotalRows * numInputMetaChannels;
                      mInputMetaData.resize(metaSize);
-                     std::memcpy(mInputMetaData.data(), metaBuf.data() + offset, metaSize * sizeof(float));
+                     const float* metaSrc = (const float*)(metaBuf.data() + offset);
+                     for(int i=0; i<mTotalRows; i++) {
+                         int fileIdx = validIndices[i];
+                         std::memcpy(mInputMetaData.data() + (size_t)i * numInputMetaChannels, 
+                                     metaSrc + (size_t)fileIdx * numInputMetaChannels, 
+                                     numInputMetaChannels * sizeof(float));
+                     }
                  }
              }
           }
@@ -1329,12 +1412,20 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
       std::copy(std::istream_iterator<char>(input), std::istream_iterator<char>(), std::back_inserter(mCache));
     }
     length = mCache.size();
+    if(length>0)
+      std::cerr << "Read int8 calibration cache file " << mCacheFile << std::endl;
+    else
+      std::cerr << "Create new int8 calibration cache file " << mCacheFile << std::endl;
     return length ? mCache.data() : nullptr;
   }
 
   void writeCalibrationCache(const void* cache, size_t length) noexcept override {
     std::ofstream output(mCacheFile, std::ios::binary);
+    if (!output.good()) {
+      throw StringError("Could not open int8 calibration cache file " + mCacheFile + " for writing");
+    }
     output.write(reinterpret_cast<const char*>(cache), length);
+    std::cerr << "Write int8 calibration cache file " << mCacheFile << std::endl;
   }
 
 private:
@@ -1475,6 +1566,7 @@ struct ComputeHandle {
         //}
         calibrator = std::make_unique<FileInt8Calibrator>(maxBatchSize, ctx->nnXLen, ctx->nnYLen, loadedModel, calibrationCacheFile, "calibrate.npz", requireExactNNLen);
         config->setInt8Calibrator(calibrator.get());
+        tuneInt8Mutex.unlock();
     }
     config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
 
