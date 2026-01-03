@@ -242,9 +242,10 @@ static void throwZipError() {
   throw StringError("KataGo was built without libzip library, unable to create zip file or write training data");
 }
 
-ZipFile::ZipFile(const string& fName)
+ZipFile::ZipFile(const string& fName, bool write)
   :fileName(fName),file(NULL)
 {
+  (void)write;
   (void)file;
   throwZipError();
 }
@@ -257,6 +258,13 @@ void ZipFile::writeBuffer(const char* nameWithinZip, void* data, uint64_t numByt
   (void)data;
   (void)numBytes;
   throwZipError();
+}
+
+bool ZipFile::readBuffer(const string& nameWithinZip, vector<char>& data) {
+  (void)nameWithinZip;
+  (void)data;
+  throwZipError();
+  return false;
 }
 
 void ZipFile::close() {
@@ -273,14 +281,17 @@ struct ZipError {
   ZipError& operator=(const ZipError&) = delete;
 };
 
-ZipFile::ZipFile(const string& fName)
+ZipFile::ZipFile(const string& fName, bool write)
   :fileName(fName),file(NULL)
 {
   ZipError zipError;
+  int flags = 0;
+  if(write) flags = ZIP_CREATE | ZIP_TRUNCATE;
+
   zip_source_t* zipFileSource = zip_source_file_create(fileName.c_str(),0,-1,&(zipError.value));
   if(zipFileSource == NULL)
     throw StringError("Could not open zip file " + fileName + " due to error " + zip_error_strerror(&(zipError.value)));
-  zip_t* fileHandle = zip_open_from_source(zipFileSource, ZIP_CREATE | ZIP_TRUNCATE, &(zipError.value));
+  zip_t* fileHandle = zip_open_from_source(zipFileSource, flags, &(zipError.value));
   file = fileHandle;
   if(file == NULL) {
     zip_source_free(zipFileSource);
@@ -310,6 +321,25 @@ void ZipFile::writeBuffer(const char* nameWithinZip, void* data, uint64_t numByt
       " within zip file " + fileName + " due to error " + zip_strerror((zip_t*)file)
     );
   }
+}
+
+bool ZipFile::readBuffer(const string& nameWithinZip, vector<char>& data) {
+  zip_t* z = (zip_t*)file;
+  struct zip_stat st;
+  zip_stat_init(&st);
+  if(zip_stat(z, nameWithinZip.c_str(), 0, &st) != 0)
+    return false;
+
+  data.resize(st.size);
+  zip_file_t* zf = zip_fopen(z, nameWithinZip.c_str(), 0);
+  if(!zf) return false;
+
+  zip_int64_t bytesRead = zip_fread(zf, data.data(), st.size);
+  zip_fclose(zf);
+
+  if(bytesRead < 0 || (uint64_t)bytesRead != st.size)
+    return false;
+  return true;
 }
 
 void ZipFile::close() {

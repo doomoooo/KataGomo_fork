@@ -14,7 +14,9 @@
 #include "../core/sha2.h"
 #include "../core/test.h"
 #include "../dataio/homedata.h"
+#include "../dataio/numpywrite.h"
 #include "../neuralnet/desc.h"
+#include <sstream>
 #include "../neuralnet/modelversion.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/nninputs.h"
@@ -1108,65 +1110,166 @@ struct TRTErrorRecorder : IErrorRecorder {
 };
 
 
-class DummyInt8Calibrator : public nvinfer1::IInt8MinMaxCalibrator {
-public:
-  DummyInt8Calibrator(int batchSize, int nnXLen, int nnYLen, const LoadedModel* loadedModel, const std::string& cacheFile)
-    : mBatchSize(batchSize), mCacheFile(cacheFile), mCurrentBatch(0) {
+// Helper to parse numpy header
+static bool parseNumpyHeader(const std::vector<char>& buf, int& offset, std::vector<int>& shape, std::string& wordSize) {
+    if (buf.size() < 10) return false;
+    if (std::memcmp(buf.data(), "\x93NUMPY", 6) != 0) return false;
+    int headerLen = *(unsigned short*)(buf.data() + 8);
+    offset = 10 + headerLen;
+    if (buf.size() < (size_t)offset) return false;
+    std::string headerStr(buf.data() + 10, headerLen);
+    
+    size_t shapePos = headerStr.find("'shape':");
+    if (shapePos == std::string::npos) return false;
+    size_t startParen = headerStr.find("(", shapePos);
+    size_t endParen = headerStr.find(")", startParen);
+    if (startParen == std::string::npos || endParen == std::string::npos) return false;
+    
+    std::string shapeContent = headerStr.substr(startParen + 1, endParen - startParen - 1);
+    std::replace(shapeContent.begin(), shapeContent.end(), ',', ' ');
+    std::stringstream ss(shapeContent);
+    int dim;
+    while (ss >> dim) {
+        shape.push_back(dim);
+    }
+    
+    size_t descrPos = headerStr.find("'descr':");
+    if (descrPos != std::string::npos) {
+        size_t startQuote = headerStr.find("'", descrPos);
+        if (startQuote == std::string::npos) startQuote = headerStr.find("\"", descrPos);
+        if (startQuote != std::string::npos) {
+             size_t endQuote = headerStr.find(headerStr[startQuote], startQuote + 1);
+             if (endQuote != std::string::npos) {
+                 wordSize = headerStr.substr(startQuote + 1, endQuote - startQuote - 1);
+             }
+        }
+    }
+    return true;
+}
+
+class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
+ public:
+  FileInt8Calibrator(int batchSize, int nnXLen, int nnYLen, const LoadedModel* loadedModel, const std::string& cacheFile, const std::string& dataFile, bool requireExactNNLen, int maxRows = 1024)
+    : mBatchSize(batchSize), mCacheFile(cacheFile), mCurrentBatch(0), mTotalRows(0) {
     
     int numInputChannels = loadedModel->modelDesc.numInputChannels;
     int numInputGlobalChannels = loadedModel->modelDesc.numInputGlobalChannels;
     int numInputMetaChannels = loadedModel->modelDesc.numInputMetaChannels;
     
-    // Spatial: batch * channels * y * x
-    size_t spatialSize = (size_t)batchSize * numInputChannels * nnYLen * nnXLen;
-    mInputSpatialData.resize(spatialSize);
+    try {
+      ZipFile zip(dataFile, false);
+      std::vector<char> binaryBuf;
+      std::vector<char> globalBuf;
+      std::vector<char> metaBuf;
+      
+      if (!zip.readBuffer("binaryInputNCHWPacked.npy", binaryBuf))
+         throw StringError("Could not read binaryInputNCHWPacked.npy from " + dataFile);
+      if (!zip.readBuffer("globalInputNC.npy", globalBuf))
+         throw StringError("Could not read globalInputNC.npy from " + dataFile);
 
-    // Global: batch * channels * 1 * 1
-    size_t globalSize = (size_t)batchSize * numInputGlobalChannels;
-    mInputGlobalData.resize(globalSize);
-    
-    // Mask: batch * 1 * y * x
-    size_t maskSize = (size_t)batchSize * 1 * nnYLen * nnXLen;
-    mInputMaskData.resize(maskSize);
-    
-    // Meta: batch * channels * 1 * 1
-    size_t metaSize = 0;
-    if(numInputMetaChannels > 0) {
-      metaSize = (size_t)batchSize * numInputMetaChannels;
-      mInputMetaData.resize(metaSize);
-    }
+      int offset;
+      std::vector<int> shape;
+      std::string dtype;
+      
+      if (!parseNumpyHeader(binaryBuf, offset, shape, dtype))
+         throw StringError("Failed to parse binaryInputNCHWPacked.npy header");
+      if (shape.size() != 3) throw StringError("binaryInputNCHWPacked.npy shape mismatch");
+      
+      int fileRows = shape[0];
+      mTotalRows = std::min(fileRows, maxRows);
+      
+      int packedC = shape[1];
+      int packedArea = shape[2];
+      
+      if (packedC != numInputChannels) throw StringError("binaryInputNCHWPacked channel mismatch");
+      
+      size_t spatialSize = (size_t)mTotalRows * numInputChannels * nnYLen * nnXLen;
+      mInputSpatialData.resize(spatialSize);
+      
+      const uint8_t* packedData = (const uint8_t*)(binaryBuf.data() + offset);
+      int posArea = nnXLen * nnYLen;
+      
+      for(int i=0; i<mTotalRows; i++) {
+        for(int c=0; c<numInputChannels; c++) {
+           const uint8_t* packedPtr = packedData + (size_t)i * packedC * packedArea + c * packedArea;
+           float* unpackedPtr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea + c * posArea;
+           
+           for(int j=0; j<posArea; j++) {
+              int byteIdx = j >> 3;
+              int bitIdx = 7 - (j & 7);
+              bool bit = (packedPtr[byteIdx] >> bitIdx) & 1;
+              unpackedPtr[j] = bit ? 1.0f : 0.0f;
+           }
+        }
+      }
 
-    std::mt19937 gen(42);
-    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    std::generate(mInputSpatialData.begin(), mInputSpatialData.end(), [&]() { return dis(gen); });
-    std::generate(mInputGlobalData.begin(), mInputGlobalData.end(), [&]() { return dis(gen); });
-    
-    // Mask should be 0 or 1 usually, but for calibration valid floats are fine. 
-    // Let's use 1.0f (valid board area)
-    std::fill(mInputMaskData.begin(), mInputMaskData.end(), 1.0f);
-    
-    if(metaSize > 0) {
-       std::generate(mInputMetaData.begin(), mInputMetaData.end(), [&]() { return dis(gen); });
-    }
+      if (requireExactNNLen) {
+        int posArea = nnXLen * nnYLen;
+        for(int i=0; i<mTotalRows; i++) {
+           float* ptr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea;
+           for(int j=0; j<posArea; j++) {
+               ptr[j] = 1.0f;
+           }
+        }
+      }
+      
+      shape.clear();
+      if (!parseNumpyHeader(globalBuf, offset, shape, dtype))
+         throw StringError("Failed to parse globalInputNC.npy header");
+      if (shape.size() != 2) throw StringError("globalInputNC.npy shape mismatch");
+      if (shape[0] < mTotalRows) throw StringError("globalInputNC.npy row mismatch");
+      if (shape[1] != numInputGlobalChannels) throw StringError("globalInputNC.npy channel mismatch");
+      
+      size_t globalSize = (size_t)mTotalRows * numInputGlobalChannels;
+      mInputGlobalData.resize(globalSize);
+      std::memcpy(mInputGlobalData.data(), globalBuf.data() + offset, globalSize * sizeof(float));
 
-    cudaMalloc(&mDeviceInputSpatial, spatialSize * sizeof(float));
-    cudaMalloc(&mDeviceInputGlobal, globalSize * sizeof(float));
-    cudaMalloc(&mDeviceInputMask, maskSize * sizeof(float));
-    if(metaSize > 0) {
-      cudaMalloc(&mDeviceInputMeta, metaSize * sizeof(float));
-    } else {
-      mDeviceInputMeta = nullptr;
+      if (numInputMetaChannels > 0) {
+          if (zip.readBuffer("metadataInputNC.npy", metaBuf)) {
+             shape.clear();
+             if (parseNumpyHeader(metaBuf, offset, shape, dtype)) {
+                 if (shape[0] >= mTotalRows) {
+                     size_t metaSize = (size_t)mTotalRows * numInputMetaChannels;
+                     mInputMetaData.resize(metaSize);
+                     std::memcpy(mInputMetaData.data(), metaBuf.data() + offset, metaSize * sizeof(float));
+                 }
+             }
+          }
+          if (mInputMetaData.empty()) {
+             mInputMetaData.resize((size_t)mTotalRows * numInputMetaChannels, 0.0f);
+          }
+      }
+
+      zip.close();
+    } catch (const std::exception& e) {
+       std::cerr << "Error reading calibration data: " << e.what() << std::endl;
+       throw;
     }
     
-    cudaMemcpy(mDeviceInputSpatial, mInputSpatialData.data(), spatialSize * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(mDeviceInputGlobal, mInputGlobalData.data(), globalSize * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(mDeviceInputMask, mInputMaskData.data(), maskSize * sizeof(float), cudaMemcpyHostToDevice);
-    if(metaSize > 0) {
-      cudaMemcpy(mDeviceInputMeta, mInputMetaData.data(), metaSize * sizeof(float), cudaMemcpyHostToDevice);
-    }
+    size_t batchSpatialSize = (size_t)mBatchSize * numInputChannels * nnYLen * nnXLen;
+    size_t batchGlobalSize = (size_t)mBatchSize * numInputGlobalChannels;
+    size_t batchMaskSize = (size_t)mBatchSize * 1 * nnYLen * nnXLen;
+    size_t batchMetaSize = (size_t)mBatchSize * numInputMetaChannels;
+
+    cudaMalloc(&mDeviceInputSpatial, batchSpatialSize * sizeof(float));
+    cudaMalloc(&mDeviceInputGlobal, batchGlobalSize * sizeof(float));
+    cudaMalloc(&mDeviceInputMask, batchMaskSize * sizeof(float));
+    if (numInputMetaChannels > 0)
+       cudaMalloc(&mDeviceInputMeta, batchMetaSize * sizeof(float));
+    else 
+       mDeviceInputMeta = nullptr;
+       
+    mInputMaskData.resize(batchMaskSize, 1.0f);
+    cudaMemcpy(mDeviceInputMask, mInputMaskData.data(), batchMaskSize * sizeof(float), cudaMemcpyHostToDevice);
+    
+    mNumInputChannels = numInputChannels;
+    mNumInputGlobalChannels = numInputGlobalChannels;
+    mNumInputMetaChannels = numInputMetaChannels;
+    mNnXLen = nnXLen;
+    mNnYLen = nnYLen;
   }
 
-  ~DummyInt8Calibrator() {
+  ~FileInt8Calibrator() {
     cudaFree(mDeviceInputSpatial);
     cudaFree(mDeviceInputGlobal);
     cudaFree(mDeviceInputMask);
@@ -1178,11 +1281,27 @@ public:
   }
 
   bool getBatch(void* bindings[], const char* names[], int nbBindings) noexcept override {
-    if (mCurrentBatch >= 1) return false;
+    int startRow = mCurrentBatch * mBatchSize;
+    if (startRow >= mTotalRows) return false;
+    
+    int thisBatchSize = std::min(mBatchSize, mTotalRows - startRow);
+    
+    size_t spatialOffset = (size_t)startRow * mNumInputChannels * mNnXLen * mNnYLen;
+    size_t globalOffset = (size_t)startRow * mNumInputGlobalChannels;
+    size_t metaOffset = (size_t)startRow * mNumInputMetaChannels;
+    
+    size_t copySpatialSize = (size_t)thisBatchSize * mNumInputChannels * mNnXLen * mNnYLen;
+    size_t copyGlobalSize = (size_t)thisBatchSize * mNumInputGlobalChannels;
+    
+    cudaMemcpy(mDeviceInputSpatial, mInputSpatialData.data() + spatialOffset, copySpatialSize * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(mDeviceInputGlobal, mInputGlobalData.data() + globalOffset, copyGlobalSize * sizeof(float), cudaMemcpyHostToDevice);
+    if (mDeviceInputMeta) {
+       size_t copyMetaSize = (size_t)thisBatchSize * mNumInputMetaChannels;
+       cudaMemcpy(mDeviceInputMeta, mInputMetaData.data() + metaOffset, copyMetaSize * sizeof(float), cudaMemcpyHostToDevice);
+    }
 
     for (int i = 0; i < nbBindings; ++i) {
       std::string name = names[i];
-      // Convert to lowercase for case-insensitive comparison
       std::string lowerName = name;
       std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
 
@@ -1195,8 +1314,6 @@ public:
       } else if (lowerName.find("meta") != std::string::npos) {
         bindings[i] = mDeviceInputMeta;
       } else {
-        // Fallback for safety, though we expect to cover all
-        std::cerr << "DummyInt8Calibrator: Unknown input name " << name << ", using spatial buffer as fallback." << std::endl;
         bindings[i] = mDeviceInputSpatial; 
       }
     }
@@ -1224,6 +1341,7 @@ private:
   int mBatchSize;
   std::string mCacheFile;
   int mCurrentBatch;
+  int mTotalRows;
   
   std::vector<float> mInputSpatialData;
   std::vector<float> mInputGlobalData;
@@ -1235,6 +1353,12 @@ private:
   void* mDeviceInputMask;
   void* mDeviceInputMeta;
   std::vector<char> mCache;
+  
+  int mNumInputChannels;
+  int mNumInputGlobalChannels;
+  int mNumInputMetaChannels;
+  int mNnXLen;
+  int mNnYLen;
 };
 
 
@@ -1253,7 +1377,7 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
-  unique_ptr<nvinfer1::IInt8MinMaxCalibrator> calibrator;
+  unique_ptr<nvinfer1::IInt8EntropyCalibrator2> calibrator;
 
   ComputeHandle(
     Logger* logger,
@@ -1332,7 +1456,7 @@ struct ComputeHandle {
 
 
         string calibrationCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_int8_cali_dummy.bin",
+          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_int8_cali_npz.bin",
           cacheDir.c_str(),
           getInferLibVersion(),
           TensorRT_BuilderOptimizationLevel,
@@ -1349,7 +1473,7 @@ struct ComputeHandle {
         //if(FileUtils::exists(calibrationCacheFile)) {
         //     remove(calibrationCacheFile.c_str());
         //}
-        calibrator = std::make_unique<DummyInt8Calibrator>(maxBatchSize, ctx->nnXLen, ctx->nnYLen, loadedModel, calibrationCacheFile);
+        calibrator = std::make_unique<FileInt8Calibrator>(maxBatchSize, ctx->nnXLen, ctx->nnYLen, loadedModel, calibrationCacheFile, "calibrate.npz", requireExactNNLen);
         config->setInt8Calibrator(calibrator.get());
     }
     config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);

@@ -47,13 +47,14 @@ private:
 //No current support for reading it.
 class ZipFile {
  public:
-  ZipFile(const std::string& fileName);
+  ZipFile(const std::string& fileName, bool write=true);
   ~ZipFile();
 
   ZipFile(const ZipFile&) = delete;
   ZipFile& operator=(const ZipFile&) = delete;
 
   void writeBuffer(const char* nameWithinZip, void* data, uint64_t numBytes);
+  bool readBuffer(const std::string& nameWithinZip, std::vector<char>& data);
   void close();
 
   private:
