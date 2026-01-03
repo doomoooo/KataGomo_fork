@@ -1147,9 +1147,9 @@ static bool parseNumpyHeader(const std::vector<char>& buf, int& offset, std::vec
     return true;
 }
 
-class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
+class FileInt8Calibrator : public nvinfer1::IInt8MinMaxCalibrator {
  public:
-  FileInt8Calibrator(int batchSize, int nnXLen, int nnYLen, const LoadedModel* loadedModel, const std::string& cacheFile, const std::string& dataFile, bool requireExactNNLen, int maxRows = 1024)
+  FileInt8Calibrator(int batchSize, int nnXLen, int nnYLen, const LoadedModel* loadedModel, const std::string& cacheFile, const std::string& dataFile, bool requireExactNNLen, int maxRows = 2048)
     : mBatchSize(batchSize), mCacheFile(cacheFile), mCurrentBatch(0), mTotalRows(0) {
     
     int numInputChannels = loadedModel->modelDesc.numInputChannels;
@@ -1270,14 +1270,78 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
         }
       }
 
-      if (requireExactNNLen) {
+      //random fill
+      //double randFillRate=0.007; //each location has randFillRate probability to be changed
+      double randFillRate = 0;  // each location has randFillRate probability to be changed
+      if(randFillRate>0)
+      {
+        int posArea = nnXLen * nnYLen;
+        for(int i=0; i<mTotalRows; i++) {
+            float* ptr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea; // Channel 0
+        
+            for(int y=0; y<nnYLen; y++) {
+                for(int x=0; x<nnXLen; x++) {
+                  if(rand()/(double)RAND_MAX > randFillRate)
+                  {
+                    continue;
+                  }
+                  float ch0 = ptr[posArea*0+y*nnXLen+x];
+                  if(ch0 < 0.5f) continue;
+                  if(rand()%2==0) // 1/2
+                  {
+                    ptr[posArea*1+y*nnXLen+x] = 0.0f;
+                    ptr[posArea*2+y*nnXLen+x] = 0.0f;
+                  }
+                  else if(rand()%2==0) // 1/4
+                  {
+                    ptr[posArea*1+y*nnXLen+x] = 1.0f;
+                    ptr[posArea*2+y*nnXLen+x] = 0.0f;
+                  }
+                  else // 1/4
+                  {
+                    ptr[posArea*1+y*nnXLen+x] = 0.0f;
+                    ptr[posArea*2+y*nnXLen+x] = 1.0f;
+                  }
+                }
+            }
+           
+        }
+      }
+
+      //check
+      if(false)
+      {
         int posArea = nnXLen * nnYLen;
         for(int i=0; i<mTotalRows; i++) {
            const float* ptr = mInputSpatialData.data() + (size_t)i * numInputChannels * posArea; // Channel 0
-           for(int j=0; j<posArea; j++) {
-               if(ptr[j] != 1.0f) {
-                   throw StringError("requireExactNNLen check failed: loaded data channel 0 is not all 1s in nnXLen*nnYLen area for sample " + Global::intToString(i));
+           if(requireExactNNLen)
+           {
+            for(int j=0; j<posArea; j++) {
+                if(ptr[j] != 1.0f) {
+                    throw StringError("requireExactNNLen check failed: loaded data channel 0 is not all 1s in nnXLen*nnYLen area for sample " + Global::intToString(i));
+                }
+            }
+           }
+           //print the board if i%10==0
+           //channel 1 is my stone, 2 is opp stone
+           if(i%10==0) {
+               std::cerr << "Board " << i << ":\n";
+               for(int y=0; y<nnYLen; y++) {
+                   for(int x=0; x<nnXLen; x++) {
+                     float ch0 = ptr[posArea*0+y*nnXLen+x];
+                     float ch1 = ptr[posArea*1+y*nnXLen+x];
+                     float ch2 = ptr[posArea*2+y*nnXLen+x];
+                     bool isOutside = (ch0 < 0.5f);
+                     bool isMyStone = (ch1 > 0.5f);
+                     bool isOppStone = (ch2 > 0.5f);
+                     if(isMyStone&&isOppStone)
+                      throw StringError("requireExactNNLen check failed: loaded data channel 1 and 2 are both 1s in nnXLen*nnYLen area for sample " + Global::intToString(i));
+                     std::cerr << (isOutside ? "# " : (isMyStone ? "X " : (isOppStone ? "O " : ". ")));
+
+                   }
+                   std::cerr << "\n";
                }
+               std::cerr << "\n";
            }
         }
       }
@@ -1404,6 +1468,22 @@ class FileInt8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
     return true;
   }
 
+  //const void* readHistogramCache(size_t& length) noexcept override {
+  //  length = 0;
+  //  return nullptr;
+  //}
+  
+  //void writeHistogramCache(const void* cache, size_t length) noexcept override {
+  //}
+  
+  //double getQuantile() const noexcept override {
+  //  return 0.9995;
+  //}
+  
+  //double getRegressionCutoff() const noexcept override {
+  //  return 1.0;
+  //}
+  
   const void* readCalibrationCache(size_t& length) noexcept override {
     mCache.clear();
     std::ifstream input(mCacheFile, std::ios::binary);
@@ -1468,7 +1548,7 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
-  unique_ptr<nvinfer1::IInt8EntropyCalibrator2> calibrator;
+  unique_ptr<nvinfer1::IInt8MinMaxCalibrator> calibrator;
 
   ComputeHandle(
     Logger* logger,
@@ -1509,17 +1589,6 @@ struct ComputeHandle {
     }
     
 
-    usingFP16 = false;
-
-    if(builder->platformHasFastFp16()) {
-      if(ctx->useFP16Mode == enabled_t::True || ctx->useFP16Mode == enabled_t::Auto) {
-        config->setFlag(BuilderFlag::kFP16);
-        usingFP16 = true;
-      }
-    } else if(ctx->useFP16Mode == enabled_t::True) {
-      throw StringError("CUDA device does not support useFP16=true");
-    }
-
     usingINT8 = false;
     if(ctx->useINT8Mode == enabled_t::True && builder->platformHasFastInt8()) {
 
@@ -1547,11 +1616,10 @@ struct ComputeHandle {
 
 
         string calibrationCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_int8_cali_npz.bin",
+          "%s/trt-onnx-%d_olv-%d_net-%s_%d_%s%dx%d_batch%d_int8_cali_npz.bin",
           cacheDir.c_str(),
           getInferLibVersion(),
           TensorRT_BuilderOptimizationLevel,
-          deviceIdent,
           modelHashStr.substr(0, 12).c_str(),
           ModelParser::tuneSalt,
           (!loadedModel->modelDesc.onnxHeader.has_mask) ? "exact" : "max",
@@ -1568,7 +1636,21 @@ struct ComputeHandle {
         config->setInt8Calibrator(calibrator.get());
         tuneInt8Mutex.unlock();
     }
-    config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+
+    usingFP16 = false;
+
+    if(!usingINT8 && builder->platformHasFastFp16()) {
+      if(ctx->useFP16Mode == enabled_t::True || ctx->useFP16Mode == enabled_t::Auto) {
+        config->setFlag(BuilderFlag::kFP16);
+        usingFP16 = true;
+      }
+    } else if(!usingINT8 && ctx->useFP16Mode == enabled_t::True) {
+      throw StringError("CUDA device does not support useFP16=true");
+    }
+
+    if(!usingINT8) {
+      config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+    }
 
     auto network = unique_ptr<INetworkDefinition>(
       builder->createNetworkV2(1U << static_cast<int>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH)));
