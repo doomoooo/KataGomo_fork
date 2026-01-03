@@ -237,6 +237,16 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useFP16"))
       useFP16Mode = cfg.getEnabled("useFP16");
 
+    enabled_t useINT8Mode = enabled_t::Auto;
+    if(cfg.contains(backendPrefix+"UseINT8-"+idxStr))
+      useINT8Mode = cfg.getEnabled(backendPrefix+"UseINT8-"+idxStr);
+    else if(cfg.contains("useINT8-"+idxStr))
+      useINT8Mode = cfg.getEnabled("useINT8-"+idxStr);
+    else if(cfg.contains(backendPrefix+"UseINT8"))
+      useINT8Mode = cfg.getEnabled(backendPrefix+"UseINT8");
+    else if(cfg.contains("useINT8"))
+      useINT8Mode = cfg.getEnabled("useINT8");
+
     enabled_t useNHWCMode = enabled_t::Auto;
     if(cfg.contains(backendPrefix+"UseNHWC"+idxStr))
       useNHWCMode = cfg.getEnabled(backendPrefix+"UseNHWC"+idxStr);
@@ -254,6 +264,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     logger.write(
       "After dedups: nnModelFile" + idxStr + " = " + nnModelFile
       + " useFP16 " + useFP16Mode.toString()
+      + " useINT8 " + useINT8Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
     );
 
@@ -319,6 +330,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       homeDataDirOverride,
       openCLReTunePerBoardSize,
       useFP16Mode,
+      useINT8Mode,
       useNHWCMode,
       numNNServerThreadsPerModel,
       gpuIdxByServerThread,

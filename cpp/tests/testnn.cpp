@@ -118,7 +118,7 @@ static void testConvLayer(int64_t& numTestsRun) {
 
         vector<float> outputThisLoop;
         bool supported = NeuralNet::testEvaluateConv(
-          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,inputThisLoop,outputThisLoop
+          &desc,batchSize,nnXLen,nnYLen,useFP16,false,useNHWC,inputThisLoop,outputThisLoop
         );
 
         if(supported) {
@@ -356,7 +356,7 @@ static void testBatchNormLayer(int64_t& numTestsRun) {
 
         vector<float> outputThisLoop;
         bool supported = NeuralNet::testEvaluateBatchNorm(
-          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,inputThisLoop,maskThisLoop,outputThisLoop
+          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,false,inputThisLoop,maskThisLoop,outputThisLoop
         );
 
         if(supported) {
@@ -489,7 +489,7 @@ static void testResidualBlock(int64_t& numTestsRun) {
 
         vector<float> outputThisLoop;
         bool supported = NeuralNet::testEvaluateResidualBlock(
-          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,inputThisLoop,maskThisLoop,outputThisLoop
+          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,false,inputThisLoop,maskThisLoop,outputThisLoop
         );
 
         if(supported) {
@@ -691,7 +691,7 @@ static void testGlobalPoolingResidualBlock(int64_t& numTestsRun) {
 
         vector<float> outputThisLoop;
         bool supported = NeuralNet::testEvaluateGlobalPoolingResidualBlock(
-          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,inputThisLoop,maskThisLoop,outputThisLoop
+          &desc,batchSize,nnXLen,nnYLen,useFP16,useNHWC,false,inputThisLoop,maskThisLoop,outputThisLoop
         );
 
         if(supported) {

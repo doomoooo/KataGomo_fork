@@ -383,9 +383,10 @@ const ModelDesc& NeuralNet::getModelDesc(const LoadedModel* loadedModel) {
 
 //------------------------------------------------------------------------------
 
-ComputeContext::ComputeContext(int nnX, int nnY, enabled_t useFP16Mode, enabled_t useNHWCMode):
+ComputeContext::ComputeContext(int nnX, int nnY, enabled_t useFP16Mode, enabled_t useINT8Mode, enabled_t useNHWCMode):
 metalComputeContext(createMetalComputeContext(nnX, nnY)) {
   this->useFP16Mode = useFP16Mode;
+  this->useINT8Mode = useINT8Mode;
 
   SWEnable swUseFP16Mode =
   (useFP16Mode == enabled_t::False) ? SWEnable::False() :
@@ -427,6 +428,7 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   const LoadedModel* loadedModel) {
 
@@ -437,7 +439,9 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)openCLReTunePerBoardSize;
   (void)loadedModel;
 
-  return new ComputeContext(nnXLen, nnYLen, useFP16Mode, useNHWCMode);
+  if(useINT8Mode == enabled_t::True)
+    throw StringError("Metal backend: useINT8 = true not supported");
+  return new ComputeContext(nnXLen, nnYLen, useFP16Mode, useINT8Mode, useNHWCMode);
 }
 
 /**

@@ -46,6 +46,7 @@ static NNEvaluator* startNNEval(
     homeDataDirOverride,
     openCLReTunePerBoardSize,
     useFP16 ? enabled_t::True : enabled_t::False,
+    enabled_t::False,
     useNHWC ? enabled_t::True : enabled_t::False,
     numNNServerThreadsPerModel,
     gpuIdxByServerThread,

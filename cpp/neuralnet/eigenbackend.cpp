@@ -1696,6 +1696,7 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   const LoadedModel* loadedModel
 ) {
@@ -1711,6 +1712,8 @@ ComputeContext* NeuralNet::createComputeContext(
 
   if(useFP16)
     throw StringError("Eigen backend: useFP16 = true not supported");
+  if(useINT8Mode == enabled_t::True)
+    throw StringError("Eigen backend: useINT8 = true not supported");
   if(!useNHWC)
     throw StringError("Eigen backend: useNHWC = false not supported");
 

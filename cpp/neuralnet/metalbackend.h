@@ -154,6 +154,11 @@ struct ComputeContext {
   enabled_t useFP16Mode;
 
   /**
+   * @brief Whether to use INT8 mode for computations.
+   */
+  enabled_t useINT8Mode;
+
+  /**
    * @brief ComputeContext ID
    */
   int identifier;
@@ -170,9 +175,10 @@ struct ComputeContext {
    * @param nnX The width of the input tensor.
    * @param nnY The height of the input tensor.
    * @param useFP16Mode Whether to use half-precision floating-point (FP16) mode for computations.
+   * @param useINT8Mode Whether to use integer 8-bit (INT8) mode for computations.
    * @param useNHWCMode Whether to use the NHWC format for input tensors.
    */
-  ComputeContext(int nnX, int nnY, enabled_t useFP16Mode, enabled_t useNHWCMode);
+  ComputeContext(int nnX, int nnY, enabled_t useFP16Mode, enabled_t useINT8Mode, enabled_t useNHWCMode);
 
   /**
    * @brief Destroys the ComputeContext object.

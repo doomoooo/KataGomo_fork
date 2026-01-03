@@ -95,6 +95,7 @@ class NNEvaluator {
     const std::string& homeDataDirOverride,
     bool openCLReTunePerBoardSize,
     enabled_t useFP16Mode,
+    enabled_t useINT8Mode,
     enabled_t useNHWCMode,
     int numThreads,
     const std::vector<int>& gpuIdxByServerThread,
@@ -126,6 +127,7 @@ class NNEvaluator {
   int getModelVersion() const;
   double getTrunkSpatialConvDepth() const;
   enabled_t getUsingFP16Mode() const;
+  enabled_t getUsingINT8Mode() const;
   enabled_t getUsingNHWCMode() const;
 
   //Check if the loaded neural net supports shorttermError fields
@@ -216,6 +218,7 @@ class NNEvaluator {
   int policySize;
   const bool inputsUseNHWC;
   const enabled_t usingFP16Mode;
+  const enabled_t usingINT8Mode;
   const enabled_t usingNHWCMode;
   int numThreads;
   std::vector<int> gpuIdxByServerThread;

@@ -22,6 +22,7 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   const LoadedModel* loadedModel
 ) {
@@ -33,6 +34,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)homeDataDirOverride;
   (void)openCLReTunePerBoardSize;
   (void)useFP16Mode;
+  (void)useINT8Mode;
   (void)useNHWCMode;
   (void)loadedModel;
   throw StringError("Dummy neural net backend: NeuralNet::createComputeContext unimplemented");

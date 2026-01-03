@@ -364,6 +364,7 @@ struct ComputeContext {
     int nnX,
     int nnY,
     enabled_t useFP16Mode,
+    enabled_t useINT8Mode,
     enabled_t useNHWCMode,
     std::function<OpenCLTuneParams(const string&,int)> getParamsForDeviceName
   ) :
@@ -434,10 +435,12 @@ static ComputeContext* createComputeContextForTesting(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC
 ) {
   enabled_t useFP16Mode = useFP16 ? enabled_t::True : enabled_t::False;
   enabled_t useNHWCMode = useNHWC ? enabled_t::True : enabled_t::False;
+  enabled_t useINT8Mode = useINT8 ? enabled_t::True : enabled_t::False;
 
   std::function<OpenCLTuneParams(const string&,int)> getParamsForDeviceName =
     [](const string& name, int gpuIdxForTuning) noexcept {
@@ -448,7 +451,7 @@ static ComputeContext* createComputeContextForTesting(
     //params.shouldUseFP16TensorCores = true;
     return params;
   };
-  return new ComputeContext(gpuIdxs,logger,nnXLen,nnYLen,useFP16Mode,useNHWCMode,getParamsForDeviceName);
+  return new ComputeContext(gpuIdxs,logger,nnXLen,nnYLen,useFP16Mode,useINT8Mode,useNHWCMode,getParamsForDeviceName);
 }
 
 ComputeContext* NeuralNet::createComputeContext(
@@ -460,14 +463,17 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   const LoadedModel* loadedModel
 ) {
   if(gpuIdxs.size() <= 0)
     throw StringError("NeuralNet::createComputeContext - specified no gpus to use");
 
+  if(useINT8Mode == enabled_t::True)
+    throw StringError("OpenCL backend: useINT8 = true not supported");
   std::function<OpenCLTuneParams(const string&,int)> getParamsForDeviceName =
-    [&openCLTunerFile,&homeDataDirOverride,openCLReTunePerBoardSize,logger,nnXLen,nnYLen,useFP16Mode,loadedModel](const string& name, int gpuIdxForTuning) {
+    [&openCLTunerFile,&homeDataDirOverride,openCLReTunePerBoardSize,logger,nnXLen,nnYLen,useFP16Mode,useINT8Mode,loadedModel](const string& name, int gpuIdxForTuning) {
     bool full = false;
     enabled_t testFP16Mode = useFP16Mode;
     enabled_t testFP16StorageMode = useFP16Mode;
@@ -482,7 +488,7 @@ ComputeContext* NeuralNet::createComputeContext(
       full
     );
   };
-  return new ComputeContext(gpuIdxs,logger,nnXLen,nnYLen,useFP16Mode,useNHWCMode,getParamsForDeviceName);
+  return new ComputeContext(gpuIdxs,logger,nnXLen,nnYLen,useFP16Mode,useINT8Mode,useNHWCMode,getParamsForDeviceName);
 }
 
 void NeuralNet::freeComputeContext(ComputeContext* computeContext) {
@@ -3284,6 +3290,7 @@ bool NeuralNet::testEvaluateConv(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const std::vector<float>& inputBuffer,
   std::vector<float>& outputBuffer
@@ -3295,7 +3302,7 @@ bool NeuralNet::testEvaluateConv(
   if(useNHWC != false)
     return false;
 
-  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useNHWC);
+  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useINT8, useNHWC);
   ComputeHandleInternal* handle = new ComputeHandleInternal(context, gpuIdx, useNHWC, useNHWC);
 
   ConvLayer* layer = new ConvLayer(handle, desc, nnXLen, nnYLen, useFP16);
@@ -3336,6 +3343,7 @@ bool NeuralNet::testEvaluateBatchNorm(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const std::vector<float>& inputBuffer,
   const std::vector<float>& maskBuffer,
@@ -3348,7 +3356,7 @@ bool NeuralNet::testEvaluateBatchNorm(
   if(useNHWC != false)
     return false;
 
-  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useNHWC);
+  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useINT8, useNHWC);
   ComputeHandleInternal* handle = new ComputeHandleInternal(context, gpuIdx, useNHWC, useNHWC);
 
   ActivationLayerDesc actDesc;
@@ -3389,6 +3397,7 @@ bool NeuralNet::testEvaluateResidualBlock(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const std::vector<float>& inputBuffer,
   const std::vector<float>& maskBuffer,
@@ -3400,7 +3409,7 @@ bool NeuralNet::testEvaluateResidualBlock(
   if(useNHWC != false)
     return false;
 
-  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useNHWC);
+  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useINT8, useNHWC);
   ComputeHandleInternal* handle = new ComputeHandleInternal(context, gpuIdx, useNHWC, useNHWC);
 
   ResidualBlock* layer = new ResidualBlock(handle, desc, nnXLen, nnYLen, useFP16);
@@ -3448,6 +3457,7 @@ bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const std::vector<float>& inputBuffer,
   const std::vector<float>& maskBuffer,
@@ -3459,7 +3469,7 @@ bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(
   if(useNHWC != false)
     return false;
 
-  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useNHWC);
+  ComputeContext* context = createComputeContextForTesting({gpuIdx}, logger, nnXLen, nnYLen, useFP16, useINT8, useNHWC);
   ComputeHandleInternal* handle = new ComputeHandleInternal(context, gpuIdx, useNHWC, useNHWC);
 
   GlobalPoolingResidualBlock* layer = new GlobalPoolingResidualBlock(handle, desc, nnXLen, nnYLen, useFP16);

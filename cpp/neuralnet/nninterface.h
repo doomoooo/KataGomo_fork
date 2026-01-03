@@ -57,6 +57,7 @@ namespace NeuralNet {
     const std::string& homeDataDirOverride,
     bool openCLReTunePerBoardSize,
     enabled_t useFP16Mode,
+    enabled_t useINT8Mode,
     enabled_t useNHWCMode,
     const LoadedModel* loadedModel
   );
@@ -130,6 +131,7 @@ namespace NeuralNet {
     int nnXLen,
     int nnYLen,
     bool useFP16,
+    bool useINT8,
     bool useNHWC,
     const std::vector<float>& inputBuffer,
     std::vector<float>& outputBuffer
@@ -142,6 +144,7 @@ namespace NeuralNet {
     int nnXLen,
     int nnYLen,
     bool useFP16,
+    bool useINT8,
     bool useNHWC,
     const std::vector<float>& inputBuffer,
     const std::vector<float>& maskBuffer,
@@ -154,6 +157,7 @@ namespace NeuralNet {
     int nnXLen,
     int nnYLen,
     bool useFP16,
+    bool useINT8,
     bool useNHWC,
     const std::vector<float>& inputBuffer,
     const std::vector<float>& maskBuffer,
@@ -166,6 +170,7 @@ namespace NeuralNet {
     int nnXLen,
     int nnYLen,
     bool useFP16,
+    bool useINT8,
     bool useNHWC,
     const std::vector<float>& inputBuffer,
     const std::vector<float>& maskBuffer,

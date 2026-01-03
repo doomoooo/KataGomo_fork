@@ -2285,7 +2285,8 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
-  enabled_t useNHWCMode,
+    enabled_t useINT8Mode,
+    enabled_t useNHWCMode,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -2295,10 +2296,13 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)openCLReTunePerBoardSize;
   (void)loadedModel;
 
+  if(useINT8Mode == enabled_t::True)
+    throw StringError("Cuda backend: useINT8 = true not supported");
   ComputeContext* context = new ComputeContext();
   context->nnXLen = nnXLen;
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
+  context->useINT8Mode = useINT8Mode;
   context->useNHWCMode = useNHWCMode;
   return context;
 }

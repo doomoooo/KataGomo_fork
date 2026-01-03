@@ -61,6 +61,7 @@ NNEvaluator::NNEvaluator(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   int numThr,
   const vector<int>& gpuIdxByServerThr,
@@ -76,6 +77,7 @@ NNEvaluator::NNEvaluator(
    policySize(NNPos::getPolicySize(xLen,yLen)),
    inputsUseNHWC(iUseNHWC),
    usingFP16Mode(useFP16Mode),
+   usingINT8Mode(useINT8Mode),
    usingNHWCMode(useNHWCMode),
    numThreads(numThr),
    gpuIdxByServerThread(gpuIdxByServerThr),
@@ -150,8 +152,13 @@ NNEvaluator::NNEvaluator(
     postProcessParams = desc.postProcessParams;
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,nnXLen,nnYLen,
-      openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
-      usingFP16Mode,usingNHWCMode,loadedModel
+      openCLTunerFile,
+      homeDataDirOverride,
+      openCLReTunePerBoardSize,
+      usingFP16Mode,
+      usingINT8Mode,
+      usingNHWCMode,
+      loadedModel
     );
   }
   else {
@@ -298,6 +305,9 @@ double NNEvaluator::getTrunkSpatialConvDepth() const {
 
 enabled_t NNEvaluator::getUsingFP16Mode() const {
   return usingFP16Mode;
+}
+enabled_t NNEvaluator::getUsingINT8Mode() const {
+  return usingINT8Mode;
 }
 enabled_t NNEvaluator::getUsingNHWCMode() const {
   return usingNHWCMode;

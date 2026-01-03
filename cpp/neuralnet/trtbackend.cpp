@@ -6,6 +6,9 @@
 #include "NvOnnxConfig.h"
 #include "NvOnnxParser.h"
 
+#include <random>
+#include <iterator>
+#include <algorithm>
 #include "../core/fileutils.h"
 #include "../core/makedir.h"
 #include "../core/sha2.h"
@@ -48,6 +51,7 @@ struct ComputeContext {
   int nnXLen;
   int nnYLen;
   enabled_t useFP16Mode;
+  enabled_t useINT8Mode;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -97,6 +101,7 @@ ComputeContext* NeuralNet::createComputeContext(
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
+  enabled_t useINT8Mode,
   enabled_t useNHWCMode,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
@@ -112,6 +117,7 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnXLen = nnXLen;
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
+  context->useINT8Mode = useINT8Mode;
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -1102,10 +1108,141 @@ struct TRTErrorRecorder : IErrorRecorder {
 };
 
 
+class DummyInt8Calibrator : public nvinfer1::IInt8MinMaxCalibrator {
+public:
+  DummyInt8Calibrator(int batchSize, int nnXLen, int nnYLen, const LoadedModel* loadedModel, const std::string& cacheFile)
+    : mBatchSize(batchSize), mCacheFile(cacheFile), mCurrentBatch(0) {
+    
+    int numInputChannels = loadedModel->modelDesc.numInputChannels;
+    int numInputGlobalChannels = loadedModel->modelDesc.numInputGlobalChannels;
+    int numInputMetaChannels = loadedModel->modelDesc.numInputMetaChannels;
+    
+    // Spatial: batch * channels * y * x
+    size_t spatialSize = (size_t)batchSize * numInputChannels * nnYLen * nnXLen;
+    mInputSpatialData.resize(spatialSize);
+
+    // Global: batch * channels * 1 * 1
+    size_t globalSize = (size_t)batchSize * numInputGlobalChannels;
+    mInputGlobalData.resize(globalSize);
+    
+    // Mask: batch * 1 * y * x
+    size_t maskSize = (size_t)batchSize * 1 * nnYLen * nnXLen;
+    mInputMaskData.resize(maskSize);
+    
+    // Meta: batch * channels * 1 * 1
+    size_t metaSize = 0;
+    if(numInputMetaChannels > 0) {
+      metaSize = (size_t)batchSize * numInputMetaChannels;
+      mInputMetaData.resize(metaSize);
+    }
+
+    std::mt19937 gen(42);
+    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+    std::generate(mInputSpatialData.begin(), mInputSpatialData.end(), [&]() { return dis(gen); });
+    std::generate(mInputGlobalData.begin(), mInputGlobalData.end(), [&]() { return dis(gen); });
+    
+    // Mask should be 0 or 1 usually, but for calibration valid floats are fine. 
+    // Let's use 1.0f (valid board area)
+    std::fill(mInputMaskData.begin(), mInputMaskData.end(), 1.0f);
+    
+    if(metaSize > 0) {
+       std::generate(mInputMetaData.begin(), mInputMetaData.end(), [&]() { return dis(gen); });
+    }
+
+    cudaMalloc(&mDeviceInputSpatial, spatialSize * sizeof(float));
+    cudaMalloc(&mDeviceInputGlobal, globalSize * sizeof(float));
+    cudaMalloc(&mDeviceInputMask, maskSize * sizeof(float));
+    if(metaSize > 0) {
+      cudaMalloc(&mDeviceInputMeta, metaSize * sizeof(float));
+    } else {
+      mDeviceInputMeta = nullptr;
+    }
+    
+    cudaMemcpy(mDeviceInputSpatial, mInputSpatialData.data(), spatialSize * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(mDeviceInputGlobal, mInputGlobalData.data(), globalSize * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(mDeviceInputMask, mInputMaskData.data(), maskSize * sizeof(float), cudaMemcpyHostToDevice);
+    if(metaSize > 0) {
+      cudaMemcpy(mDeviceInputMeta, mInputMetaData.data(), metaSize * sizeof(float), cudaMemcpyHostToDevice);
+    }
+  }
+
+  ~DummyInt8Calibrator() {
+    cudaFree(mDeviceInputSpatial);
+    cudaFree(mDeviceInputGlobal);
+    cudaFree(mDeviceInputMask);
+    if(mDeviceInputMeta) cudaFree(mDeviceInputMeta);
+  }
+
+  int getBatchSize() const noexcept override {
+    return mBatchSize;
+  }
+
+  bool getBatch(void* bindings[], const char* names[], int nbBindings) noexcept override {
+    if (mCurrentBatch >= 1) return false;
+
+    for (int i = 0; i < nbBindings; ++i) {
+      std::string name = names[i];
+      // Convert to lowercase for case-insensitive comparison
+      std::string lowerName = name;
+      std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+      if (lowerName.find("spatial") != std::string::npos || lowerName.find("binaryinputnchw") != std::string::npos) {
+        bindings[i] = mDeviceInputSpatial;
+      } else if (lowerName.find("global") != std::string::npos || lowerName.find("globalinputnc") != std::string::npos) {
+        bindings[i] = mDeviceInputGlobal;
+      } else if (lowerName.find("mask") != std::string::npos) {
+        bindings[i] = mDeviceInputMask;
+      } else if (lowerName.find("meta") != std::string::npos) {
+        bindings[i] = mDeviceInputMeta;
+      } else {
+        // Fallback for safety, though we expect to cover all
+        std::cerr << "DummyInt8Calibrator: Unknown input name " << name << ", using spatial buffer as fallback." << std::endl;
+        bindings[i] = mDeviceInputSpatial; 
+      }
+    }
+    mCurrentBatch++;
+    return true;
+  }
+
+  const void* readCalibrationCache(size_t& length) noexcept override {
+    mCache.clear();
+    std::ifstream input(mCacheFile, std::ios::binary);
+    input >> std::noskipws;
+    if (input.good()) {
+      std::copy(std::istream_iterator<char>(input), std::istream_iterator<char>(), std::back_inserter(mCache));
+    }
+    length = mCache.size();
+    return length ? mCache.data() : nullptr;
+  }
+
+  void writeCalibrationCache(const void* cache, size_t length) noexcept override {
+    std::ofstream output(mCacheFile, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(cache), length);
+  }
+
+private:
+  int mBatchSize;
+  std::string mCacheFile;
+  int mCurrentBatch;
+  
+  std::vector<float> mInputSpatialData;
+  std::vector<float> mInputGlobalData;
+  std::vector<float> mInputMaskData;
+  std::vector<float> mInputMetaData;
+  
+  void* mDeviceInputSpatial;
+  void* mDeviceInputGlobal;
+  void* mDeviceInputMask;
+  void* mDeviceInputMeta;
+  std::vector<char> mCache;
+};
+
+
 struct ComputeHandle {
   ComputeContext* ctx;
 
   bool usingFP16;
+  bool usingINT8;
   int maxBatchSize;
   int modelVersion;
   vector<pair<string, string>> debugOutputs;
@@ -1116,6 +1253,7 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
+  unique_ptr<nvinfer1::IInt8MinMaxCalibrator> calibrator;
 
   ComputeHandle(
     Logger* logger,
@@ -1147,7 +1285,17 @@ struct ComputeHandle {
       throw StringError("TensorRT backend: failed to create builder config");
     }
 
+    string modelHashStr;
+    if (ctx->isOnnx) {
+        string tmp;
+        FileUtils::loadFileIntoString(ctx->onnxModelPath, "", tmp, &modelHashStr);
+    } else {
+        modelHashStr = loadedModel->modelDesc.sha256;
+    }
+    
+
     usingFP16 = false;
+
     if(builder->platformHasFastFp16()) {
       if(ctx->useFP16Mode == enabled_t::True || ctx->useFP16Mode == enabled_t::Auto) {
         config->setFlag(BuilderFlag::kFP16);
@@ -1155,6 +1303,54 @@ struct ComputeHandle {
       }
     } else if(ctx->useFP16Mode == enabled_t::True) {
       throw StringError("CUDA device does not support useFP16=true");
+    }
+
+    usingINT8 = false;
+    if(ctx->useINT8Mode == enabled_t::True && builder->platformHasFastInt8()) {
+
+        usingINT8 = true;
+        config->setFlag(BuilderFlag::kINT8);
+
+        
+        static mutex tuneInt8Mutex;
+        tuneInt8Mutex.lock();
+
+        auto cacheDir = HomeData::getHomeDataDir(true, ctx->homeDataDirOverride);
+        cacheDir += "/trtcache";
+        MakeDir::make(cacheDir);
+
+        uint8_t deviceHash[32];
+        SHA2::get256(prop->name, deviceHash);
+
+        // Truncated to 4 bytes
+        char deviceIdent[4 * 2 + 1];
+        for(int i = 0; i < 4; i++) {
+          sprintf(deviceIdent + i * 2, "%02x", static_cast<unsigned char>(deviceHash[i]));
+        }
+        deviceIdent[sizeof(deviceIdent) - 1] = 0;
+
+
+
+        string calibrationCacheFile = Global::strprintf(
+          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_int8_cali_dummy.bin",
+          cacheDir.c_str(),
+          getInferLibVersion(),
+          TensorRT_BuilderOptimizationLevel,
+          deviceIdent,
+          modelHashStr.substr(0, 12).c_str(),
+          ModelParser::tuneSalt,
+          (!loadedModel->modelDesc.onnxHeader.has_mask) ? "exact" : "max",
+          ctx->nnYLen,
+          ctx->nnXLen,
+          maxBatchSize);
+
+
+        // Delete old cache file to ensure clean start if file exists
+        //if(FileUtils::exists(calibrationCacheFile)) {
+        //     remove(calibrationCacheFile.c_str());
+        //}
+        calibrator = std::make_unique<DummyInt8Calibrator>(maxBatchSize, ctx->nnXLen, ctx->nnYLen, loadedModel, calibrationCacheFile);
+        config->setInt8Calibrator(calibrator.get());
     }
     config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
 
@@ -1258,23 +1454,25 @@ struct ComputeHandle {
       }
       deviceIdent[sizeof(deviceIdent) - 1] = 0;
 
-#ifdef CACHE_TENSORRT_PLAN
-      string modelHashStr;
-      if (ctx->isOnnx) {
-         string tmp;
-         FileUtils::loadFileIntoString(ctx->onnxModelPath, "", tmp, &modelHashStr);
-      } else {
-         modelHashStr = loadedModel->modelDesc.sha256;
+      string precStr = "fp32";
+      if(usingFP16) {
+        precStr = "fp16";
       }
+      if(usingINT8) { //useINT8 has higher priority than fp16 if set true
+        precStr = "int8";
+      }
+
+#ifdef CACHE_TENSORRT_PLAN
 
       string planCacheFile = "";
       string paramStr = "";
+
 
       if(ctx->isOnnx) {
 
 
         planCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           TensorRT_BuilderOptimizationLevel,
@@ -1285,9 +1483,10 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
+
         string paramStr = Global::strprintf(
-          "_%d_%s_%d_%s_%d_%d_%d_%d",
+          "_%d_%s_%d_%s_%d_%d_%d_%s",
           getInferLibVersion(),
           deviceIdent,
           ModelParser::tuneSalt,
@@ -1295,11 +1494,11 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
       }
       else {
         planCacheFile = Global::strprintf(
-          "%s/trt-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           TensorRT_BuilderOptimizationLevel,
@@ -1310,9 +1509,9 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
         string paramStr = Global::strprintf(
-          "_%d_%s_%d_%s_%d_%d_%d_%d",
+          "_%d_%s_%d_%s_%d_%d_%d_%s",
           getInferLibVersion(),
           deviceIdent,
           ModelParser::tuneSalt,
@@ -1320,7 +1519,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
       }
 
       try {
@@ -1382,7 +1581,7 @@ struct ComputeHandle {
       if (ctx->isOnnx) {
         
         timingCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1392,7 +1591,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
           
       } else {
         
@@ -1403,7 +1602,7 @@ struct ComputeHandle {
         }
         tuneIdent[sizeof(tuneIdent) - 1] = 0;
         timingCacheFile = Global::strprintf(
-          "%s/trt-%d_gpu-%s_tune-%s_%s%dx%d_batch%d_fp%d",
+          "%s/trt-%d_gpu-%s_tune-%s_%s%dx%d_batch%d_%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1412,7 +1611,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precStr.c_str());
       }
 
 
@@ -2091,6 +2290,7 @@ bool NeuralNet::testEvaluateConv(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const vector<float>& inputBuffer,
   vector<float>& outputBuffer) {
@@ -2099,6 +2299,7 @@ bool NeuralNet::testEvaluateConv(
   (void)nnXLen;
   (void)nnYLen;
   (void)useFP16;
+  (void)useINT8;
   (void)useNHWC;
   (void)inputBuffer;
   (void)outputBuffer;
@@ -2112,6 +2313,7 @@ bool NeuralNet::testEvaluateBatchNorm(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const vector<float>& inputBuffer,
   const vector<float>& maskBuffer,
@@ -2121,6 +2323,7 @@ bool NeuralNet::testEvaluateBatchNorm(
   (void)nnXLen;
   (void)nnYLen;
   (void)useFP16;
+  (void)useINT8;
   (void)useNHWC;
   (void)inputBuffer;
   (void)maskBuffer;
@@ -2134,6 +2337,7 @@ bool NeuralNet::testEvaluateResidualBlock(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const vector<float>& inputBuffer,
   const vector<float>& maskBuffer,
@@ -2143,6 +2347,7 @@ bool NeuralNet::testEvaluateResidualBlock(
   (void)nnXLen;
   (void)nnYLen;
   (void)useFP16;
+  (void)useINT8;
   (void)useNHWC;
   (void)inputBuffer;
   (void)maskBuffer;
@@ -2156,6 +2361,7 @@ bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(
   int nnXLen,
   int nnYLen,
   bool useFP16,
+  bool useINT8,
   bool useNHWC,
   const vector<float>& inputBuffer,
   const vector<float>& maskBuffer,
@@ -2165,6 +2371,7 @@ bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(
   (void)nnXLen;
   (void)nnYLen;
   (void)useFP16;
+  (void)useINT8;
   (void)useNHWC;
   (void)inputBuffer;
   (void)maskBuffer;
