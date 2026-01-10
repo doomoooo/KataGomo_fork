@@ -2786,8 +2786,10 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  int backendNumThreads
 ) {
+  (void)backendNumThreads;
   auto deviceStr = [&]() {
     if(gpuIdxForThisThread < 0)
       return string("");

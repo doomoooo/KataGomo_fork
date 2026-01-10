@@ -32,7 +32,7 @@ endif()
 set(BUILD_DISTRIBUTED 0 CACHE BOOL "Build with http support for contributing to distributed training")
 set(USE_BACKEND CACHE STRING "Neural net backend")
 string(TOUPPER "${USE_BACKEND}" USE_BACKEND)
-set_property(CACHE USE_BACKEND PROPERTY STRINGS "" CUDA TENSORRT OPENCL EIGEN)
+set_property(CACHE USE_BACKEND PROPERTY STRINGS "" CUDA TENSORRT OPENCL EIGEN ONNX-CPU ONNX-DIRECTML)
 
 set(USE_TCMALLOC 0 CACHE BOOL "Use TCMalloc")
 set(NO_GIT_REVISION 0 CACHE BOOL "Disable embedding the git revision into the compiled exe")
@@ -139,6 +139,19 @@ elseif(USE_BACKEND STREQUAL "EIGEN")
   endif()
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/eigenbackend.cpp
+    )
+elseif(USE_BACKEND STREQUAL "ONNX-CPU")
+  message(STATUS "-DUSE_BACKEND=ONNX-CPU, using ONNX Runtime CPU backend.")
+  set(NEURALNET_BACKEND_SOURCES
+    neuralnet/onnxbackend_cpu.cpp
+    )
+elseif(USE_BACKEND STREQUAL "ONNX-DIRECTML")
+  message(STATUS "-DUSE_BACKEND=ONNX-DIRECTML, using ONNX Runtime DirectML backend.")
+  if(NOT WIN32)
+    message(FATAL_ERROR "ONNX-DIRECTML backend is only supported on Windows.")
+  endif()
+  set(NEURALNET_BACKEND_SOURCES
+    neuralnet/onnxbackend_directml.cpp
     )
 elseif(USE_BACKEND STREQUAL "")
   message(WARNING "${ColorBoldRed}WARNING: Using dummy neural net backend, intended for non-neural-net testing only, will fail on any code path requiring a neural net. To use neural net, specify -DUSE_BACKEND=CUDA or -DUSE_BACKEND=TENSORRT or -DUSE_BACKEND=OPENCL or -DUSE_BACKEND=EIGEN to compile with the respective backend.${ColorReset}")
@@ -446,6 +459,29 @@ elseif(USE_BACKEND STREQUAL "EIGEN")
       endif()
     endif()
   endif()
+elseif(USE_BACKEND STREQUAL "ONNX-CPU")
+  target_compile_definitions(katago PRIVATE USE_ONNX_CPU_BACKEND)
+  
+  set(ONNXRUNTIME_ROOT "" CACHE PATH "Root directory of ONNX Runtime installation")
+
+  find_path(ONNXRUNTIME_INCLUDE_DIR NAMES onnxruntime_cxx_api.h HINTS ${ONNXRUNTIME_ROOT} ${ONNXRUNTIME_ROOT}/include PATH_SUFFIXES include core/session)
+  find_library(ONNXRUNTIME_LIBRARY NAMES onnxruntime HINTS ${ONNXRUNTIME_ROOT} ${ONNXRUNTIME_ROOT}/lib PATH_SUFFIXES lib)
+
+  if(NOT ONNXRUNTIME_INCLUDE_DIR)
+     set(ONNXRUNTIME_INCLUDE_DIR "ONNXRUNTIME_INCLUDE_DIR-NOTFOUND" CACHE PATH "Path to ONNX Runtime include directory")
+     message(FATAL_ERROR "ONNXRUNTIME_INCLUDE_DIR not found. Please set ONNXRUNTIME_ROOT to your ONNX Runtime installation directory, or set ONNXRUNTIME_INCLUDE_DIR manually.")
+  endif()
+  if(NOT ONNXRUNTIME_LIBRARY)
+     set(ONNXRUNTIME_LIBRARY "ONNXRUNTIME_LIBRARY-NOTFOUND" CACHE FILEPATH "Path to ONNX Runtime library")
+     message(FATAL_ERROR "ONNXRUNTIME_LIBRARY not found. Please set ONNXRUNTIME_ROOT to your ONNX Runtime installation directory, or set ONNXRUNTIME_LIBRARY manually.")
+  endif()
+  
+  include_directories(${ONNXRUNTIME_INCLUDE_DIR})
+  target_link_libraries(katago ${ONNXRUNTIME_LIBRARY})
+
+elseif(USE_BACKEND STREQUAL "ONNX-DIRECTML")
+  target_compile_definitions(katago PRIVATE USE_ONNX_DIRECTML_BACKEND)
+  
 endif()
 
 if(USE_BIGGER_BOARDS_EXPENSIVE)

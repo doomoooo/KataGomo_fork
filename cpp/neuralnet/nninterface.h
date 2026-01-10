@@ -80,7 +80,8 @@ namespace NeuralNet {
     bool requireExactNNLen,
     bool inputsUseNHWC,
     int gpuIdxForThisThread,
-    int serverThreadIdx
+    int serverThreadIdx,
+    int backendNumThreads
   );
   void freeComputeHandle(ComputeHandle* computeHandle);
 

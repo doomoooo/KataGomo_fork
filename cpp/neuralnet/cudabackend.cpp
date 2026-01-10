@@ -2366,8 +2366,10 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  int backendNumThreads
 ) {
+  (void)backendNumThreads;
   //Use whatever CUDA believes GPU 0 to be.
   if(gpuIdxForThisThread == -1)
     gpuIdxForThisThread = 0;
