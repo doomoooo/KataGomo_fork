@@ -66,7 +66,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  int backendNumThreads
 ) {
   (void)context;
   (void)loadedModel;
@@ -76,6 +77,7 @@ ComputeHandle* NeuralNet::createComputeHandle(
   (void)inputsUseNHWC;
   (void)gpuIdxForThisThread;
   (void)serverThreadIdx;
+  (void)backendNumThreads;
   throw StringError("Dummy neural net backend: NeuralNet::createLocalGpuHandle unimplemented");
 }
 

@@ -66,7 +66,8 @@ NNEvaluator::NNEvaluator(
   const vector<int>& gpuIdxByServerThr,
   const string& rSeed,
   bool doRandomize,
-  int defaultSymmetry
+  int defaultSymmetry,
+  int backendNumThr
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -78,6 +79,7 @@ NNEvaluator::NNEvaluator(
    usingFP16Mode(useFP16Mode),
    usingNHWCMode(useNHWCMode),
    numThreads(numThr),
+   backendNumThreads(backendNumThr),
    gpuIdxByServerThread(gpuIdxByServerThr),
    randSeed(rSeed),
    debugSkipNeuralNet(skipNeuralNet),
@@ -449,7 +451,8 @@ void NNEvaluator::serve(
       requireExactNNLen,
       inputsUseNHWC,
       gpuIdxForThisThread,
-      serverThreadIdx
+      serverThreadIdx,
+      backendNumThreads
     );
 
   {

@@ -1593,8 +1593,11 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  int backendNumThreads
 ) {
+  (void)backendNumThreads;
+
   if(inputsUseNHWC) {
     throw StringError("TensorRT backend: inputsUseNHWC = false required, other configurations not supported");
   }

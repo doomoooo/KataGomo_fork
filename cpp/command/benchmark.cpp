@@ -44,6 +44,8 @@ static vector<PlayUtils::BenchmarkResults> doAutoTuneThreads(
 
 #ifdef USE_EIGEN_BACKEND
 static const int64_t defaultMaxVisits = 80;
+#elif defined(USE_ONNX_CPU_BACKEND)
+static const int64_t defaultMaxVisits = 80;
 #else
 static const int64_t defaultMaxVisits = 800;
 #endif
