@@ -1382,7 +1382,7 @@ struct ComputeHandle {
       if (ctx->isOnnx) {
         
         timingCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d_%d%d",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1392,7 +1392,10 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          usingFP16 ? 16 : 32,
+          loadedModel->modelDesc.onnxHeader.is_simplified ? 1 : 0,
+          loadedModel->modelDesc.onnxHeader.is_int8 ? 1 : 0
+            );
           
       } else {
         

@@ -76,6 +76,8 @@ void ONNXModelHeader::clear() {
   has_mask = false;
   pos_len_x = 0;
   pos_len_y = 0;
+  is_simplified = false;
+  is_int8 = false;
   model_config = "";
   model_config_sha256 = "";
 }
@@ -157,8 +159,6 @@ void ONNXModelHeader::load(const std::string& onnxFile) {
     throw StringError("ONNX model requires a has_mask metadata field");
   else if(!Global::tryStringToBool(allmetadata["has_mask"], has_mask))
     throw StringError("ONNX model requires a valid has_mask metadata field, but got: " + allmetadata["has_mask"]);
-  if(!allmetadata.count("model_config") || allmetadata["model_config"].empty())
-    throw StringError("ONNX model requires a model_config metadata field");
 
   if(!allmetadata.count("pos_len_x"))
     throw StringError("ONNX model requires a pos_len_x metadata field");
@@ -168,6 +168,19 @@ void ONNXModelHeader::load(const std::string& onnxFile) {
     throw StringError("ONNX model requires a pos_len_y metadata field");
   else if(!Global::tryStringToInt(allmetadata["pos_len_y"], pos_len_y))
     throw StringError("ONNX model requires a valid pos_len_y metadata field, but got: " + allmetadata["pos_len_y"]);
+
+  
+  if(!allmetadata.count("is_simplified"))
+    is_simplified = false;
+  else if(!Global::tryStringToBool(allmetadata["is_simplified"], is_simplified))
+    throw StringError("ONNX model requires a valid is_simplified metadata field, but got: " + allmetadata["is_simplified"]);
+
+  if(!allmetadata.count("is_int8"))
+    is_int8 = false;
+  else if(!Global::tryStringToBool(allmetadata["is_int8"], is_int8))
+    throw StringError(
+      "ONNX model requires a valid is_int8 metadata field, but got: " + allmetadata["is_int8"]);
+
 
   if(!allmetadata.count("model_config") || allmetadata["model_config"].empty())
     throw StringError("ONNX model requires a model_config metadata field");
