@@ -23,9 +23,9 @@ using namespace nvinfer1;
 // Define this to print out some of the intermediate values of the neural net
 //#define DEBUG_INTERMEDIATE_VALUES
 
-//#define CACHE_TENSORRT_PLAN
+#define CACHE_TENSORRT_PLAN
 
-const int TensorRT_BuilderOptimizationLevel = 2; //0 for fast init, 2 is default, 5 is max
+const int TensorRT_BuilderOptimizationLevel = 3; //0 for fast init, 2 is default, 5 is max
 
 static void checkCudaError(const cudaError_t status, const char* opName, const char* file, const char* func, int line) {
   if(status != cudaSuccess)
@@ -1156,7 +1156,21 @@ struct ComputeHandle {
     } else if(ctx->useFP16Mode == enabled_t::True) {
       throw StringError("CUDA device does not support useFP16=true");
     }
-    config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+
+    bool is_qat_onnx = ctx->isOnnx ? loadedModel->modelDesc.onnxHeader.is_int8 : false;
+
+    if(!is_qat_onnx) {
+      config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
+    }
+    else {
+      logger->write("Detected QAT int8 model, use int8");
+      if(builder->platformHasFastInt8()) {
+        config->setFlag(BuilderFlag::kINT8);
+      } 
+      else {
+        throw StringError("CUDA device does not support int8 onnx model");
+      }
+    }
 
     auto network = unique_ptr<INetworkDefinition>(
       builder->createNetworkV2(1U << static_cast<int>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH)));
@@ -1238,7 +1252,8 @@ struct ComputeHandle {
     
     // Typical runtime allocation is much less than the 4 GiB specified below
     config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 32);
-
+    //config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED); // to check whether the QDQ nodes are merged into conv layers
+    //config->setFlag(BuilderFlag::kREJECT_EMPTY_ALGORITHMS);
     string plan;
     {
       static mutex tuneMutex;
@@ -1363,6 +1378,11 @@ struct ComputeHandle {
         if(modelHashStr.size() != 64) {
           throw StringError("Unexpected model hash size");
         }
+        //Save a pure tensorrt plan cache file for debug
+        //ofstream ofs2;
+        //FileUtils::open(ofs2, planCacheFile + ".pure", ios::out | ios::binary);
+        //ofs2.write(plan.data(), plan.size());
+        //ofs2.close();
         plan.insert(plan.end(), modelHashStr.begin(), modelHashStr.end());
         plan.insert(plan.end(), paramStr.begin(), paramStr.end());
         ofstream ofs;
@@ -1382,7 +1402,7 @@ struct ComputeHandle {
       if (ctx->isOnnx) {
         
         timingCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d_%d%d",
+          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d_%d%d%d",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1393,6 +1413,7 @@ struct ComputeHandle {
           ctx->nnXLen,
           maxBatchSize,
           usingFP16 ? 16 : 32,
+          loadedModel->modelDesc.onnxHeader.is_qat ? 1 : 0,
           loadedModel->modelDesc.onnxHeader.is_simplified ? 1 : 0,
           loadedModel->modelDesc.onnxHeader.is_int8 ? 1 : 0
             );

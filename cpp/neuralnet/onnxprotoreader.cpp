@@ -76,6 +76,7 @@ void ONNXModelHeader::clear() {
   has_mask = false;
   pos_len_x = 0;
   pos_len_y = 0;
+  is_qat = false;
   is_simplified = false;
   is_int8 = false;
   model_config = "";
@@ -170,10 +171,16 @@ void ONNXModelHeader::load(const std::string& onnxFile) {
     throw StringError("ONNX model requires a valid pos_len_y metadata field, but got: " + allmetadata["pos_len_y"]);
 
   
+  if(!allmetadata.count("is_qat"))
+    is_qat = false;
+  else if(!Global::tryStringToBool(allmetadata["is_qat"], is_qat))
+    throw StringError("ONNX model requires a valid is_qat metadata field, but got: " + allmetadata["is_qat"]);
+
   if(!allmetadata.count("is_simplified"))
     is_simplified = false;
   else if(!Global::tryStringToBool(allmetadata["is_simplified"], is_simplified))
-    throw StringError("ONNX model requires a valid is_simplified metadata field, but got: " + allmetadata["is_simplified"]);
+    throw StringError(
+      "ONNX model requires a valid is_simplified metadata field, but got: " + allmetadata["is_simplified"]);
 
   if(!allmetadata.count("is_int8"))
     is_int8 = false;

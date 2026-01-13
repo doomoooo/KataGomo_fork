@@ -38,6 +38,7 @@ struct ONNXModelHeader {
     bool has_mask;
     int pos_len_x;
     int pos_len_y;
+    bool is_qat;
     bool is_simplified;
     bool is_int8;
     std::string model_config;
