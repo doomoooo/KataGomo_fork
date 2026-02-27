@@ -1,7 +1,190 @@
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/modelversion.h"
 
+#include <algorithm>
+#include <chrono>
+#include <map>
+#include <thread>
+
 using namespace std;
+
+namespace {
+class SearchThreadStateMonitor {
+ public:
+  SearchThreadStateMonitor()
+    : mutex(),
+      stopSampler(false),
+      enabledEver(false),
+      summaryLogged(false),
+      activeThreadStates(),
+      state1TreeHistogram(),
+      state2QueueHistogram(),
+      state31Stream1Histogram(),
+      state32Stream2Histogram(),
+      totalSamples(0)
+  {}
+
+  ~SearchThreadStateMonitor() {
+    stopAndJoinSampler();
+  }
+
+  void setEnabled(bool enabled) {
+    if(!enabled)
+      return;
+    lock_guard<std::mutex> lock(mutex);
+    if(summaryLogged)
+      return;
+    enabledEver = true;
+    if(!samplerThread.joinable()) {
+      stopSampler.store(false, std::memory_order_release);
+      samplerThread = std::thread(&SearchThreadStateMonitor::runSamplerLoop, this);
+    }
+  }
+
+  void registerThreadState(std::atomic<int>* statePtr) {
+    if(statePtr == nullptr)
+      return;
+    lock_guard<std::mutex> lock(mutex);
+    if(!enabledEver || summaryLogged)
+      return;
+    if(std::find(activeThreadStates.begin(), activeThreadStates.end(), statePtr) == activeThreadStates.end()) {
+      activeThreadStates.push_back(statePtr);
+    }
+  }
+
+  void unregisterThreadState(std::atomic<int>* statePtr) {
+    if(statePtr == nullptr)
+      return;
+    lock_guard<std::mutex> lock(mutex);
+    auto newEnd = std::remove(activeThreadStates.begin(), activeThreadStates.end(), statePtr);
+    activeThreadStates.erase(newEnd, activeThreadStates.end());
+  }
+
+  void logSummary(Logger* logger) {
+    {
+      lock_guard<std::mutex> lock(mutex);
+      if(!enabledEver || summaryLogged)
+        return;
+      summaryLogged = true;
+    }
+    stopAndJoinSampler();
+
+    if(logger == nullptr)
+      return;
+
+    uint64_t totalSamplesLocal = 0;
+    map<int,uint64_t> state1TreeHistogramLocal;
+    map<int,uint64_t> state2QueueHistogramLocal;
+    map<int,uint64_t> state31Stream1HistogramLocal;
+    map<int,uint64_t> state32Stream2HistogramLocal;
+    {
+      lock_guard<std::mutex> lock(mutex);
+      totalSamplesLocal = totalSamples;
+      state1TreeHistogramLocal = state1TreeHistogram;
+      state2QueueHistogramLocal = state2QueueHistogram;
+      state31Stream1HistogramLocal = state31Stream1Histogram;
+      state32Stream2HistogramLocal = state32Stream2Histogram;
+    }
+
+    auto formatHistogram = [](const map<int,uint64_t>& hist) {
+      if(hist.empty())
+        return string("empty");
+      string s;
+      bool first = true;
+      for(const auto& kv : hist) {
+        if(!first)
+          s += ", ";
+        s += Global::intToString(kv.first) + "=>" + Global::uint64ToString(kv.second);
+        first = false;
+      }
+      return s;
+    };
+
+    logger->write(
+      "Search thread GPU state sampling (interval=10ms): totalSamples=" +
+      Global::uint64ToString(totalSamplesLocal)
+    );
+    logger->write("State1(tree search, no queued GPU task): " + formatHistogram(state1TreeHistogramLocal));
+    logger->write("State2(queued, waiting for idle GPU): " + formatHistogram(state2QueueHistogramLocal));
+    logger->write("State3.1(waiting on stream1): " + formatHistogram(state31Stream1HistogramLocal));
+    logger->write("State3.2(waiting on stream2): " + formatHistogram(state32Stream2HistogramLocal));
+  }
+
+ private:
+  std::mutex mutex;
+  std::atomic<bool> stopSampler;
+  bool enabledEver;
+  bool summaryLogged;
+  std::thread samplerThread;
+  std::vector<std::atomic<int>*> activeThreadStates;
+  map<int,uint64_t> state1TreeHistogram;
+  map<int,uint64_t> state2QueueHistogram;
+  map<int,uint64_t> state31Stream1Histogram;
+  map<int,uint64_t> state32Stream2Histogram;
+  uint64_t totalSamples;
+
+  void stopAndJoinSampler() {
+    stopSampler.store(true, std::memory_order_release);
+    if(samplerThread.joinable())
+      samplerThread.join();
+  }
+
+  void runSamplerLoop() {
+    while(!stopSampler.load(std::memory_order_acquire)) {
+      sampleOnce();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  void sampleOnce() {
+    int numState1Tree = 0;
+    int numState2Queue = 0;
+    int numState31Stream1 = 0;
+    int numState32Stream2 = 0;
+
+    lock_guard<std::mutex> lock(mutex);
+    if(activeThreadStates.empty())
+      return;
+    for(std::atomic<int>* statePtr : activeThreadStates) {
+      int state = statePtr->load(std::memory_order_relaxed);
+      if(state == SearchThreadGpuState::WAITING_FOR_GPU_QUEUE)
+        numState2Queue += 1;
+      else if(state == SearchThreadGpuState::WAITING_FOR_GPU_STREAM1)
+        numState31Stream1 += 1;
+      else if(state == SearchThreadGpuState::WAITING_FOR_GPU_STREAM2)
+        numState32Stream2 += 1;
+      else
+        numState1Tree += 1;
+    }
+    state1TreeHistogram[numState1Tree] += 1;
+    state2QueueHistogram[numState2Queue] += 1;
+    state31Stream1Histogram[numState31Stream1] += 1;
+    state32Stream2Histogram[numState32Stream2] += 1;
+    totalSamples += 1;
+  }
+};
+
+SearchThreadStateMonitor& getSearchThreadStateMonitor() {
+  static SearchThreadStateMonitor monitor;
+  return monitor;
+}
+}
+
+void setSearchThreadStateMonitoringEnabled(bool enabled) {
+  getSearchThreadStateMonitor().setEnabled(enabled);
+}
+
+void registerSearchThreadStateForMonitoring(std::atomic<int>* state) {
+  getSearchThreadStateMonitor().registerThreadState(state);
+}
+
+void unregisterSearchThreadStateForMonitoring(std::atomic<int>* state) {
+  getSearchThreadStateMonitor().unregisterThreadState(state);
+}
+
+void logSearchThreadStateMonitoringSummary(Logger* logger) {
+  getSearchThreadStateMonitor().logSummary(logger);
+}
 
 //-------------------------------------------------------------------------------------
 
@@ -20,7 +203,8 @@ NNResultBuf::NNResultBuf()
     errorLogLockout(false),
     // If no symmetry is specified, it will use default or random based on config.
     symmetry(NNInputs::SYMMETRY_NOTSPECIFIED),
-    policyOptimism(0.0)
+    policyOptimism(0.0),
+    searchThreadMonitorState(nullptr)
 {}
 
 NNResultBuf::~NNResultBuf() {
@@ -426,6 +610,8 @@ void NNEvaluator::killServerThreads() {
   serverThreads.clear();
   serverThreadsIsUsingFP16.clear();
 
+  logSearchThreadStateMonitoringSummary(logger);
+
   //Can unset now that threads are dead
   isKilled = false;
 
@@ -549,6 +735,9 @@ void NNEvaluator::serve(
         resultBuf->result->shorttermScoreError = 0.0f;
         resultBuf->result->policyOptimismUsed = (float)resultBuf->policyOptimism;
         resultBuf->hasResult = true;
+        if(resultBuf->searchThreadMonitorState != nullptr) {
+          resultBuf->searchThreadMonitorState->store(SearchThreadGpuState::TREE_SEARCHING, std::memory_order_release);
+        }
         resultBuf->clientWaitingForResult.notify_all();
         resultLock.unlock();
       }
@@ -578,6 +767,15 @@ void NNEvaluator::serve(
         }
       }
 
+      // Strict in-flight semantics: mark stream state only for the actual GPU execution window.
+      const int waitingStreamState =
+        (serverThreadIdx == 0 ? SearchThreadGpuState::WAITING_FOR_GPU_STREAM1 : SearchThreadGpuState::WAITING_FOR_GPU_STREAM2);
+      for(int row = 0; row < numRows; row++) {
+        if(resultBufs[row]->searchThreadMonitorState != nullptr) {
+          resultBufs[row]->searchThreadMonitorState->store(waitingStreamState, std::memory_order_release);
+        }
+      }
+
       NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
       assert(outputBuf.size() == numRows);
 
@@ -590,6 +788,9 @@ void NNEvaluator::serve(
         assert(resultBufs[row] != NULL);
         NNResultBuf* resultBuf = resultBufs[row];
         resultBufs[row] = NULL;
+        if(resultBuf->searchThreadMonitorState != nullptr) {
+          resultBuf->searchThreadMonitorState->store(SearchThreadGpuState::TREE_SEARCHING, std::memory_order_release);
+        }
 
         unique_lock<std::mutex> resultLock(resultBuf->resultMutex);
         assert(resultBuf->hasResult == false);
@@ -837,6 +1038,9 @@ void NNEvaluator::evaluate(
   numOngoingEvals += 1;
   lock.unlock();
 
+  if(buf.searchThreadMonitorState != nullptr) {
+    buf.searchThreadMonitorState->store(SearchThreadGpuState::WAITING_FOR_GPU_QUEUE, std::memory_order_release);
+  }
   bool suc = queryQueue.forcePush(&buf);
   assert(suc);
 
@@ -844,6 +1048,9 @@ void NNEvaluator::evaluate(
   while(!buf.hasResult)
     buf.clientWaitingForResult.wait(resultLock);
   resultLock.unlock();
+  if(buf.searchThreadMonitorState != nullptr) {
+    buf.searchThreadMonitorState->store(SearchThreadGpuState::TREE_SEARCHING, std::memory_order_release);
+  }
 
   //Perform postprocessing on the result - turn the nn output into probabilities
   //As a hack though, if the only thing we were missing was the ownermap, just grab the old policy and values

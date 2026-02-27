@@ -763,6 +763,10 @@ vector<SearchParams> Setup::loadParams(
     else if(cfg.contains("numVirtualLossesPerThread"))   params.numVirtualLossesPerThread = cfg.getDouble("numVirtualLossesPerThread",        0.01, 1000.0);
     else                                                 params.numVirtualLossesPerThread = 1.0;
 
+    if(cfg.contains("sampleSearchThreadStates"+idxStr)) params.sampleSearchThreadStates = cfg.getBool("sampleSearchThreadStates"+idxStr);
+    else if(cfg.contains("sampleSearchThreadStates"))   params.sampleSearchThreadStates = cfg.getBool("sampleSearchThreadStates");
+    else                                                params.sampleSearchThreadStates = (setupFor == SETUP_FOR_BENCHMARK);
+
     if(cfg.contains("treeReuseCarryOverTimeFactor"+idxStr)) params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor"+idxStr,0.0,1.0);
     else if(cfg.contains("treeReuseCarryOverTimeFactor"))   params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor",0.0,1.0);
     else                                                    params.treeReuseCarryOverTimeFactor = 0.0;

@@ -1,6 +1,7 @@
 #ifndef SEARCH_SEARCH_H_
 #define SEARCH_SEARCH_H_
 
+#include <atomic>
 #include <memory>
 #include <unordered_set>
 
@@ -43,6 +44,7 @@ struct ConstSearchNodeChildrenReference;
 //Per-thread state
 struct SearchThread {
   int threadIdx;
+  std::atomic<int> gpuStateForMonitoring;
 
   Player pla;
   Board board;

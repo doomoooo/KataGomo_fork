@@ -37,6 +37,7 @@ static string makeSeed(const Search& search, int threadIdx) {
 
 SearchThread::SearchThread(int tIdx, const Search& search)
   :threadIdx(tIdx),
+   gpuStateForMonitoring(SearchThreadGpuState::TREE_SEARCHING),
    pla(search.rootPla),board(search.rootBoard),
    history(search.rootHistory),
    graphHash(search.rootGraphHash),
@@ -54,8 +55,19 @@ SearchThread::SearchThread(int tIdx, const Search& search)
 
   //Reserving even this many is almost certainly overkill but should guarantee that we never have hit allocation here.
   oldNNOutputsToCleanUp.reserve(8);
+  if(search.searchParams.sampleSearchThreadStates) {
+    nnResultBuf.searchThreadMonitorState = &gpuStateForMonitoring;
+    registerSearchThreadStateForMonitoring(&gpuStateForMonitoring);
+  }
+  else {
+    nnResultBuf.searchThreadMonitorState = nullptr;
+  }
 }
 SearchThread::~SearchThread() {
+  if(nnResultBuf.searchThreadMonitorState != nullptr) {
+    unregisterSearchThreadStateForMonitoring(nnResultBuf.searchThreadMonitorState);
+    nnResultBuf.searchThreadMonitorState = nullptr;
+  }
   for(size_t i = 0; i<oldNNOutputsToCleanUp.size(); i++)
     delete oldNNOutputsToCleanUp[i];
   oldNNOutputsToCleanUp.resize(0);
@@ -500,6 +512,8 @@ void Search::runWholeSearch(
       capThreads = std::max(1, (int)floor(cap));
     }
   }
+  if(searchParams.sampleSearchThreadStates)
+    setSearchThreadStateMonitoringEnabled(true);
 
   //Apply time controls. These two don't particularly need to be synchronized with each other so its fine to have two separate atomics.
   std::atomic<double> tcMaxTime(1e30);

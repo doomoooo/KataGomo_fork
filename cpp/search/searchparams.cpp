@@ -85,6 +85,7 @@ SearchParams::SearchParams()
    evalCacheMinVisits(100),
    nodeTableShardsPowerOfTwo(16),
    numVirtualLossesPerThread(3.0),
+   sampleSearchThreadStates(false),
    numThreads(1),
    backendNumThreads(1),
    minPlayoutsPerThread(0.0),
@@ -221,6 +222,7 @@ bool SearchParams::operator==(const SearchParams& other) const {
 
     nodeTableShardsPowerOfTwo == other.nodeTableShardsPowerOfTwo &&
     numVirtualLossesPerThread == other.numVirtualLossesPerThread &&
+    sampleSearchThreadStates == other.sampleSearchThreadStates &&
 
     numThreads == other.numThreads &&
     backendNumThreads == other.backendNumThreads &&
@@ -480,6 +482,7 @@ json SearchParams::changeableParametersToJson() const {
 
   // ret["nodeTableShardsPowerOfTwo"] = nodeTableShardsPowerOfTwo;
   ret["numVirtualLossesPerThread"] = numVirtualLossesPerThread;
+  ret["sampleSearchThreadStates"] = sampleSearchThreadStates;
 
   ret["numSearchThreads"] = numThreads; // NOTE: different name since that's how setup.cpp loads it
   ret["backendNumThreads"] = backendNumThreads; // NOTE: different name since that's how setup.cpp loads it
@@ -630,6 +633,7 @@ void SearchParams::printParams(std::ostream& out) const {
 
   PRINTPARAM(nodeTableShardsPowerOfTwo);
   PRINTPARAM(numVirtualLossesPerThread);
+  PRINTPARAM(sampleSearchThreadStates);
 
 
   PRINTPARAM(numThreads);
