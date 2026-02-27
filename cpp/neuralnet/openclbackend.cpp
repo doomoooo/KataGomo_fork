@@ -461,8 +461,11 @@ ComputeContext* NeuralNet::createComputeContext(
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
+  bool useCudaGraph,
   const LoadedModel* loadedModel
 ) {
+  (void)useCudaGraph;
+
   if(gpuIdxs.size() <= 0)
     throw StringError("NeuralNet::createComputeContext - specified no gpus to use");
 

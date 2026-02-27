@@ -253,6 +253,16 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useNHWC"))
       useNHWCMode = cfg.getEnabled("useNHWC");
 
+    bool useCudaGraph = false;
+    if(cfg.contains(backendPrefix+"UseCudaGraph-"+idxStr))
+      useCudaGraph = cfg.getBool(backendPrefix+"UseCudaGraph-"+idxStr);
+    else if(cfg.contains("useCudaGraph-"+idxStr))
+      useCudaGraph = cfg.getBool("useCudaGraph-"+idxStr);
+    else if(cfg.contains(backendPrefix+"UseCudaGraph"))
+      useCudaGraph = cfg.getBool(backendPrefix+"UseCudaGraph");
+    else if(cfg.contains("useCudaGraph"))
+      useCudaGraph = cfg.getBool("useCudaGraph");
+
     int forcedSymmetry = -1;
     if(setupFor != SETUP_FOR_DISTRIBUTED && cfg.contains("nnForcedSymmetry"))
       forcedSymmetry = cfg.getInt("nnForcedSymmetry",0,SymmetryHelpers::NUM_SYMMETRIES-1);
@@ -261,6 +271,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       "After dedups: nnModelFile" + idxStr + " = " + nnModelFile
       + " useFP16 " + useFP16Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
+      + " useCudaGraph " + Global::boolToString(useCudaGraph)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -348,7 +359,8 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       nnRandSeed,
       (forcedSymmetry >= 0 ? false : nnRandomize),
       defaultSymmetry,
-      backendNumThreads
+      backendNumThreads,
+      useCudaGraph
     );
 
     nnEval->spawnServerThreads();

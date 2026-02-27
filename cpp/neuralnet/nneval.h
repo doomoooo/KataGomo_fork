@@ -101,7 +101,8 @@ class NNEvaluator {
     const std::string& randSeed,
     bool doRandomize,
     int defaultSymmetry,
-    int backendNumThreads 
+    int backendNumThreads,
+    bool useCudaGraph = false
   );
   ~NNEvaluator();
 

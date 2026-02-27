@@ -2286,6 +2286,7 @@ ComputeContext* NeuralNet::createComputeContext(
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
+  bool useCudaGraph,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -2293,6 +2294,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)openCLTunerFile;
   (void)homeDataDirOverride;
   (void)openCLReTunePerBoardSize;
+  (void)useCudaGraph;
   (void)loadedModel;
 
   ComputeContext* context = new ComputeContext();

@@ -86,8 +86,16 @@ ComputeContext* NeuralNet::createComputeContext(
   bool openCLReTunePerBoardSize,
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
+  bool useCudaGraph,
   const LoadedModel* loadedModel
 ) {
+  (void)gpuIdxs;
+  (void)logger;
+  (void)openCLTunerFile;
+  (void)homeDataDirOverride;
+  (void)openCLReTunePerBoardSize;
+  (void)useCudaGraph;
+
   if(useNHWCMode == enabled_t::True) {
     throw StringError("ONNX backend: useNHWC = false required");
   }
@@ -442,4 +450,3 @@ bool NeuralNet::testEvaluateConv(const ConvLayerDesc* desc, int batchSize, int n
 bool NeuralNet::testEvaluateBatchNorm(const BatchNormLayerDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
 bool NeuralNet::testEvaluateResidualBlock(const ResidualBlockDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
 bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(const GlobalPoolingResidualBlockDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
-
