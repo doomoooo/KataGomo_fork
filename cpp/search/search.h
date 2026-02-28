@@ -44,7 +44,6 @@ struct ConstSearchNodeChildrenReference;
 //Per-thread state
 struct SearchThread {
   int threadIdx;
-  std::atomic<int> gpuStateForMonitoring;
 
   Player pla;
   Board board;

@@ -462,11 +462,9 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
-  bool recordBatchSizeHistogram,
   const LoadedModel* loadedModel
 ) {
   (void)useCudaGraph;
-  (void)recordBatchSizeHistogram;
 
   if(gpuIdxs.size() <= 0)
     throw StringError("NeuralNet::createComputeContext - specified no gpus to use");

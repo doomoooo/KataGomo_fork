@@ -49,7 +49,6 @@ struct ComputeContext {
   int nnYLen;
   enabled_t useFP16Mode;
   bool useCudaGraph;
-  bool recordBatchSizeHistogram;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -101,7 +100,6 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
-  bool recordBatchSizeHistogram,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
   (void)logger;
@@ -117,7 +115,6 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
   context->useCudaGraph = useCudaGraph;
-  context->recordBatchSizeHistogram = recordBatchSizeHistogram;
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -1108,6 +1105,37 @@ struct TRTErrorRecorder : IErrorRecorder {
 };
 
 
+struct InputBuffers;
+// TRT backend contract:
+// - InputBuffers are owned by NNServerBuf (one instance per NN server thread).
+// - createInputBuffers and createComputeHandle are called on that same thread.
+// - We cache the thread's InputBuffers pointer only to bind stable host addresses during cudaGraph pre-capture.
+static thread_local InputBuffers* threadLocalInputBuffersForCudaGraph = nullptr;
+
+struct CudaHostArrayDeleter {
+  void operator()(float* ptr) const {
+    if(ptr != nullptr) {
+      cudaError_t status = cudaFreeHost(ptr);
+      if(status != cudaSuccess) {
+        Global::fatalError(
+          string("TensorRT backend: cudaFreeHost failed: ") + cudaGetErrorString(status)
+        );
+      }
+    }
+  }
+};
+
+using PinnedHostFloatArray = unique_ptr<float[], CudaHostArrayDeleter>;
+
+static PinnedHostFloatArray makePinnedHostFloatArray(size_t eltCount) {
+  if(eltCount == 0) {
+    return PinnedHostFloatArray(nullptr);
+  }
+  float* ptr = nullptr;
+  CUDA_ERR("makePinnedHostFloatArray", cudaMallocHost(reinterpret_cast<void**>(&ptr), eltCount * sizeof(float)));
+  return PinnedHostFloatArray(ptr);
+}
+
 struct ComputeHandle {
   ComputeContext* ctx;
   Logger* logger;
@@ -1127,9 +1155,6 @@ struct ComputeHandle {
   void* sharedExecDeviceMemory;
   int64_t sharedExecDeviceMemoryBytes;
   bool hasInputMetaTensor;
-  map<int, uint64_t> batchSizeHistogram;
-  uint64_t batchSizeHistogramCalls;
-  uint64_t batchSizeHistogramRows;
 
   struct BatchGraphState {
     unique_ptr<IExecutionContext> exec;
@@ -1147,6 +1172,8 @@ struct ComputeHandle {
     BatchGraphState& operator=(const BatchGraphState&) = delete;
   };
   map<int, BatchGraphState> batchGraphStates;
+  bool cudaGraphsPreCaptured;
+  InputBuffers* cudaGraphInputBuffers;
 
   ComputeHandle(
     Logger* logger,
@@ -1154,7 +1181,9 @@ struct ComputeHandle {
     ComputeContext* context,
     const LoadedModel* loadedModel,
     int maxBatchSz,
-    bool requireExactNNLen) {
+    bool requireExactNNLen,
+    int serverThreadIndex) {
+    (void)serverThreadIndex;
     ctx = context;
     this->logger = logger;
 
@@ -1164,8 +1193,8 @@ struct ComputeHandle {
     sharedExecDeviceMemory = nullptr;
     sharedExecDeviceMemoryBytes = 0;
     hasInputMetaTensor = false;
-    batchSizeHistogramCalls = 0;
-    batchSizeHistogramRows = 0;
+    cudaGraphsPreCaptured = false;
+    cudaGraphInputBuffers = nullptr;
     if(this->logger != nullptr && useCudaGraph) {
       this->logger->write("TensorRT backend: cudaGraph is enabled for this execution context");
     }
@@ -1571,13 +1600,16 @@ struct ComputeHandle {
       initializeExecutionContext(exec.get());
     }
     if(useCudaGraph) {
-      preCaptureAllCudaGraphs();
+      // Pre-capture now includes H2D/D2H, so it must use the owning thread's InputBuffers addresses.
+      if(threadLocalInputBuffersForCudaGraph == nullptr) {
+        throw StringError("TensorRT backend: missing per-thread InputBuffers for cudaGraph pre-capture");
+      }
+      ensureCudaGraphsPreCaptured(threadLocalInputBuffersForCudaGraph);
     }
     trtErrorRecorder.clear();
   }
 
   ~ComputeHandle() {
-    logBatchSizeHistogram();
     destroyAllBatchGraphs();
     batchGraphStates.clear();
     exec.reset();
@@ -1596,44 +1628,6 @@ struct ComputeHandle {
   ComputeHandle() = delete;
   ComputeHandle(const ComputeHandle&) = delete;
   ComputeHandle& operator=(const ComputeHandle&) = delete;
-
-  void recordBatchSizeUsage(int batchSize) {
-    if(!ctx->recordBatchSizeHistogram) {
-      return;
-    }
-    auto search = batchSizeHistogram.find(batchSize);
-    if(search == batchSizeHistogram.end()) {
-      batchSizeHistogram.emplace(batchSize, 1);
-    }
-    else {
-      search->second += 1;
-    }
-    batchSizeHistogramCalls += 1;
-    batchSizeHistogramRows += static_cast<uint64_t>(batchSize);
-  }
-
-  void logBatchSizeHistogram() const {
-    if(!ctx->recordBatchSizeHistogram || logger == nullptr) {
-      return;
-    }
-    string msg =
-      "TensorRT backend: batchSize distribution totalBatches=" + Global::uint64ToString(batchSizeHistogramCalls) +
-      " totalRows=" + Global::uint64ToString(batchSizeHistogramRows) + ": ";
-    if(batchSizeHistogram.empty()) {
-      msg += "empty";
-      logger->write(msg);
-      return;
-    }
-    bool first = true;
-    for(const auto& kv : batchSizeHistogram) {
-      if(!first) {
-        msg += ", ";
-      }
-      msg += "bs" + Global::intToString(kv.first) + "=" + Global::uint64ToString(kv.second);
-      first = false;
-    }
-    logger->write(msg);
-  }
 
   void destroyBatchGraph(BatchGraphState& state) {
     if(state.graphExec != nullptr) {
@@ -1707,81 +1701,11 @@ struct ComputeHandle {
     throw StringError("TensorRT backend: cudaGraph failure: " + message);
   }
 
-  void captureCudaGraph(BatchGraphState& state, int batchSize) {
-    cudaError_t status = cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal);
-    if(status != cudaSuccess) {
-      failCudaGraph(string("cudaStreamBeginCapture failed: ") + cudaGetErrorString(status));
-    }
-
-    bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
-    if(!enqueueOk) {
-      cudaGraph_t ignoredGraph = nullptr;
-      (void)cudaStreamEndCapture(cudaStreamPerThread, &ignoredGraph);
-      if(ignoredGraph != nullptr) {
-        (void)cudaGraphDestroy(ignoredGraph);
-      }
-      failCudaGraph("enqueueV3 failed while capturing");
-    }
-
-    cudaGraph_t capturedGraph = nullptr;
-    status = cudaStreamEndCapture(cudaStreamPerThread, &capturedGraph);
-    if(status != cudaSuccess || capturedGraph == nullptr) {
-      if(capturedGraph != nullptr) {
-        (void)cudaGraphDestroy(capturedGraph);
-      }
-      failCudaGraph(string("cudaStreamEndCapture failed: ") + cudaGetErrorString(status));
-    }
-
-    cudaGraphExec_t capturedGraphExec = nullptr;
-    status = cudaGraphInstantiate(&capturedGraphExec, capturedGraph, 0);
-    if(status != cudaSuccess || capturedGraphExec == nullptr) {
-      (void)cudaGraphDestroy(capturedGraph);
-      failCudaGraph(string("cudaGraphInstantiate failed: ") + cudaGetErrorString(status));
-    }
-
-    destroyBatchGraph(state);
-    state.graph = capturedGraph;
-    state.graphExec = capturedGraphExec;
-
-    (void)batchSize;
-  }
-
-  void preCaptureAllCudaGraphs() {
-    if(!useCudaGraph) {
-      return;
-    }
-    // TensorRT/Myelin may issue legacy-stream ops inside enqueueV3 warmup.
-    // If another thread is concurrently capturing on a blocking stream, CUDA can throw:
-    // "operation would make the legacy stream depend on a capturing blocking stream".
-    // Serialize pre-capture to avoid this startup-time race across NN server threads.
-    static std::mutex preCaptureGlobalMutex;
-    std::lock_guard<std::mutex> preCaptureLock(preCaptureGlobalMutex);
-    if(logger != nullptr) {
-      logger->write(
-        "TensorRT backend: pre-capturing cudaGraph for batch sizes 1.." + Global::intToString(maxBatchSize)
-      );
-    }
-    for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
-      BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
-      if(state.graphExec != nullptr) {
-        continue;
-      }
-
-      setInputShapesForExec(state.exec.get(), batchSize);
-
-      bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
-      if(!enqueueOk) {
-        failCudaGraph(
-          "enqueueV3 warmup failed while pre-capturing batch size " + Global::intToString(batchSize)
-        );
-      }
-      CUDA_ERR("preCaptureAllCudaGraphs", cudaStreamSynchronize(cudaStreamPerThread));
-      captureCudaGraph(state, batchSize);
-    }
-    if(logger != nullptr) {
-      logger->write("TensorRT backend: pre-capture completed");
-    }
-  }
+  void enqueueInputCopies(InputBuffers* inputBuffers, int batchSize);
+  void enqueueOutputCopies(InputBuffers* inputBuffers, int batchSize);
+  void captureCudaGraph(BatchGraphState& state, InputBuffers* inputBuffers, int batchSize);
+  void preCaptureAllCudaGraphs(InputBuffers* inputBuffers);
+  void ensureCudaGraphsPreCaptured(InputBuffers* inputBuffers);
 
   IExecutionContext* getExecutionContextForBatch(int batchSize) {
     if(!useCudaGraph) {
@@ -1947,7 +1871,7 @@ ComputeHandle* NeuralNet::createComputeHandle(
       "TensorRT backend thread " + Global::intToString(serverThreadIdx) + ": Initializing (may take a long time)");
   }
 
-  auto handle = new ComputeHandle(logger, &prop, context, loadedModel, maxBatchSize, requireExactNNLen);
+  auto handle = new ComputeHandle(logger, &prop, context, loadedModel, maxBatchSize, requireExactNNLen, serverThreadIdx);
 
   if(logger != NULL) {
     logger->write(
@@ -2032,21 +1956,21 @@ struct InputBuffers {
   size_t out_moremiscvalueBufferBytes;
   size_t out_ownershipBufferBytes;
 
-  unique_ptr<float[]> maskInputs;           // Host pointer
-  unique_ptr<float[]> spatialInputs;        // Host pointer
-  unique_ptr<float[]> globalInputs;  // Host pointer
-  unique_ptr<float[]> metaInputs;  // Host pointer
-  unique_ptr<float[]> policyPassResults;    // Host pointer
-  unique_ptr<float[]> policyResults;        // Host pointer
-  unique_ptr<float[]> valueResults;         // Host pointer
-  unique_ptr<float[]> scoreValueResults;    // Host pointer
-  unique_ptr<float[]> ownershipResults;     // Host pointer
+  PinnedHostFloatArray maskInputs;           // Host pointer
+  PinnedHostFloatArray spatialInputs;        // Host pointer
+  PinnedHostFloatArray globalInputs;  // Host pointer
+  PinnedHostFloatArray metaInputs;  // Host pointer
+  PinnedHostFloatArray policyPassResults;    // Host pointer
+  PinnedHostFloatArray policyResults;        // Host pointer
+  PinnedHostFloatArray valueResults;         // Host pointer
+  PinnedHostFloatArray scoreValueResults;    // Host pointer
+  PinnedHostFloatArray ownershipResults;     // Host pointer
 
-  unique_ptr<float[]> out_policyResults;
-  unique_ptr<float[]> out_valueResults;
-  unique_ptr<float[]> out_miscvalueResults;
-  unique_ptr<float[]> out_moremiscvalueResults;
-  unique_ptr<float[]> out_ownershipResults;
+  PinnedHostFloatArray out_policyResults;
+  PinnedHostFloatArray out_valueResults;
+  PinnedHostFloatArray out_miscvalueResults;
+  PinnedHostFloatArray out_moremiscvalueResults;
+  PinnedHostFloatArray out_ownershipResults;
 
   InputBuffers(const LoadedModel* loadedModel, int maxBatchSz, int nnXLen, int nnYLen) {
     const ModelDesc& m = loadedModel->modelDesc;
@@ -2104,11 +2028,11 @@ struct InputBuffers {
         out_moremiscvalueBufferBytes = maxBatchSize * singleout_moremiscvalueBytes;
         out_ownershipBufferBytes = maxBatchSize * singleout_ownershipBytes;
         
-        out_policyResults = std::make_unique<float[]>(maxBatchSize * singleout_policyElts);
-        out_valueResults = std::make_unique<float[]>(maxBatchSize * singleout_valueElts);
-        out_miscvalueResults = std::make_unique<float[]>(maxBatchSize * singleout_miscvalueElts);
-        out_moremiscvalueResults = std::make_unique<float[]>(maxBatchSize * singleout_moremiscvalueElts);
-        out_ownershipResults = std::make_unique<float[]>(maxBatchSize * singleout_ownershipElts);
+        out_policyResults = makePinnedHostFloatArray(maxBatchSize * singleout_policyElts);
+        out_valueResults = makePinnedHostFloatArray(maxBatchSize * singleout_valueElts);
+        out_miscvalueResults = makePinnedHostFloatArray(maxBatchSize * singleout_miscvalueElts);
+        out_moremiscvalueResults = makePinnedHostFloatArray(maxBatchSize * singleout_moremiscvalueElts);
+        out_ownershipResults = makePinnedHostFloatArray(maxBatchSize * singleout_ownershipElts);
     }
 
     assert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
@@ -2127,15 +2051,15 @@ struct InputBuffers {
     scoreValueResultBufferBytes = maxBatchSize * singleScoreValueResultBytes;
     ownershipResultBufferBytes = maxBatchSize * singleOwnershipResultBytes;
 
-    maskInputs = make_unique<float[]>(maxBatchSize * singleMaskElts);
-    spatialInputs = make_unique<float[]>(maxBatchSize * singleInputElts);
-    globalInputs = make_unique<float[]>(maxBatchSize * singleInputGlobalElts);
-    metaInputs = make_unique<float[]>(maxBatchSize * singleInputMetaElts);
-    policyPassResults = make_unique<float[]>(maxBatchSize * singlePolicyPassResultElts);
-    policyResults = make_unique<float[]>(maxBatchSize * singlePolicyResultElts);
-    valueResults = make_unique<float[]>(maxBatchSize * singleValueResultElts);
-    scoreValueResults = make_unique<float[]>(maxBatchSize * singleScoreValueResultElts);
-    ownershipResults = make_unique<float[]>(maxBatchSize * singleOwnershipResultElts);
+    maskInputs = makePinnedHostFloatArray(maxBatchSize * singleMaskElts);
+    spatialInputs = makePinnedHostFloatArray(maxBatchSize * singleInputElts);
+    globalInputs = makePinnedHostFloatArray(maxBatchSize * singleInputGlobalElts);
+    metaInputs = makePinnedHostFloatArray(maxBatchSize * singleInputMetaElts);
+    policyPassResults = makePinnedHostFloatArray(maxBatchSize * singlePolicyPassResultElts);
+    policyResults = makePinnedHostFloatArray(maxBatchSize * singlePolicyResultElts);
+    valueResults = makePinnedHostFloatArray(maxBatchSize * singleValueResultElts);
+    scoreValueResults = makePinnedHostFloatArray(maxBatchSize * singleScoreValueResultElts);
+    ownershipResults = makePinnedHostFloatArray(maxBatchSize * singleOwnershipResultElts);
   }
 
   InputBuffers() = delete;
@@ -2143,11 +2067,314 @@ struct InputBuffers {
   InputBuffers& operator=(const InputBuffers&) = delete;
 };
 
+void ComputeHandle::enqueueInputCopies(InputBuffers* inputBuffers, int batchSize) {
+  if(ctx->isOnnx) {
+    CUDA_ERR(
+      "enqueueInputCopies",
+      cudaMemcpyAsync(
+        getBuffer("input_spatial"),
+        inputBuffers->spatialInputs.get(),
+        inputBuffers->singleInputBytes * batchSize,
+        cudaMemcpyHostToDevice,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueInputCopies",
+      cudaMemcpyAsync(
+        getBuffer("input_global"),
+        inputBuffers->globalInputs.get(),
+        inputBuffers->singleInputGlobalBytes * batchSize,
+        cudaMemcpyHostToDevice,
+        cudaStreamPerThread
+      )
+    );
+  }
+  else {
+    CUDA_ERR(
+      "enqueueInputCopies",
+      cudaMemcpyAsync(
+        getBuffer("InputMask"),
+        inputBuffers->maskInputs.get(),
+        inputBuffers->singleMaskBytes * batchSize,
+        cudaMemcpyHostToDevice,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueInputCopies",
+      cudaMemcpyAsync(
+        getBuffer("InputSpatial"),
+        inputBuffers->spatialInputs.get(),
+        inputBuffers->singleInputBytes * batchSize,
+        cudaMemcpyHostToDevice,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueInputCopies",
+      cudaMemcpyAsync(
+        getBuffer("InputGlobal"),
+        inputBuffers->globalInputs.get(),
+        inputBuffers->singleInputGlobalBytes * batchSize,
+        cudaMemcpyHostToDevice,
+        cudaStreamPerThread
+      )
+    );
+    if(inputBuffers->singleInputMetaBytes > 0 && hasInputMetaTensor) {
+      CUDA_ERR(
+        "enqueueInputCopies",
+        cudaMemcpyAsync(
+          getBuffer("InputMeta"),
+          inputBuffers->metaInputs.get(),
+          inputBuffers->singleInputMetaBytes * batchSize,
+          cudaMemcpyHostToDevice,
+          cudaStreamPerThread
+        )
+      );
+    }
+  }
+}
+
+void ComputeHandle::enqueueOutputCopies(InputBuffers* inputBuffers, int batchSize) {
+  if(ctx->isOnnx) {
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->out_policyResults.get(),
+        getBuffer("out_policy"),
+        inputBuffers->singleout_policyBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->out_valueResults.get(),
+        getBuffer("out_value"),
+        inputBuffers->singleout_valueBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->out_miscvalueResults.get(),
+        getBuffer("out_miscvalue"),
+        inputBuffers->singleout_miscvalueBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->out_moremiscvalueResults.get(),
+        getBuffer("out_moremiscvalue"),
+        inputBuffers->singleout_moremiscvalueBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->out_ownershipResults.get(),
+        getBuffer("out_ownership"),
+        inputBuffers->singleout_ownershipBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+  }
+  else {
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->policyPassResults.get(),
+        getBuffer("OutputPolicyPass"),
+        inputBuffers->singlePolicyPassResultBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->policyResults.get(),
+        getBuffer("OutputPolicy"),
+        inputBuffers->singlePolicyResultBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->valueResults.get(),
+        getBuffer("OutputValue"),
+        inputBuffers->singleValueResultBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->scoreValueResults.get(),
+        getBuffer("OutputScoreValue"),
+        inputBuffers->singleScoreValueResultBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+    CUDA_ERR(
+      "enqueueOutputCopies",
+      cudaMemcpyAsync(
+        inputBuffers->ownershipResults.get(),
+        getBuffer("OutputOwnership"),
+        inputBuffers->singleOwnershipResultBytes * batchSize,
+        cudaMemcpyDeviceToHost,
+        cudaStreamPerThread
+      )
+    );
+  }
+}
+
+void ComputeHandle::captureCudaGraph(BatchGraphState& state, InputBuffers* inputBuffers, int batchSize) {
+  auto abortCaptureAndDestroyGraph = [&]() {
+    cudaGraph_t ignoredGraph = nullptr;
+    (void)cudaStreamEndCapture(cudaStreamPerThread, &ignoredGraph);
+    if(ignoredGraph != nullptr) {
+      (void)cudaGraphDestroy(ignoredGraph);
+    }
+  };
+
+  cudaError_t status = cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal);
+  if(status != cudaSuccess) {
+    failCudaGraph(string("cudaStreamBeginCapture failed: ") + cudaGetErrorString(status));
+  }
+
+  try {
+    enqueueInputCopies(inputBuffers, batchSize);
+
+    bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
+    if(!enqueueOk) {
+      throw StringError("enqueueV3 failed while capturing");
+    }
+
+    enqueueOutputCopies(inputBuffers, batchSize);
+  }
+  catch(const StringError& e) {
+    abortCaptureAndDestroyGraph();
+    failCudaGraph(
+      "capture failed for batch size " + Global::intToString(batchSize) + ": " + string(e.what())
+    );
+  }
+
+  cudaGraph_t capturedGraph = nullptr;
+  status = cudaStreamEndCapture(cudaStreamPerThread, &capturedGraph);
+  if(status != cudaSuccess || capturedGraph == nullptr) {
+    if(capturedGraph != nullptr) {
+      (void)cudaGraphDestroy(capturedGraph);
+    }
+    failCudaGraph(string("cudaStreamEndCapture failed: ") + cudaGetErrorString(status));
+  }
+
+  cudaGraphExec_t capturedGraphExec = nullptr;
+  status = cudaGraphInstantiate(&capturedGraphExec, capturedGraph, 0);
+  if(status != cudaSuccess || capturedGraphExec == nullptr) {
+    (void)cudaGraphDestroy(capturedGraph);
+    failCudaGraph(string("cudaGraphInstantiate failed: ") + cudaGetErrorString(status));
+  }
+
+  destroyBatchGraph(state);
+  state.graph = capturedGraph;
+  state.graphExec = capturedGraphExec;
+}
+
+void ComputeHandle::preCaptureAllCudaGraphs(InputBuffers* inputBuffers) {
+  if(!useCudaGraph) {
+    return;
+  }
+
+  // TensorRT/Myelin may issue legacy-stream ops inside enqueueV3 warmup.
+  // If another thread is concurrently capturing on a blocking stream, CUDA can throw:
+  // "operation would make the legacy stream depend on a capturing blocking stream".
+  // Serialize pre-capture to avoid this startup-time race across NN server threads.
+  static std::mutex preCaptureGlobalMutex;
+  std::lock_guard<std::mutex> preCaptureLock(preCaptureGlobalMutex);
+
+  if(logger != nullptr) {
+    logger->write(
+      "TensorRT backend: pre-capturing cudaGraph for batch sizes 1.." + Global::intToString(maxBatchSize)
+    );
+  }
+
+  for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
+    BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
+    if(state.graphExec != nullptr) {
+      continue;
+    }
+
+    setInputShapesForExec(state.exec.get(), batchSize);
+
+    try {
+      enqueueInputCopies(inputBuffers, batchSize);
+      bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
+      if(!enqueueOk) {
+        throw StringError(
+          "enqueueV3 warmup failed while pre-capturing batch size " + Global::intToString(batchSize)
+        );
+      }
+      enqueueOutputCopies(inputBuffers, batchSize);
+    }
+    catch(const StringError& e) {
+      failCudaGraph(
+        "warmup failed while pre-capturing batch size " + Global::intToString(batchSize) + ": " + string(e.what())
+      );
+    }
+
+    CUDA_ERR("preCaptureAllCudaGraphs", cudaStreamSynchronize(cudaStreamPerThread));
+    captureCudaGraph(state, inputBuffers, batchSize);
+  }
+
+  if(logger != nullptr) {
+    logger->write("TensorRT backend: pre-capture completed");
+  }
+}
+
+void ComputeHandle::ensureCudaGraphsPreCaptured(InputBuffers* inputBuffers) {
+  if(!useCudaGraph) {
+    return;
+  }
+
+  if(cudaGraphsPreCaptured) {
+    if(cudaGraphInputBuffers != inputBuffers) {
+      failCudaGraph("cudaGraph was captured with a different InputBuffers instance");
+    }
+    return;
+  }
+
+  preCaptureAllCudaGraphs(inputBuffers);
+  cudaGraphInputBuffers = inputBuffers;
+  cudaGraphsPreCaptured = true;
+}
+
 InputBuffers* NeuralNet::createInputBuffers(const LoadedModel* loadedModel, int maxBatchSize, int nnXLen, int nnYLen) {
-  return new InputBuffers(loadedModel, maxBatchSize, nnXLen, nnYLen);
+  InputBuffers* inputBuffers = new InputBuffers(loadedModel, maxBatchSize, nnXLen, nnYLen);
+  // Remember this thread's stable InputBuffers pointer for createComputeHandle pre-capture.
+  threadLocalInputBuffersForCudaGraph = inputBuffers;
+  return inputBuffers;
 }
 
 void NeuralNet::freeInputBuffers(InputBuffers* inputBuffers) {
+  // Clearing this is defensive for thread reuse after NNServerBuf teardown.
+  if(threadLocalInputBuffersForCudaGraph == inputBuffers) {
+    threadLocalInputBuffersForCudaGraph = nullptr;
+  }
   delete inputBuffers;
 }
 
@@ -2165,7 +2392,6 @@ void NeuralNet::getOutput(
   const int nnYLen = gpuHandle->ctx->nnYLen;
   const int modelVersion = gpuHandle->modelVersion;
   bool isOnnx = gpuHandle->ctx->isOnnx;
-  gpuHandle->recordBatchSizeUsage(batchSize);
 
   const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
   const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
@@ -2183,7 +2409,6 @@ void NeuralNet::getOutput(
     const float* rowSpatial = inputBufs[nIdx]->rowSpatialBuf.data();
     const float* rowMeta = inputBufs[nIdx]->rowMetaBuf.data();
     const bool hasRowMeta = inputBufs[nIdx]->hasRowMeta;
-    copy(rowGlobal, rowGlobal + numGlobalFeatures, rowGlobalInput);
     std::copy(rowGlobal,rowGlobal+numGlobalFeatures,rowGlobalInput);
     if(numMetaFeatures > 0) {
       testAssert(rowMeta != NULL);
@@ -2206,9 +2431,6 @@ void NeuralNet::getOutput(
       assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("input_spatial"));
       assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("input_global"));
       
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice));
-      
       if(shouldSetInputShapes) {
         auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
         auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
@@ -2221,13 +2443,6 @@ void NeuralNet::getOutput(
       assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("InputGlobal"));
       if(numMetaFeatures > 0)
         assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
-
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice));
-      if(numMetaFeatures > 0) {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice));
-      }
 
       if(shouldSetInputShapes) {
         auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
@@ -2248,22 +2463,14 @@ void NeuralNet::getOutput(
   if(shouldSetInputShapes) {
     gpuHandle->markInputShapeInitializedForBatch(batchSize);
   }
-  gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
-
-  // Get outputs
-  if (isOnnx) {
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost));
-  } else {
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost));
-      CUDA_ERR("getOutput", cudaMemcpy(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost));
+  if(!gpuHandle->useCudaGraph) {
+    gpuHandle->enqueueInputCopies(inputBuffers, batchSize);
   }
+  gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
+  if(!gpuHandle->useCudaGraph) {
+    gpuHandle->enqueueOutputCopies(inputBuffers, batchSize);
+  }
+  CUDA_ERR("getOutput", cudaStreamSynchronize(cudaStreamPerThread));
 
   gpuHandle->printDebugOutput(batchSize);
   gpuHandle->trtErrorRecorder.clear();

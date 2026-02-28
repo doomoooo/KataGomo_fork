@@ -263,17 +263,9 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useCudaGraph"))
       useCudaGraph = cfg.getBool("useCudaGraph");
 
-    bool recordBatchSizeHistogram = false;
-    if(cfg.contains(backendPrefix+"RecordBatchSizeHistogram-"+idxStr))
-      recordBatchSizeHistogram = cfg.getBool(backendPrefix+"RecordBatchSizeHistogram-"+idxStr);
-    else if(cfg.contains("recordBatchSizeHistogram-"+idxStr))
-      recordBatchSizeHistogram = cfg.getBool("recordBatchSizeHistogram-"+idxStr);
-    else if(cfg.contains(backendPrefix+"RecordBatchSizeHistogram"))
-      recordBatchSizeHistogram = cfg.getBool(backendPrefix+"RecordBatchSizeHistogram");
-    else if(cfg.contains("recordBatchSizeHistogram"))
-      recordBatchSizeHistogram = cfg.getBool("recordBatchSizeHistogram");
-    // Only meaningful in benchmark mode.
-    recordBatchSizeHistogram = recordBatchSizeHistogram && (setupFor == SETUP_FOR_BENCHMARK);
+    // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
+    cfg.markAllKeysUsedWithPrefix(backendPrefix+"RecordBatchSizeHistogram");
+    cfg.markAllKeysUsedWithPrefix("recordBatchSizeHistogram");
 
     int forcedSymmetry = -1;
     if(setupFor != SETUP_FOR_DISTRIBUTED && cfg.contains("nnForcedSymmetry"))
@@ -284,7 +276,6 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " useFP16 " + useFP16Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
       + " useCudaGraph " + Global::boolToString(useCudaGraph)
-      + " recordBatchSizeHistogram " + Global::boolToString(recordBatchSizeHistogram)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -373,8 +364,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       (forcedSymmetry >= 0 ? false : nnRandomize),
       defaultSymmetry,
       backendNumThreads,
-      useCudaGraph,
-      recordBatchSizeHistogram
+      useCudaGraph
     );
 
     nnEval->spawnServerThreads();
@@ -777,9 +767,8 @@ vector<SearchParams> Setup::loadParams(
     else if(cfg.contains("numVirtualLossesPerThread"))   params.numVirtualLossesPerThread = cfg.getDouble("numVirtualLossesPerThread",        0.01, 1000.0);
     else                                                 params.numVirtualLossesPerThread = 1.0;
 
-    if(cfg.contains("sampleSearchThreadStates"+idxStr)) params.sampleSearchThreadStates = cfg.getBool("sampleSearchThreadStates"+idxStr);
-    else if(cfg.contains("sampleSearchThreadStates"))   params.sampleSearchThreadStates = cfg.getBool("sampleSearchThreadStates");
-    else                                                params.sampleSearchThreadStates = (setupFor == SETUP_FOR_BENCHMARK);
+    // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
+    cfg.markAllKeysUsedWithPrefix("sampleSearchThreadStates");
 
     if(cfg.contains("treeReuseCarryOverTimeFactor"+idxStr)) params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor"+idxStr,0.0,1.0);
     else if(cfg.contains("treeReuseCarryOverTimeFactor"))   params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor",0.0,1.0);

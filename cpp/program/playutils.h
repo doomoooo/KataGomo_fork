@@ -136,7 +136,6 @@ namespace PlayUtils {
     double totalSeconds = 0;
     int64_t numNNEvals = 0;
     int64_t numNNBatches = 0;
-    int64_t numDuplicateGpuRows = 0;
     double avgBatchSize = 0;
 
     std::string toStringNotDone() const;

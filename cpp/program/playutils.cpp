@@ -829,29 +829,23 @@ string PlayUtils::BenchmarkResults::toStringNotDone() const {
 }
 string PlayUtils::BenchmarkResults::toString() const {
   ostringstream out;
-  const double duplicatePct = numNNEvals > 0 ? 100.0 * (double)numDuplicateGpuRows / (double)numNNEvals : 0.0;
   out << "numSearchThreads = " << Global::strprintf("%2d",numThreads) << ":"
       << " " << totalPositionsSearched << " / " << totalPositions << " positions,"
       << " visits/s = " << Global::strprintf("%.2f",totalVisits / totalSeconds)
       << " nnEvals/s = " << Global::strprintf("%.2f",numNNEvals / totalSeconds)
       << " nnBatches/s = " << Global::strprintf("%.2f",numNNBatches / totalSeconds)
       << " avgBatchSize = " << Global::strprintf("%.2f",avgBatchSize)
-      << " gpuDupRows = " << numDuplicateGpuRows
-      << " (" << Global::strprintf("%.2f",duplicatePct) << "%)"
       << " (" << Global::strprintf("%.1f", totalSeconds) << " secs)";
   return out.str();
 }
 string PlayUtils::BenchmarkResults::toStringWithElo(const BenchmarkResults* baseline, double secondsPerGameMove) const {
   ostringstream out;
-  const double duplicatePct = numNNEvals > 0 ? 100.0 * (double)numDuplicateGpuRows / (double)numNNEvals : 0.0;
   out << "numSearchThreads = " << Global::strprintf("%2d",numThreads) << ":"
       << " " << totalPositionsSearched << " / " << totalPositions << " positions,"
       << " visits/s = " << Global::strprintf("%.2f",totalVisits / totalSeconds)
       << " nnEvals/s = " << Global::strprintf("%.2f",numNNEvals / totalSeconds)
       << " nnBatches/s = " << Global::strprintf("%.2f",numNNBatches / totalSeconds)
       << " avgBatchSize = " << Global::strprintf("%.2f",avgBatchSize)
-      << " gpuDupRows = " << numDuplicateGpuRows
-      << " (" << Global::strprintf("%.2f",duplicatePct) << "%)"
       << " (" << Global::strprintf("%.1f", totalSeconds) << " secs)";
 
   if(baseline == NULL)
@@ -997,7 +991,6 @@ PlayUtils::BenchmarkResults PlayUtils::benchmarkSearchOnPositionsAndPrint(
 
   results.numNNEvals = nnEval->numRowsProcessed();
   results.numNNBatches = nnEval->numBatchesProcessed();
-  results.numDuplicateGpuRows = nnEval->numDuplicateGpuRowsProcessed();
   results.avgBatchSize = nnEval->averageProcessedBatchSize();
 
   if(printElo)

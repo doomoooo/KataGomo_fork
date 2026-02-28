@@ -3,7 +3,6 @@
 
 #include <atomic>
 #include <memory>
-#include <unordered_set>
 
 #include "../core/global.h"
 #include "../core/commontypes.h"
@@ -18,23 +17,6 @@
 #include "../search/mutexpool.h"
 
 class NNEvaluator;
-
-namespace SearchThreadGpuState {
-  // Search thread is expanding/searching and has no outstanding GPU request.
-  static constexpr int TREE_SEARCHING = 1;
-  // Search thread has enqueued an NN request and is waiting for a free GPU server thread.
-  static constexpr int WAITING_FOR_GPU_QUEUE = 2;
-  // Search thread's request is running on GPU server thread 0 (stream 1).
-  static constexpr int WAITING_FOR_GPU_STREAM1 = 3;
-  // Search thread's request is running on GPU server thread 1 (stream 2).
-  static constexpr int WAITING_FOR_GPU_STREAM2 = 4;
-}
-
-// Global sampler for search-thread GPU states. Sampling interval is fixed at 10ms.
-void setSearchThreadStateMonitoringEnabled(bool enabled);
-void registerSearchThreadStateForMonitoring(std::atomic<int>* state);
-void unregisterSearchThreadStateForMonitoring(std::atomic<int>* state);
-void logSearchThreadStateMonitoringSummary(Logger* logger);
 
 class NNCacheTable {
   struct Entry {
@@ -79,9 +61,6 @@ struct NNResultBuf {
   int symmetry; //The symmetry to use for this eval
   double policyOptimism; //The policy optimism to use for this eval
   Hash128 nnHash; //Hash of the request, set by evaluate() before queueing.
-  // Optional pointer to the owning search thread's monitor state.
-  // Written by both search and NN server threads via atomics.
-  std::atomic<int>* searchThreadMonitorState;
 
   NNResultBuf();
   ~NNResultBuf();
@@ -125,8 +104,7 @@ class NNEvaluator {
     bool doRandomize,
     int defaultSymmetry,
     int backendNumThreads,
-    bool useCudaGraph = false,
-    bool recordBatchSizeHistogram = false
+    bool useCudaGraph = false
   );
   ~NNEvaluator();
 
@@ -229,7 +207,6 @@ class NNEvaluator {
   //Some stats
   uint64_t numRowsProcessed() const;
   uint64_t numBatchesProcessed() const;
-  uint64_t numDuplicateGpuRowsProcessed() const;
   double averageProcessedBatchSize() const;
 
   void clearStats();
@@ -270,15 +247,6 @@ class NNEvaluator {
   //Counters for statistics
   std::atomic<uint64_t> m_numRowsProcessed;
   std::atomic<uint64_t> m_numBatchesProcessed;
-  std::atomic<uint64_t> m_numDuplicateGpuRowsProcessed;
-
-  struct Hash128Hasher {
-    size_t operator()(const Hash128& h) const {
-      return (size_t)Hash::splitMix64(h.hash0 ^ Hash::nasam(h.hash1));
-    }
-  };
-  mutable std::mutex gpuDuplicateStatsMutex;
-  std::unordered_set<Hash128,Hash128Hasher> gpuRowsSeen;
 
   mutable std::mutex bufferMutex;
 

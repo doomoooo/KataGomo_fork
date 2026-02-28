@@ -6,8 +6,7 @@ This document summarizes the branch changes introduced after commit `55a48792` (
 
 1. `285ca441` - Add TensorRT cudaGraph option with per-batch graph capture
 2. `b9f691af` - benchmark: allow exact fixed batch size values
-3. `8f5ad2ec` - Add search thread state stat
-4. `085853a5` - Add python benchmark using trtexec
+3. `085853a5` - Add python benchmark using trtexec
 
 ## What Changed And How To Use
 
@@ -33,23 +32,7 @@ This document summarizes the branch changes introduced after commit `55a48792` (
 - Example:
   - `./katago benchmark -config cpp/configs/gtp_example.cfg -model /path/model.onnx --fixed-batch-size 9 -threads 27`
 
-### 3) Search thread GPU-state sampling (`8f5ad2ec`)
-
-- Added search param: `sampleSearchThreadStates`.
-- Behavior when enabled:
-  - Samples each search thread GPU state every 10ms.
-  - Aggregates histograms for:
-    - tree searching (no queued GPU task)
-    - queued/waiting for idle GPU
-    - waiting stream1
-    - waiting stream2
-  - Logs summary on evaluator shutdown.
-- Usage:
-  - In config:
-    - `sampleSearchThreadStates = true`
-  - Keep disabled for normal runs if you do not need telemetry (small overhead).
-
-### 4) Python TensorRT benchmark pipeline (`085853a5`)
+### 3) Python TensorRT benchmark pipeline (`085853a5`)
 
 - Added:
   - `python/benchmark.py`
@@ -70,14 +53,11 @@ This document summarizes the branch changes introduced after commit `55a48792` (
   - Visualize:
     - `python3 python/visualize_benchmark.py --input-json build/trtexec_benchmark.json --output-dir build/benchmark_plots`
 
-### 5) Fail-fast and benchmark-only batch histogram (`a7188629`)
+### 4) Fail-fast cudaGraph behavior (`a7188629`)
 
 - cudaGraph failures in TensorRT path now throw immediately (development-mode fail-fast).
-- Batch size distribution logging is gated to benchmark mode only, and only when explicitly enabled.
-- New config switch for benchmark telemetry:
-  - `trtRecordBatchSizeHistogram = true|false` (default off unless set).
 
-### 6) cudaGraph startup crash fix (post `a7188629`)
+### 5) cudaGraph startup crash fix (post `a7188629`)
 
 - Fixed an intermittent TensorRT cudaGraph pre-capture startup crash:
   - `operation would make the legacy stream depend on a capturing blocking stream`
@@ -86,23 +66,21 @@ This document summarizes the branch changes introduced after commit `55a48792` (
   - Serialize pre-capture across NN server threads to avoid the startup race with TensorRT/Myelin internal legacy-stream operations.
 - Impact:
   - Slightly slower startup pre-capture when multiple NN server threads initialize on the same GPU.
-  - Runtime inference path is unchanged.
+  - Runtime inference path for this commit stayed unchanged (later updated in section 8).
 
-### 7) Additional benchmark telemetry (post `a7188629`)
+### 6) cudaGraph now captures copy + inference
 
-- Added benchmark output metric:
-  - `gpuDupRows = <count> (<pct>)`
-  - Meaning: repeated GPU inference rows actually executed on GPU (not just CPU-side contention).
-- Extended existing 10ms state sampler to also track NN server threads:
-  - Each server thread has two states: `GPU_IDLE` / `GPU_BUSY`.
-  - Logs histogram of idle NN server thread count on shutdown:
-    - `NNEval server idle-thread count (GPU idle): ...`
+- TensorRT cudaGraph capture path now includes:
+  - host-to-device input copies
+  - `enqueueV3` inference launch
+  - device-to-host output copies
+- `InputBuffers` host arrays are now allocated as pinned memory (`cudaMallocHost`) to support async copy nodes in graph capture.
+- Graph pre-capture runs during NN server thread initialization (after per-thread `InputBuffers` creation), so the first `getOutput` does not pay capture cost.
 
 ## Default Config On This Branch
 
 The default `gtp` config has been set as:
 
 - `trtUseCudaGraph = true`
-- `sampleSearchThreadStates = false`
 
 Location: `cpp/configs/gtp_example.cfg`
