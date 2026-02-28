@@ -17,7 +17,7 @@ This document summarizes the branch changes introduced after commit `55a48792` (
 - Behavior:
   - When enabled, TensorRT pre-captures CUDA Graph for batch sizes `1..nnMaxBatchSize`.
   - Runtime uses graph launch path when capture succeeds.
-  - If capture/instantiate fails, backend logs reason and safely falls back to normal enqueue path.
+  - Current branch behavior is fail-fast for cudaGraph issues in TensorRT path (no silent fallback), to expose problems during development.
 - Usage:
   - In config file:
     - `trtUseCudaGraph = true`
@@ -69,6 +69,34 @@ This document summarizes the branch changes introduced after commit `55a48792` (
     - `python3 python/benchmark.py --katago-bin build/katago --config cpp/configs/gtp_example.cfg --model /path/model.onnx --output-json build/trtexec_benchmark.json`
   - Visualize:
     - `python3 python/visualize_benchmark.py --input-json build/trtexec_benchmark.json --output-dir build/benchmark_plots`
+
+### 5) Fail-fast and benchmark-only batch histogram (`a7188629`)
+
+- cudaGraph failures in TensorRT path now throw immediately (development-mode fail-fast).
+- Batch size distribution logging is gated to benchmark mode only, and only when explicitly enabled.
+- New config switch for benchmark telemetry:
+  - `trtRecordBatchSizeHistogram = true|false` (default off unless set).
+
+### 6) cudaGraph startup crash fix (post `a7188629`)
+
+- Fixed an intermittent TensorRT cudaGraph pre-capture startup crash:
+  - `operation would make the legacy stream depend on a capturing blocking stream`
+  - Seen as warmup failure during pre-capture of some batch sizes.
+- Change:
+  - Serialize pre-capture across NN server threads to avoid the startup race with TensorRT/Myelin internal legacy-stream operations.
+- Impact:
+  - Slightly slower startup pre-capture when multiple NN server threads initialize on the same GPU.
+  - Runtime inference path is unchanged.
+
+### 7) Additional benchmark telemetry (post `a7188629`)
+
+- Added benchmark output metric:
+  - `gpuDupRows = <count> (<pct>)`
+  - Meaning: repeated GPU inference rows actually executed on GPU (not just CPU-side contention).
+- Extended existing 10ms state sampler to also track NN server threads:
+  - Each server thread has two states: `GPU_IDLE` / `GPU_BUSY`.
+  - Logs histogram of idle NN server thread count on shutdown:
+    - `NNEval server idle-thread count (GPU idle): ...`
 
 ## Default Config On This Branch
 

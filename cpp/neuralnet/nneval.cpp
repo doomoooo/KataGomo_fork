@@ -9,6 +9,11 @@
 using namespace std;
 
 namespace {
+namespace NNEvalServerThreadGpuState {
+  static constexpr int GPU_IDLE = 0;
+  static constexpr int GPU_BUSY = 1;
+}
+
 class SearchThreadStateMonitor {
  public:
   SearchThreadStateMonitor()
@@ -16,11 +21,13 @@ class SearchThreadStateMonitor {
       stopSampler(false),
       enabledEver(false),
       summaryLogged(false),
-      activeThreadStates(),
+      activeSearchThreadStates(),
+      activeNNEvalServerThreadStates(),
       state1TreeHistogram(),
       state2QueueHistogram(),
       state31Stream1Histogram(),
       state32Stream2Histogram(),
+      nnServerThreadIdleCountHistogram(),
       totalSamples(0)
   {}
 
@@ -45,10 +52,10 @@ class SearchThreadStateMonitor {
     if(statePtr == nullptr)
       return;
     lock_guard<std::mutex> lock(mutex);
-    if(!enabledEver || summaryLogged)
+    if(summaryLogged)
       return;
-    if(std::find(activeThreadStates.begin(), activeThreadStates.end(), statePtr) == activeThreadStates.end()) {
-      activeThreadStates.push_back(statePtr);
+    if(std::find(activeSearchThreadStates.begin(), activeSearchThreadStates.end(), statePtr) == activeSearchThreadStates.end()) {
+      activeSearchThreadStates.push_back(statePtr);
     }
   }
 
@@ -56,8 +63,27 @@ class SearchThreadStateMonitor {
     if(statePtr == nullptr)
       return;
     lock_guard<std::mutex> lock(mutex);
-    auto newEnd = std::remove(activeThreadStates.begin(), activeThreadStates.end(), statePtr);
-    activeThreadStates.erase(newEnd, activeThreadStates.end());
+    auto newEnd = std::remove(activeSearchThreadStates.begin(), activeSearchThreadStates.end(), statePtr);
+    activeSearchThreadStates.erase(newEnd, activeSearchThreadStates.end());
+  }
+
+  void registerNNEvalServerThreadState(std::atomic<int>* statePtr) {
+    if(statePtr == nullptr)
+      return;
+    lock_guard<std::mutex> lock(mutex);
+    if(summaryLogged)
+      return;
+    if(std::find(activeNNEvalServerThreadStates.begin(), activeNNEvalServerThreadStates.end(), statePtr) == activeNNEvalServerThreadStates.end()) {
+      activeNNEvalServerThreadStates.push_back(statePtr);
+    }
+  }
+
+  void unregisterNNEvalServerThreadState(std::atomic<int>* statePtr) {
+    if(statePtr == nullptr)
+      return;
+    lock_guard<std::mutex> lock(mutex);
+    auto newEnd = std::remove(activeNNEvalServerThreadStates.begin(), activeNNEvalServerThreadStates.end(), statePtr);
+    activeNNEvalServerThreadStates.erase(newEnd, activeNNEvalServerThreadStates.end());
   }
 
   void logSummary(Logger* logger) {
@@ -77,6 +103,7 @@ class SearchThreadStateMonitor {
     map<int,uint64_t> state2QueueHistogramLocal;
     map<int,uint64_t> state31Stream1HistogramLocal;
     map<int,uint64_t> state32Stream2HistogramLocal;
+    map<int,uint64_t> nnServerThreadIdleCountHistogramLocal;
     {
       lock_guard<std::mutex> lock(mutex);
       totalSamplesLocal = totalSamples;
@@ -84,6 +111,7 @@ class SearchThreadStateMonitor {
       state2QueueHistogramLocal = state2QueueHistogram;
       state31Stream1HistogramLocal = state31Stream1Histogram;
       state32Stream2HistogramLocal = state32Stream2Histogram;
+      nnServerThreadIdleCountHistogramLocal = nnServerThreadIdleCountHistogram;
     }
 
     auto formatHistogram = [](const map<int,uint64_t>& hist) {
@@ -108,6 +136,7 @@ class SearchThreadStateMonitor {
     logger->write("State2(queued, waiting for idle GPU): " + formatHistogram(state2QueueHistogramLocal));
     logger->write("State3.1(waiting on stream1): " + formatHistogram(state31Stream1HistogramLocal));
     logger->write("State3.2(waiting on stream2): " + formatHistogram(state32Stream2HistogramLocal));
+    logger->write("NNEval server idle-thread count (GPU idle): " + formatHistogram(nnServerThreadIdleCountHistogramLocal));
   }
 
  private:
@@ -116,11 +145,13 @@ class SearchThreadStateMonitor {
   bool enabledEver;
   bool summaryLogged;
   std::thread samplerThread;
-  std::vector<std::atomic<int>*> activeThreadStates;
+  std::vector<std::atomic<int>*> activeSearchThreadStates;
+  std::vector<std::atomic<int>*> activeNNEvalServerThreadStates;
   map<int,uint64_t> state1TreeHistogram;
   map<int,uint64_t> state2QueueHistogram;
   map<int,uint64_t> state31Stream1Histogram;
   map<int,uint64_t> state32Stream2Histogram;
+  map<int,uint64_t> nnServerThreadIdleCountHistogram;
   uint64_t totalSamples;
 
   void stopAndJoinSampler() {
@@ -141,11 +172,12 @@ class SearchThreadStateMonitor {
     int numState2Queue = 0;
     int numState31Stream1 = 0;
     int numState32Stream2 = 0;
+    int numNNEvalServerIdle = 0;
 
     lock_guard<std::mutex> lock(mutex);
-    if(activeThreadStates.empty())
+    if(activeSearchThreadStates.empty() && activeNNEvalServerThreadStates.empty())
       return;
-    for(std::atomic<int>* statePtr : activeThreadStates) {
+    for(std::atomic<int>* statePtr : activeSearchThreadStates) {
       int state = statePtr->load(std::memory_order_relaxed);
       if(state == SearchThreadGpuState::WAITING_FOR_GPU_QUEUE)
         numState2Queue += 1;
@@ -156,10 +188,16 @@ class SearchThreadStateMonitor {
       else
         numState1Tree += 1;
     }
+    for(std::atomic<int>* statePtr : activeNNEvalServerThreadStates) {
+      int state = statePtr->load(std::memory_order_relaxed);
+      if(state == NNEvalServerThreadGpuState::GPU_IDLE)
+        numNNEvalServerIdle += 1;
+    }
     state1TreeHistogram[numState1Tree] += 1;
     state2QueueHistogram[numState2Queue] += 1;
     state31Stream1Histogram[numState31Stream1] += 1;
     state32Stream2Histogram[numState32Stream2] += 1;
+    nnServerThreadIdleCountHistogram[numNNEvalServerIdle] += 1;
     totalSamples += 1;
   }
 };
@@ -204,6 +242,7 @@ NNResultBuf::NNResultBuf()
     // If no symmetry is specified, it will use default or random based on config.
     symmetry(NNInputs::SYMMETRY_NOTSPECIFIED),
     policyOptimism(0.0),
+    nnHash(),
     searchThreadMonitorState(nullptr)
 {}
 
@@ -283,6 +322,9 @@ NNEvaluator::NNEvaluator(
    maxBatchSize(maxBatchSz),
    m_numRowsProcessed(0),
    m_numBatchesProcessed(0),
+   m_numDuplicateGpuRowsProcessed(0),
+   gpuDuplicateStatsMutex(),
+   gpuRowsSeen(),
    bufferMutex(),
    isKilled(false),
    numServerThreadsStartingUp(0),
@@ -522,6 +564,9 @@ uint64_t NNEvaluator::numRowsProcessed() const {
 uint64_t NNEvaluator::numBatchesProcessed() const {
   return m_numBatchesProcessed.load(std::memory_order_relaxed);
 }
+uint64_t NNEvaluator::numDuplicateGpuRowsProcessed() const {
+  return m_numDuplicateGpuRowsProcessed.load(std::memory_order_relaxed);
+}
 double NNEvaluator::averageProcessedBatchSize() const {
   return (double)numRowsProcessed() / (double)numBatchesProcessed();
 }
@@ -529,11 +574,20 @@ double NNEvaluator::averageProcessedBatchSize() const {
 void NNEvaluator::clearStats() {
   m_numRowsProcessed.store(0);
   m_numBatchesProcessed.store(0);
+  m_numDuplicateGpuRowsProcessed.store(0);
+  {
+    std::lock_guard<std::mutex> lock(gpuDuplicateStatsMutex);
+    gpuRowsSeen.clear();
+  }
 }
 
 void NNEvaluator::clearCache() {
   if(nnCacheTable != NULL)
     nnCacheTable->clear();
+  {
+    std::lock_guard<std::mutex> lock(gpuDuplicateStatsMutex);
+    gpuRowsSeen.clear();
+  }
 }
 
 
@@ -626,6 +680,17 @@ void NNEvaluator::serve(
   int gpuIdxForThisThread,
   int serverThreadIdx
 ) {
+  std::atomic<int> nnServerThreadGpuState(NNEvalServerThreadGpuState::GPU_IDLE);
+  struct NNEvalServerThreadStateGuard {
+    std::atomic<int>* statePtr;
+    explicit NNEvalServerThreadStateGuard(std::atomic<int>* s) : statePtr(s) {
+      getSearchThreadStateMonitor().registerNNEvalServerThreadState(statePtr);
+    }
+    ~NNEvalServerThreadStateGuard() {
+      getSearchThreadStateMonitor().unregisterNNEvalServerThreadState(statePtr);
+    }
+  } nnServerThreadStateGuard(&nnServerThreadGpuState);
+
   int64_t numBatchesHandledThisThread = 0;
   int64_t numRowsHandledThisThread = 0;
 
@@ -659,6 +724,7 @@ void NNEvaluator::serve(
 
   unique_lock<std::mutex> lock(bufferMutex,std::defer_lock);
   while(true) {
+    nnServerThreadGpuState.store(NNEvalServerThreadGpuState::GPU_IDLE, std::memory_order_release);
     resultBufs.clear();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
     bool gotAnything = queryQueue.waitPopUpToN(resultBufs,desiredBatchSize);
@@ -768,6 +834,15 @@ void NNEvaluator::serve(
         }
       }
 
+      {
+        std::lock_guard<std::mutex> dupLock(gpuDuplicateStatsMutex);
+        for(int row = 0; row < numRows; row++) {
+          const auto insertResult = gpuRowsSeen.insert(resultBufs[row]->nnHash);
+          if(!insertResult.second)
+            m_numDuplicateGpuRowsProcessed.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+
       // Strict in-flight semantics: mark stream state only for the actual GPU execution window.
       const int waitingStreamState =
         (serverThreadIdx == 0 ? SearchThreadGpuState::WAITING_FOR_GPU_STREAM1 : SearchThreadGpuState::WAITING_FOR_GPU_STREAM2);
@@ -777,7 +852,9 @@ void NNEvaluator::serve(
         }
       }
 
+      nnServerThreadGpuState.store(NNEvalServerThreadGpuState::GPU_BUSY, std::memory_order_release);
       NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
+      nnServerThreadGpuState.store(NNEvalServerThreadGpuState::GPU_IDLE, std::memory_order_release);
       assert(outputBuf.size() == numRows);
 
       m_numRowsProcessed.fetch_add(numRows, std::memory_order_relaxed);
@@ -972,6 +1049,7 @@ void NNEvaluator::evaluate(
 
   bool hadResultWithoutOwnerMap = false;
   shared_ptr<NNOutput> resultWithoutOwnerMap;
+  buf.nnHash = nnHash;
   if(nnCacheTable != NULL && !skipCache && nnCacheTable->get(nnHash,buf.result)) {
     if(!(includeOwnerMap && buf.result->whiteOwnerMap == NULL))
     {
