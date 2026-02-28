@@ -28,6 +28,25 @@ print_error() {
     exit 1
 }
 
+ensure_tcmalloc() {
+    if ldconfig -p | grep -q "libtcmalloc_minimal.so"; then
+        print_info "tcmalloc is already installed"
+        return
+    fi
+
+    print_warning "tcmalloc not found, installing libgoogle-perftools-dev"
+    sudo apt-get update
+    sudo apt-get install -y libgoogle-perftools-dev
+
+    if [ $? -ne 0 ]; then
+        print_error "Failed to install tcmalloc (libgoogle-perftools-dev)"
+    fi
+
+    if ! ldconfig -p | grep -q "libtcmalloc_minimal.so"; then
+        print_error "tcmalloc installed but libtcmalloc_minimal.so is still missing"
+    fi
+}
+
 # Check if we're in the right directory
 if [ ! -d "cpp" ]; then
     print_error "This script must be run from the root directory of the KataGomo repository"
@@ -36,6 +55,7 @@ fi
 # Main build process
 main() {
     print_info "Starting KataGomo build process"
+    ensure_tcmalloc
 
     # Prepare build directory
     print_info "Preparing build environment"
@@ -47,6 +67,7 @@ main() {
     cmake .. \
         -DUSE_BACKEND=TENSORRT \
         -DUSE_AVX2=1 \
+        -DUSE_TCMALLOC=1 \
         -DTENSORRT_INCLUDE_DIR=${TENSORRT_ROOT}/include \
         -DTENSORRT_LIBRARY=${TENSORRT_ROOT}/lib/libnvinfer.so \
         -DTENSORRT_ONNX_LIBRARY=${TENSORRT_ROOT}/lib/libnvonnxparser.so
@@ -61,6 +82,12 @@ main() {
 
     if [ $? -ne 0 ]; then
         print_error "Compilation failed"
+    fi
+
+    print_info "Checking tcmalloc linkage"
+    ldd katago | grep -q "libtcmalloc_minimal"
+    if [ $? -ne 0 ]; then
+        print_error "katago is not linked with tcmalloc"
     fi
 
     # Deploy

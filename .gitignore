@@ -35,6 +35,7 @@ versions/
 cpp/build
 cpp/out
 /build*
+!/build.sh
 
 export_model_cuda.sh
 mixmodels.sh
