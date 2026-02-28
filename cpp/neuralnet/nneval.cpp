@@ -252,7 +252,8 @@ NNEvaluator::NNEvaluator(
   bool doRandomize,
   int defaultSymmetry,
   int backendNumThr,
-  bool useCudaGraph
+  bool useCudaGraph,
+  bool recordBatchSizeHistogram
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -338,7 +339,7 @@ NNEvaluator::NNEvaluator(
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,nnXLen,nnYLen,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
-      usingFP16Mode,usingNHWCMode,useCudaGraph,loadedModel
+      usingFP16Mode,usingNHWCMode,useCudaGraph,recordBatchSizeHistogram,loadedModel
     );
   }
   else {

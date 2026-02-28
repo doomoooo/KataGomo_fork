@@ -49,6 +49,7 @@ struct ComputeContext {
   int nnYLen;
   enabled_t useFP16Mode;
   bool useCudaGraph;
+  bool recordBatchSizeHistogram;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -100,6 +101,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  bool recordBatchSizeHistogram,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
   (void)logger;
@@ -115,6 +117,7 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
   context->useCudaGraph = useCudaGraph;
+  context->recordBatchSizeHistogram = recordBatchSizeHistogram;
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -1121,7 +1124,6 @@ struct ComputeHandle {
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
   bool useCudaGraph;
-  bool cudaGraphCaptureFailed;
   void* sharedExecDeviceMemory;
   int64_t sharedExecDeviceMemoryBytes;
   bool hasInputMetaTensor;
@@ -1133,15 +1135,11 @@ struct ComputeHandle {
     unique_ptr<IExecutionContext> exec;
     cudaGraph_t graph;
     cudaGraphExec_t graphExec;
-    bool pendingCapture;
-    bool inputShapeInitialized;
 
     BatchGraphState()
       : exec(nullptr),
         graph(nullptr),
-        graphExec(nullptr),
-        pendingCapture(false),
-        inputShapeInitialized(false) {}
+        graphExec(nullptr) {}
 
     BatchGraphState(BatchGraphState&&) = default;
     BatchGraphState& operator=(BatchGraphState&&) = default;
@@ -1163,7 +1161,6 @@ struct ComputeHandle {
     maxBatchSize = maxBatchSz;
     modelVersion = loadedModel->modelDesc.modelVersion;
     useCudaGraph = context->useCudaGraph;
-    cudaGraphCaptureFailed = false;
     sharedExecDeviceMemory = nullptr;
     sharedExecDeviceMemoryBytes = 0;
     hasInputMetaTensor = false;
@@ -1601,6 +1598,9 @@ struct ComputeHandle {
   ComputeHandle& operator=(const ComputeHandle&) = delete;
 
   void recordBatchSizeUsage(int batchSize) {
+    if(!ctx->recordBatchSizeHistogram) {
+      return;
+    }
     auto search = batchSizeHistogram.find(batchSize);
     if(search == batchSizeHistogram.end()) {
       batchSizeHistogram.emplace(batchSize, 1);
@@ -1613,7 +1613,7 @@ struct ComputeHandle {
   }
 
   void logBatchSizeHistogram() const {
-    if(logger == nullptr) {
+    if(!ctx->recordBatchSizeHistogram || logger == nullptr) {
       return;
     }
     string msg =
@@ -1644,7 +1644,6 @@ struct ComputeHandle {
       CUDA_ERR("destroyBatchGraph", cudaGraphDestroy(state.graph));
       state.graph = nullptr;
     }
-    state.pendingCapture = false;
   }
 
   void destroyAllBatchGraphs() {
@@ -1700,19 +1699,18 @@ struct ComputeHandle {
     return inserted.first->second;
   }
 
-  void disableCudaGraph(const string& message) {
+  [[noreturn]] void failCudaGraph(const string& message) {
     destroyAllBatchGraphs();
-    cudaGraphCaptureFailed = true;
     if(logger != nullptr) {
-      logger->write("TensorRT backend: disabling cudaGraph. " + message);
+      logger->write("TensorRT backend: cudaGraph fatal error. " + message);
     }
+    throw StringError("TensorRT backend: cudaGraph failure: " + message);
   }
 
-  bool captureCudaGraph(BatchGraphState& state, int batchSize) {
+  void captureCudaGraph(BatchGraphState& state, int batchSize) {
     cudaError_t status = cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal);
     if(status != cudaSuccess) {
-      disableCudaGraph(string("cudaStreamBeginCapture failed: ") + cudaGetErrorString(status));
-      return false;
+      failCudaGraph(string("cudaStreamBeginCapture failed: ") + cudaGetErrorString(status));
     }
 
     bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
@@ -1722,8 +1720,7 @@ struct ComputeHandle {
       if(ignoredGraph != nullptr) {
         (void)cudaGraphDestroy(ignoredGraph);
       }
-      disableCudaGraph("enqueueV3 failed while capturing");
-      return false;
+      failCudaGraph("enqueueV3 failed while capturing");
     }
 
     cudaGraph_t capturedGraph = nullptr;
@@ -1732,29 +1729,25 @@ struct ComputeHandle {
       if(capturedGraph != nullptr) {
         (void)cudaGraphDestroy(capturedGraph);
       }
-      disableCudaGraph(string("cudaStreamEndCapture failed: ") + cudaGetErrorString(status));
-      return false;
+      failCudaGraph(string("cudaStreamEndCapture failed: ") + cudaGetErrorString(status));
     }
 
     cudaGraphExec_t capturedGraphExec = nullptr;
     status = cudaGraphInstantiate(&capturedGraphExec, capturedGraph, 0);
     if(status != cudaSuccess || capturedGraphExec == nullptr) {
       (void)cudaGraphDestroy(capturedGraph);
-      disableCudaGraph(string("cudaGraphInstantiate failed: ") + cudaGetErrorString(status));
-      return false;
+      failCudaGraph(string("cudaGraphInstantiate failed: ") + cudaGetErrorString(status));
     }
 
     destroyBatchGraph(state);
     state.graph = capturedGraph;
     state.graphExec = capturedGraphExec;
-    state.pendingCapture = false;
 
     (void)batchSize;
-    return true;
   }
 
   void preCaptureAllCudaGraphs() {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
+    if(!useCudaGraph) {
       return;
     }
     if(logger != nullptr) {
@@ -1763,36 +1756,29 @@ struct ComputeHandle {
       );
     }
     for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
-      if(cudaGraphCaptureFailed) {
-        break;
-      }
       BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
       if(state.graphExec != nullptr) {
         continue;
       }
 
       setInputShapesForExec(state.exec.get(), batchSize);
-      state.inputShapeInitialized = true;
 
       bool enqueueOk = state.exec->enqueueV3(cudaStreamPerThread);
       if(!enqueueOk) {
-        disableCudaGraph(
+        failCudaGraph(
           "enqueueV3 warmup failed while pre-capturing batch size " + Global::intToString(batchSize)
         );
-        break;
       }
       CUDA_ERR("preCaptureAllCudaGraphs", cudaStreamSynchronize(cudaStreamPerThread));
-      if(!captureCudaGraph(state, batchSize)) {
-        break;
-      }
+      captureCudaGraph(state, batchSize);
     }
-    if(logger != nullptr && !cudaGraphCaptureFailed) {
+    if(logger != nullptr) {
       logger->write("TensorRT backend: pre-capture completed");
     }
   }
 
   IExecutionContext* getExecutionContextForBatch(int batchSize) {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
+    if(!useCudaGraph) {
       if(exec == nullptr) {
         exec.reset(engine->createExecutionContext());
         if(!exec) {
@@ -1807,62 +1793,39 @@ struct ComputeHandle {
   }
 
   bool shouldSetInputShapeForBatch(int batchSize) {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
+    if(!useCudaGraph) {
       return true;
     }
     BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
-    if(state.graphExec != nullptr) {
-      return false;
+    if(state.graphExec == nullptr) {
+      throw StringError(
+        "TensorRT backend: missing pre-captured cudaGraph for batch size " + Global::intToString(batchSize)
+      );
     }
-    if(state.pendingCapture) {
-      return false;
-    }
-    return !state.inputShapeInitialized;
+    return false;
   }
 
   void markInputShapeInitializedForBatch(int batchSize) {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
+    if(!useCudaGraph) {
       return;
     }
-    BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
-    state.inputShapeInitialized = true;
-  }
-
-  bool hasCapturedCudaGraphForBatch(int batchSize) const {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
-      return false;
-    }
-    auto search = batchGraphStates.find(batchSize);
-    if(search == batchGraphStates.end()) {
-      return false;
-    }
-    return search->second.graphExec != nullptr;
+    (void)batchSize;
   }
 
   void enqueueWithOptionalCudaGraph(int batchSize) {
-    if(!useCudaGraph || cudaGraphCaptureFailed) {
+    if(!useCudaGraph) {
       IExecutionContext* targetExec = getExecutionContextForBatch(batchSize);
       targetExec->enqueueV3(cudaStreamPerThread);
       return;
     }
 
     BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
-    if(state.graphExec != nullptr) {
-      CUDA_ERR("enqueueWithOptionalCudaGraph", cudaGraphLaunch(state.graphExec, cudaStreamPerThread));
-      return;
+    if(state.graphExec == nullptr) {
+      throw StringError(
+        "TensorRT backend: missing pre-captured cudaGraph for batch size " + Global::intToString(batchSize)
+      );
     }
-
-    if(state.pendingCapture) {
-      if(captureCudaGraph(state, batchSize)) {
-        CUDA_ERR("enqueueWithOptionalCudaGraph", cudaGraphLaunch(state.graphExec, cudaStreamPerThread));
-        return;
-      }
-      state.exec->enqueueV3(cudaStreamPerThread);
-      return;
-    }
-
-    state.exec->enqueueV3(cudaStreamPerThread);
-    state.pendingCapture = true;
+    CUDA_ERR("enqueueWithOptionalCudaGraph", cudaGraphLaunch(state.graphExec, cudaStreamPerThread));
   }
 
   void* getBuffer(const char* name) {
@@ -2230,7 +2193,6 @@ void NeuralNet::getOutput(
   }
 
   IExecutionContext* batchExec = gpuHandle->getExecutionContextForBatch(batchSize);
-  const bool usingCapturedCudaGraph = gpuHandle->hasCapturedCudaGraphForBatch(batchSize);
   const bool shouldSetInputShapes = gpuHandle->shouldSetInputShapeForBatch(batchSize);
 
   // Set inputs
@@ -2241,7 +2203,7 @@ void NeuralNet::getOutput(
       CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice));
       CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice));
       
-      if(shouldSetInputShapes && !usingCapturedCudaGraph) {
+      if(shouldSetInputShapes) {
         auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
         auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
         batchExec->setInputShape("input_spatial", spatialInputDims);
@@ -2261,7 +2223,7 @@ void NeuralNet::getOutput(
         CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice));
       }
 
-      if(shouldSetInputShapes && !usingCapturedCudaGraph) {
+      if(shouldSetInputShapes) {
         auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
         auto spatialInputDims = gpuHandle->getBufferDynamicShape("InputSpatial", batchSize);
         auto globalInputDims = gpuHandle->getBufferDynamicShape("InputGlobal", batchSize);

@@ -24,6 +24,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  bool recordBatchSizeHistogram,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -36,6 +37,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)useFP16Mode;
   (void)useNHWCMode;
   (void)useCudaGraph;
+  (void)recordBatchSizeHistogram;
   (void)loadedModel;
   throw StringError("Dummy neural net backend: NeuralNet::createComputeContext unimplemented");
 }

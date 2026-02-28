@@ -263,6 +263,18 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useCudaGraph"))
       useCudaGraph = cfg.getBool("useCudaGraph");
 
+    bool recordBatchSizeHistogram = false;
+    if(cfg.contains(backendPrefix+"RecordBatchSizeHistogram-"+idxStr))
+      recordBatchSizeHistogram = cfg.getBool(backendPrefix+"RecordBatchSizeHistogram-"+idxStr);
+    else if(cfg.contains("recordBatchSizeHistogram-"+idxStr))
+      recordBatchSizeHistogram = cfg.getBool("recordBatchSizeHistogram-"+idxStr);
+    else if(cfg.contains(backendPrefix+"RecordBatchSizeHistogram"))
+      recordBatchSizeHistogram = cfg.getBool(backendPrefix+"RecordBatchSizeHistogram");
+    else if(cfg.contains("recordBatchSizeHistogram"))
+      recordBatchSizeHistogram = cfg.getBool("recordBatchSizeHistogram");
+    // Only meaningful in benchmark mode.
+    recordBatchSizeHistogram = recordBatchSizeHistogram && (setupFor == SETUP_FOR_BENCHMARK);
+
     int forcedSymmetry = -1;
     if(setupFor != SETUP_FOR_DISTRIBUTED && cfg.contains("nnForcedSymmetry"))
       forcedSymmetry = cfg.getInt("nnForcedSymmetry",0,SymmetryHelpers::NUM_SYMMETRIES-1);
@@ -272,6 +284,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " useFP16 " + useFP16Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
       + " useCudaGraph " + Global::boolToString(useCudaGraph)
+      + " recordBatchSizeHistogram " + Global::boolToString(recordBatchSizeHistogram)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -360,7 +373,8 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       (forcedSymmetry >= 0 ? false : nnRandomize),
       defaultSymmetry,
       backendNumThreads,
-      useCudaGraph
+      useCudaGraph,
+      recordBatchSizeHistogram
     );
 
     nnEval->spawnServerThreads();

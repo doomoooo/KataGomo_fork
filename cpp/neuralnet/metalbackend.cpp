@@ -429,6 +429,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  bool recordBatchSizeHistogram,
   const LoadedModel* loadedModel) {
 
   (void)gpuIdxs;
@@ -437,6 +438,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)homeDataDirOverride;
   (void)openCLReTunePerBoardSize;
   (void)useCudaGraph;
+  (void)recordBatchSizeHistogram;
   (void)loadedModel;
 
   return new ComputeContext(nnXLen, nnYLen, useFP16Mode, useNHWCMode);

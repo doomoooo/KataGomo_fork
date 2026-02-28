@@ -123,7 +123,8 @@ class NNEvaluator {
     bool doRandomize,
     int defaultSymmetry,
     int backendNumThreads,
-    bool useCudaGraph = false
+    bool useCudaGraph = false,
+    bool recordBatchSizeHistogram = false
   );
   ~NNEvaluator();
 
