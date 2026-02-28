@@ -1750,6 +1750,12 @@ struct ComputeHandle {
     if(!useCudaGraph) {
       return;
     }
+    // TensorRT/Myelin may issue legacy-stream ops inside enqueueV3 warmup.
+    // If another thread is concurrently capturing on a blocking stream, CUDA can throw:
+    // "operation would make the legacy stream depend on a capturing blocking stream".
+    // Serialize pre-capture to avoid this startup-time race across NN server threads.
+    static std::mutex preCaptureGlobalMutex;
+    std::lock_guard<std::mutex> preCaptureLock(preCaptureGlobalMutex);
     if(logger != nullptr) {
       logger->write(
         "TensorRT backend: pre-capturing cudaGraph for batch sizes 1.." + Global::intToString(maxBatchSize)
