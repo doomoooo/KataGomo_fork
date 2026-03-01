@@ -72,7 +72,11 @@ NNEvaluator::NNEvaluator(
   bool doRandomize,
   int defaultSymmetry,
   int backendNumThr,
-  bool useCudaGraph
+  bool useCudaGraph,
+  int trtBuilderOptimizationLevel,
+  int trtAvgTimingIterations,
+  int trtMaxAuxStreams,
+  bool trtSetTacticSources
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -158,7 +162,9 @@ NNEvaluator::NNEvaluator(
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,nnXLen,nnYLen,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
-      usingFP16Mode,usingNHWCMode,useCudaGraph,loadedModel
+      usingFP16Mode,usingNHWCMode,useCudaGraph,
+      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,
+      loadedModel
     );
   }
   else {

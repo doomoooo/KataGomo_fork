@@ -263,6 +263,46 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useCudaGraph"))
       useCudaGraph = cfg.getBool("useCudaGraph");
 
+    int trtBuilderOptimizationLevel = 3;
+    if(cfg.contains(backendPrefix+"BuilderOptimizationLevel-"+idxStr))
+      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel-"+idxStr, 0, 5);
+    else if(cfg.contains("builderOptimizationLevel-"+idxStr))
+      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel-"+idxStr, 0, 5);
+    else if(cfg.contains(backendPrefix+"BuilderOptimizationLevel"))
+      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel", 0, 5);
+    else if(cfg.contains("builderOptimizationLevel"))
+      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel", 0, 5);
+
+    int trtAvgTimingIterations = 4;
+    if(cfg.contains(backendPrefix+"AvgTimingIterations-"+idxStr))
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, 1, 1000);
+    else if(cfg.contains("avgTimingIterations-"+idxStr))
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations-"+idxStr, 1, 1000);
+    else if(cfg.contains(backendPrefix+"AvgTimingIterations"))
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations", 1, 1000);
+    else if(cfg.contains("avgTimingIterations"))
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations", 1, 1000);
+
+    int trtMaxAuxStreams = 0;
+    if(cfg.contains(backendPrefix+"MaxAuxStreams-"+idxStr))
+      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams-"+idxStr, 0, 1024);
+    else if(cfg.contains("maxAuxStreams-"+idxStr))
+      trtMaxAuxStreams = cfg.getInt("maxAuxStreams-"+idxStr, 0, 1024);
+    else if(cfg.contains(backendPrefix+"MaxAuxStreams"))
+      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams", 0, 1024);
+    else if(cfg.contains("maxAuxStreams"))
+      trtMaxAuxStreams = cfg.getInt("maxAuxStreams", 0, 1024);
+
+    bool trtSetTacticSources = true;
+    if(cfg.contains(backendPrefix+"SetTacticSources-"+idxStr))
+      trtSetTacticSources = cfg.getBool(backendPrefix+"SetTacticSources-"+idxStr);
+    else if(cfg.contains("setTacticSources-"+idxStr))
+      trtSetTacticSources = cfg.getBool("setTacticSources-"+idxStr);
+    else if(cfg.contains(backendPrefix+"SetTacticSources"))
+      trtSetTacticSources = cfg.getBool(backendPrefix+"SetTacticSources");
+    else if(cfg.contains("setTacticSources"))
+      trtSetTacticSources = cfg.getBool("setTacticSources");
+
     // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
     cfg.markAllKeysUsedWithPrefix(backendPrefix+"RecordBatchSizeHistogram");
     cfg.markAllKeysUsedWithPrefix("recordBatchSizeHistogram");
@@ -276,6 +316,10 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " useFP16 " + useFP16Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
       + " useCudaGraph " + Global::boolToString(useCudaGraph)
+      + " trtBuilderOptimizationLevel " + Global::intToString(trtBuilderOptimizationLevel)
+      + " trtAvgTimingIterations " + Global::intToString(trtAvgTimingIterations)
+      + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
+      + " trtSetTacticSources " + Global::boolToString(trtSetTacticSources)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -364,7 +408,11 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       (forcedSymmetry >= 0 ? false : nnRandomize),
       defaultSymmetry,
       backendNumThreads,
-      useCudaGraph
+      useCudaGraph,
+      trtBuilderOptimizationLevel,
+      trtAvgTimingIterations,
+      trtMaxAuxStreams,
+      trtSetTacticSources
     );
 
     nnEval->spawnServerThreads();

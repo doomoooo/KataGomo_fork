@@ -49,6 +49,10 @@ struct ComputeContext {
   int nnYLen;
   enabled_t useFP16Mode;
   bool useCudaGraph;
+  int trtBuilderOptimizationLevel;
+  int trtAvgTimingIterations;
+  int trtMaxAuxStreams;
+  bool trtSetTacticSources;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -100,6 +104,10 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  int trtBuilderOptimizationLevel,
+  int trtAvgTimingIterations,
+  int trtMaxAuxStreams,
+  bool trtSetTacticSources,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
   (void)logger;
@@ -115,6 +123,10 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
   context->useCudaGraph = useCudaGraph;
+  context->trtBuilderOptimizationLevel = trtBuilderOptimizationLevel;
+  context->trtAvgTimingIterations = trtAvgTimingIterations;
+  context->trtMaxAuxStreams = trtMaxAuxStreams;
+  context->trtSetTacticSources = trtSetTacticSources;
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -1143,6 +1155,8 @@ struct ComputeHandle {
   bool usingFP16;
   int maxBatchSize;
   int modelVersion;
+  int maxAuxStreamsRequested;
+  int engineAuxStreamsUsed;
   vector<pair<string, string>> debugOutputs;
 
   TRTLogger trtLogger;
@@ -1151,6 +1165,7 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
+  vector<cudaStream_t> execAuxStreams;
   bool useCudaGraph;
   void* sharedExecDeviceMemory;
   int64_t sharedExecDeviceMemoryBytes;
@@ -1160,11 +1175,13 @@ struct ComputeHandle {
     unique_ptr<IExecutionContext> exec;
     cudaGraph_t graph;
     cudaGraphExec_t graphExec;
+    vector<cudaStream_t> auxStreams;
 
     BatchGraphState()
       : exec(nullptr),
         graph(nullptr),
-        graphExec(nullptr) {}
+        graphExec(nullptr),
+        auxStreams() {}
 
     BatchGraphState(BatchGraphState&&) = default;
     BatchGraphState& operator=(BatchGraphState&&) = default;
@@ -1189,6 +1206,8 @@ struct ComputeHandle {
 
     maxBatchSize = maxBatchSz;
     modelVersion = loadedModel->modelDesc.modelVersion;
+    maxAuxStreamsRequested = 0;
+    engineAuxStreamsUsed = 0;
     useCudaGraph = context->useCudaGraph;
     sharedExecDeviceMemory = nullptr;
     sharedExecDeviceMemoryBytes = 0;
@@ -1215,6 +1234,18 @@ struct ComputeHandle {
     auto config = unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
     if(!config) {
       throw StringError("TensorRT backend: failed to create builder config");
+    }
+
+    const int builderOptimizationLevel = ctx->trtBuilderOptimizationLevel;
+    const int avgTimingIterations = ctx->trtAvgTimingIterations;
+    maxAuxStreamsRequested = ctx->trtMaxAuxStreams;
+    if(logger != nullptr) {
+      logger->write(
+        "TensorRT backend: builderOptimizationLevel=" + Global::intToString(builderOptimizationLevel) +
+        " avgTimingIterations=" + Global::intToString(avgTimingIterations) +
+        " maxAuxStreams=" + Global::intToString(maxAuxStreamsRequested) +
+        " setTacticSources=" + Global::boolToString(ctx->trtSetTacticSources)
+      );
     }
 
     usingFP16 = false;
@@ -1299,22 +1330,26 @@ struct ComputeHandle {
       config->addOptimizationProfile(profile);
     }
 
+    if(ctx->trtSetTacticSources) {
 #if NV_TENSORRT_MAJOR == 8 && NV_TENSORRT_MINOR == 5
-    // This is to avoid external tactic sources and tactics that have shape switching overhead
-    if(prop->major < 8) {
-      config->setTacticSources(
-        1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS) |
-        1U << static_cast<uint32_t>(TacticSource::kEDGE_MASK_CONVOLUTIONS));
-    } else {
-      config->setTacticSources(1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS));
-    }
+      // This is to avoid external tactic sources and tactics that have shape switching overhead
+      if(prop->major < 8) {
+        config->setTacticSources(
+          1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS) |
+          1U << static_cast<uint32_t>(TacticSource::kEDGE_MASK_CONVOLUTIONS));
+      } else {
+        config->setTacticSources(1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS));
+      }
 #else
-    if(prop->major >= 8) {
-      // This is to avoid tactics that have shape switching overhead
-      config->setTacticSources(1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS));
-    }
+      if(prop->major >= 8) {
+        // This is to avoid tactics that have shape switching overhead
+        config->setTacticSources(1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS));
+      }
 #endif
-    config->setBuilderOptimizationLevel(TensorRT_BuilderOptimizationLevel);
+    }
+    config->setBuilderOptimizationLevel(builderOptimizationLevel);
+    config->setAvgTimingIterations(avgTimingIterations);
+    config->setMaxAuxStreams(maxAuxStreamsRequested);
 
     // So that there are no concurrent kernel executions probably from other parts of code while profiling
     // See CUDA Runtime API document for more details related to NULL stream and synchronization behaviors
@@ -1371,7 +1406,7 @@ struct ComputeHandle {
           ctx->nnXLen,
           maxBatchSize,
           usingFP16 ? 16 : 32);
-        string paramStr = Global::strprintf(
+        paramStr = Global::strprintf(
           "_%d_%s_%d_%s_%d_%d_%d_%d",
           getInferLibVersion(),
           deviceIdent,
@@ -1396,7 +1431,7 @@ struct ComputeHandle {
           ctx->nnXLen,
           maxBatchSize,
           usingFP16 ? 16 : 32);
-        string paramStr = Global::strprintf(
+        paramStr = Global::strprintf(
           "_%d_%s_%d_%s_%d_%d_%d_%d",
           getInferLibVersion(),
           deviceIdent,
@@ -1570,6 +1605,13 @@ struct ComputeHandle {
     if(!engine) {
       throw StringError("TensorRT backend: failed to create cuda engine");
     }
+    engineAuxStreamsUsed = engine->getNbAuxStreams();
+    if(logger != nullptr) {
+      logger->write(
+        "TensorRT backend: aux streams requested=" + Global::intToString(maxAuxStreamsRequested) +
+        " engineUses=" + Global::intToString(engineAuxStreamsUsed)
+      );
+    }
 
     for(int i = 0; i < engine->getNbIOTensors(); i++) {
       void* buffer = nullptr;
@@ -1597,7 +1639,7 @@ struct ComputeHandle {
       if(!exec) {
         throw StringError("TensorRT backend: failed to create execution context");
       }
-      initializeExecutionContext(exec.get());
+      initializeExecutionContext(exec.get(), &execAuxStreams);
     }
     if(useCudaGraph) {
       // Pre-capture now includes H2D/D2H, so it must use the owning thread's InputBuffers addresses.
@@ -1613,6 +1655,7 @@ struct ComputeHandle {
     destroyAllBatchGraphs();
     batchGraphStates.clear();
     exec.reset();
+    destroyAuxStreams(execAuxStreams);
 
     if(sharedExecDeviceMemory != nullptr) {
       CUDA_ERR("~ComputeHandle", cudaFree(sharedExecDeviceMemory));
@@ -1629,6 +1672,36 @@ struct ComputeHandle {
   ComputeHandle(const ComputeHandle&) = delete;
   ComputeHandle& operator=(const ComputeHandle&) = delete;
 
+  void destroyAuxStreams(vector<cudaStream_t>& auxStreams) {
+    for(cudaStream_t stream : auxStreams) {
+      if(stream != nullptr) {
+        CUDA_ERR("destroyAuxStreams", cudaStreamDestroy(stream));
+      }
+    }
+    auxStreams.clear();
+  }
+
+  void ensureAuxStreamsBound(IExecutionContext* targetExec, vector<cudaStream_t>& auxStreams) {
+    destroyAuxStreams(auxStreams);
+    if(engineAuxStreamsUsed <= 0) {
+      return;
+    }
+
+    auxStreams.reserve((size_t)engineAuxStreamsUsed);
+    for(int i = 0; i < engineAuxStreamsUsed; i++) {
+      cudaStream_t stream = nullptr;
+      CUDA_ERR("ensureAuxStreamsBound", cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+      auxStreams.push_back(stream);
+    }
+    targetExec->setAuxStreams(auxStreams.data(), static_cast<int32_t>(auxStreams.size()));
+  }
+
+  void destroyBatchState(BatchGraphState& state) {
+    destroyBatchGraph(state);
+    state.exec.reset();
+    destroyAuxStreams(state.auxStreams);
+  }
+
   void destroyBatchGraph(BatchGraphState& state) {
     if(state.graphExec != nullptr) {
       CUDA_ERR("destroyBatchGraph", cudaGraphExecDestroy(state.graphExec));
@@ -1642,7 +1715,7 @@ struct ComputeHandle {
 
   void destroyAllBatchGraphs() {
     for(auto& kv : batchGraphStates) {
-      destroyBatchGraph(kv.second);
+      destroyBatchState(kv.second);
     }
   }
 
@@ -1652,10 +1725,13 @@ struct ComputeHandle {
     }
   }
 
-  void initializeExecutionContext(IExecutionContext* targetExec) {
+  void initializeExecutionContext(IExecutionContext* targetExec, vector<cudaStream_t>* targetAuxStreams) {
     targetExec->setOptimizationProfileAsync(0, cudaStreamPerThread);
     cudaStreamSynchronize(cudaStreamPerThread);
     bindTensorAddresses(targetExec);
+    if(targetAuxStreams != nullptr) {
+      ensureAuxStreamsBound(targetExec, *targetAuxStreams);
+    }
   }
 
   void setInputShapesForExec(IExecutionContext* targetExec, int batchSize) {
@@ -1687,7 +1763,7 @@ struct ComputeHandle {
     if(sharedExecDeviceMemoryBytes > 0) {
       state.exec->setDeviceMemoryV2(sharedExecDeviceMemory, sharedExecDeviceMemoryBytes);
     }
-    initializeExecutionContext(state.exec.get());
+    initializeExecutionContext(state.exec.get(), &state.auxStreams);
 
     auto inserted = batchGraphStates.emplace(batchSize, std::move(state));
     return inserted.first->second;
@@ -1714,7 +1790,7 @@ struct ComputeHandle {
         if(!exec) {
           throw StringError("TensorRT backend: failed to create fallback execution context");
         }
-        initializeExecutionContext(exec.get());
+        initializeExecutionContext(exec.get(), &execAuxStreams);
       }
       return exec.get();
     }

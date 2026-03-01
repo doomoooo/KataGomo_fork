@@ -59,6 +59,10 @@ namespace NeuralNet {
     enabled_t useFP16Mode,
     enabled_t useNHWCMode,
     bool useCudaGraph,
+    int trtBuilderOptimizationLevel,
+    int trtAvgTimingIterations,
+    int trtMaxAuxStreams,
+    bool trtSetTacticSources,
     const LoadedModel* loadedModel
   );
   //A ComputeContext should NOT be freed until all ComputeHandles created using it have also been freed.

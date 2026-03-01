@@ -104,7 +104,11 @@ class NNEvaluator {
     bool doRandomize,
     int defaultSymmetry,
     int backendNumThreads,
-    bool useCudaGraph = false
+    bool useCudaGraph = false,
+    int trtBuilderOptimizationLevel = 3,
+    int trtAvgTimingIterations = 4,
+    int trtMaxAuxStreams = 0,
+    bool trtSetTacticSources = true
   );
   ~NNEvaluator();
 
