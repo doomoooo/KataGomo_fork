@@ -7,7 +7,7 @@
 export TENSORRT_ROOT=/opt/tensorrt
 
 # 2) KataGo binary location
-export KATAGO_BIN_PATH="/opt/katago_dbginfo/katago"
+export KATAGO_BIN_PATH="/opt/katago/katago"
 
 # 3) Runtime library search path (shared by all scripts)
 export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
