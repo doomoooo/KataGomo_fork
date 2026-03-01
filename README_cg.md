@@ -77,6 +77,17 @@ This document summarizes the branch changes introduced after commit `55a48792` (
 - `InputBuffers` host arrays are now allocated as pinned memory (`cudaMallocHost`) to support async copy nodes in graph capture.
 - Graph pre-capture runs during NN server thread initialization (after per-thread `InputBuffers` creation), so the first `getOutput` does not pay capture cost.
 
+### 7) NN minimum dequeue batch size (`nnMinBatchSize`)
+
+- Added config key: `nnMinBatchSize` (default `1`).
+- Behavior:
+  - NN server threads target at least `nnMinBatchSize` requests when dequeuing from the shared NN queue.
+  - If fewer are queued, they wait for more requests.
+  - If no additional requests are pending, they proceed with the currently queued requests to avoid stalling.
+- Guidance:
+  - Keep `nnMinBatchSize = 1` for latency-sensitive use.
+  - Increase only when intentionally trading latency for larger batches / throughput.
+
 ## Default Config On This Branch
 
 The default `gtp` config has been set as:

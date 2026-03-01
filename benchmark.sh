@@ -8,8 +8,9 @@ TRT_MAX_AUX_STREAMS=0
 TRT_SET_TACTIC_SOURCES=true
 TRT_MULTI_PROFILE=true
 NN_MAX_BATCHSIZE=16
-NUM_SEARCH_THREADS=30
-TRT_CUDA_STREAMS=2
+NN_MIN_BATCHSIZE=4
+NUM_SEARCH_THREADS=20
+TRT_CUDA_STREAMS=4
 TRT_DEVICE_ID=0
 
 # Default to rebuilding TensorRT engine/tactics for the current tuning knobs.
@@ -29,6 +30,21 @@ if ! [[ "${TRT_DEVICE_ID}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "${NN_MAX_BATCHSIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NN_MAX_BATCHSIZE must be a positive integer, got: ${NN_MAX_BATCHSIZE}" >&2
+  exit 1
+fi
+
+if ! [[ "${NN_MIN_BATCHSIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NN_MIN_BATCHSIZE must be a positive integer, got: ${NN_MIN_BATCHSIZE}" >&2
+  exit 1
+fi
+
+if (( NN_MIN_BATCHSIZE > NN_MAX_BATCHSIZE )); then
+  echo "NN_MIN_BATCHSIZE (${NN_MIN_BATCHSIZE}) must be <= NN_MAX_BATCHSIZE (${NN_MAX_BATCHSIZE})" >&2
+  exit 1
+fi
+
 OVERRIDE_CONFIG="numNNServerThreadsPerModel=${TRT_CUDA_STREAMS}"
 for ((thread_idx=0; thread_idx<TRT_CUDA_STREAMS; thread_idx++)); do
   OVERRIDE_CONFIG+=",trtDeviceToUseThread${thread_idx}=${TRT_DEVICE_ID}"
@@ -40,9 +56,10 @@ OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
+OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 
 /opt/katago/katago benchmark \
-  -model /opt/katago/weight/b18tf.onnx \
+  -model /opt/katago/weight/b28.bin.gz \
   -config /opt/katago/config/gtp_example.cfg \
   -v 10000 \
   -t "${NUM_SEARCH_THREADS}" \

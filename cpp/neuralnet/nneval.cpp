@@ -54,6 +54,7 @@ NNEvaluator::NNEvaluator(
   const string& expectedSha256,
   Logger* lg,
   int maxBatchSz,
+  int minBatchSz,
   int xLen,
   int yLen,
   bool rExactNNLen,
@@ -105,6 +106,7 @@ NNEvaluator::NNEvaluator(
    numServerThreadsEverSpawned(0),
    serverThreads(),
    maxBatchSize(maxBatchSz),
+   minBatchSize(minBatchSz),
    m_numRowsProcessed(0),
    m_numBatchesProcessed(0),
    bufferMutex(),
@@ -112,6 +114,7 @@ NNEvaluator::NNEvaluator(
    numServerThreadsStartingUp(0),
    mainThreadWaitingForSpawn(),
    numOngoingEvals(0),
+   numOngoingEvalsApprox(0),
    numWaitingEvals(0),
    numEvalsToAwaken(0),
    waitingForFinish(),
@@ -126,6 +129,8 @@ NNEvaluator::NNEvaluator(
     throw StringError("Maximum supported nnEval board size is " + Global::intToString(NNPos::MAX_BOARD_LEN));
   if(maxBatchSize <= 0)
     throw StringError("maxBatchSize is negative: " + Global::intToString(maxBatchSize));
+  if(minBatchSize <= 0 || minBatchSize > maxBatchSize)
+    throw StringError("minBatchSize must be in [1,maxBatchSize]");
   if(gpuIdxByServerThread.size() != numThreads)
     throw StringError("gpuIdxByServerThread.size() != numThreads");
 
@@ -486,7 +491,13 @@ void NNEvaluator::serve(
   while(true) {
     resultBufs.clear();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
-    bool gotAnything = queryQueue.waitPopUpToN(resultBufs,desiredBatchSize);
+    int desiredMinBatchSize = std::min(minBatchSize, desiredBatchSize);
+    bool gotAnything = queryQueue.waitPopUpToNWithMin(
+      resultBufs,
+      (size_t)desiredBatchSize,
+      (size_t)desiredMinBatchSize,
+      &numOngoingEvalsApprox
+    );
     //Queue being closed is a signal that we're done.
     if(!gotAnything)
       break;
@@ -615,6 +626,7 @@ void NNEvaluator::serve(
     //Lock and update stats before looping again
     lock.lock();
     numOngoingEvals -= numRows;
+    numOngoingEvalsApprox.fetch_sub(numRows, std::memory_order_release);
 
     if(numWaitingEvals > 0) {
       numEvalsToAwaken += numWaitingEvals;
@@ -622,6 +634,7 @@ void NNEvaluator::serve(
       waitingForFinish.notify_all();
     }
     lock.unlock();
+    queryQueue.notifyNotEmptyWaiters();
     continue;
   }
 
@@ -865,6 +878,7 @@ void NNEvaluator::evaluate(
 
   unique_lock<std::mutex> lock(bufferMutex);
   numOngoingEvals += 1;
+  numOngoingEvalsApprox.fetch_add(1, std::memory_order_release);
   lock.unlock();
 
   bool suc = queryQueue.forcePush(&buf);

@@ -86,6 +86,7 @@ class NNEvaluator {
     const std::string& expectedSha256,
     Logger* logger,
     int maxBatchSize,
+    int minBatchSize,
     int nnXLen,
     int nnYLen,
     bool requireExactNNLen,
@@ -248,6 +249,7 @@ class NNEvaluator {
   std::vector<std::thread*> serverThreads;
 
   const int maxBatchSize;
+  const int minBatchSize;
 
   //Counters for statistics
   std::atomic<uint64_t> m_numRowsProcessed;
@@ -264,6 +266,7 @@ class NNEvaluator {
   std::vector<int> serverThreadsIsUsingFP16;
 
   int numOngoingEvals; //Current number of ongoing evals.
+  std::atomic<int> numOngoingEvalsApprox; //Approximate pending eval count for batching wakeup heuristics.
   int numWaitingEvals; //Current number of things waiting for finish.
   int numEvalsToAwaken; //Current number of things waitingForFinish that should be woken up. Used to avoid spurious wakeups.
   std::condition_variable waitingForFinish; //Condvar for waiting for at least one ongoing eval to finish.

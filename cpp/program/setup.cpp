@@ -383,6 +383,15 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     }
 #endif
 
+    int nnMinBatchSize =
+      cfg.contains("nnMinBatchSize") ? cfg.getInt("nnMinBatchSize", 1, 65536) : 1;
+    if(nnMinBatchSize > nnMaxBatchSize) {
+      throw StringError(
+        "nnMinBatchSize (" + Global::intToString(nnMinBatchSize) +
+        ") cannot exceed nnMaxBatchSize (" + Global::intToString(nnMaxBatchSize) + ")"
+      );
+    }
+
     int defaultSymmetry = forcedSymmetry >= 0 ? forcedSymmetry : 0;
     if(disableFP16)
       useFP16Mode = enabled_t::False;
@@ -401,6 +410,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       expectedSha256,
       &logger,
       nnMaxBatchSize,
+      nnMinBatchSize,
       nnXLen,
       nnYLen,
       requireExactNNLen,

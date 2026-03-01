@@ -88,6 +88,12 @@ class ThreadSafeContainer
     readOnly = false;
   }
 
+  // Wake readers waiting on not-empty conditions, even if no new elements were pushed.
+  inline void notifyNotEmptyWaiters() {
+    std::lock_guard<std::mutex> lock(mutex);
+    notEmptyCondVar.notify_all();
+  }
+
   // Wait until the queue is not full or is closed or is readonly, and then push an element into the queue.
   // Returns true if the push was successful, false if the queue was closed or readonly.
   inline bool waitPush(T&& elt)
@@ -98,8 +104,7 @@ class ThreadSafeContainer
     if(closed || readOnly)
       return false;
     pushUnsynchronized(std::forward<T>(elt));
-    if(sizeUnsynchronized() == 1)
-      notEmptyCondVar.notify_all();
+    notEmptyCondVar.notify_one();
     return true;
   }
 
@@ -119,8 +124,7 @@ class ThreadSafeContainer
     if(closed || readOnly)
       return false;
     pushUnsynchronized(std::forward<T>(elt));
-    if(sizeUnsynchronized() == 1)
-      notEmptyCondVar.notify_all();
+    notEmptyCondVar.notify_one();
     return true;
   }
 
@@ -183,6 +187,54 @@ class ThreadSafeContainer
     for(size_t i = 0; i<numToPop; i++)
       buf.push_back(popUnsynchronized());
     if(size >= maxSize && size < maxSize + n)
+      notFullCondVar.notify_all();
+    return true;
+  }
+
+  // Wait until the queue has at least minToPop elements (while writable) and then pop and append up to N elements.
+  // If the queue is readonly, this no longer waits for minToPop and will pop any remaining elements.
+  // If maxPendingCounter is provided, this stops waiting early when queued size has reached the current
+  // total pending upper bound, which guarantees forward progress under low concurrency.
+  // Returns true if successful, returns false if no elements were popped (queue is closed, or empty and readonly).
+  inline bool waitPopUpToNWithMin(
+    std::vector<T>& buf,
+    size_t n,
+    size_t minToPop,
+    const std::atomic<int>* maxPendingCounter = nullptr
+  )
+  {
+    if(minToPop <= 0)
+      minToPop = 1;
+    if(minToPop > n)
+      minToPop = n;
+
+    std::unique_lock<std::mutex> lock(mutex);
+    while(!closed && !readOnly) {
+      size_t size = sizeUnsynchronized();
+      if(size >= minToPop)
+        break;
+      if(size <= 0) {
+        notEmptyCondVar.wait(lock);
+        continue;
+      }
+      if(maxPendingCounter != nullptr) {
+        int maxPending = maxPendingCounter->load(std::memory_order_acquire);
+        if(maxPending <= 0 || static_cast<size_t>(maxPending) <= size)
+          break;
+      }
+      notEmptyCondVar.wait(lock);
+    }
+    if(closed)
+      return false;
+
+    size_t size = sizeUnsynchronized();
+    if(size <= 0)
+      return false;
+
+    size_t numToPop = std::min(size,n);
+    for(size_t i = 0; i<numToPop; i++)
+      buf.push_back(popUnsynchronized());
+    if(size >= maxSize && size < maxSize + numToPop)
       notFullCondVar.notify_all();
     return true;
   }

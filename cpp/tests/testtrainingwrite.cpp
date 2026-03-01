@@ -16,6 +16,7 @@ static NNEvaluator* startNNEval(
   const string& modelName = modelFile;
   vector<int> gpuIdxByServerThread = {0};
   int maxBatchSize = 16;
+  int minBatchSize = 1;
   int nnXLen = NNPos::MAX_BOARD_LEN;
   int nnYLen = NNPos::MAX_BOARD_LEN;
   bool requireExactNNLen = false;
@@ -35,6 +36,7 @@ static NNEvaluator* startNNEval(
     expectedSha256,
     &logger,
     maxBatchSize,
+    minBatchSize,
     nnXLen,
     nnYLen,
     requireExactNNLen,
