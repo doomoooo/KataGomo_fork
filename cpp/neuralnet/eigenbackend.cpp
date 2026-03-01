@@ -1702,7 +1702,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
-  int trtNumOptimizationProfiles,
+  bool trtMultiProfile,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -1715,7 +1715,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
   (void)trtSetTacticSources;
-  (void)trtNumOptimizationProfiles;
+  (void)trtMultiProfile;
   (void)loadedModel;
 
   bool useFP16 = useFP16Mode == enabled_t::True ? true : false;

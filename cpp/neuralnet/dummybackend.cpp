@@ -28,7 +28,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
-  int trtNumOptimizationProfiles,
+  bool trtMultiProfile,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -45,7 +45,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
   (void)trtSetTacticSources;
-  (void)trtNumOptimizationProfiles;
+  (void)trtMultiProfile;
   (void)loadedModel;
   throw StringError("Dummy neural net backend: NeuralNet::createComputeContext unimplemented");
 }

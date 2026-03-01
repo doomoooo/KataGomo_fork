@@ -225,6 +225,24 @@ def case_key(plan_batch: int, infer_batch: int, streams: int, cuda_graph: bool) 
     return f"pb{plan_batch}_ib{infer_batch}_s{streams}_g{1 if cuda_graph else 0}"
 
 
+def normalize_key_token(text: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
+    return token or "plan"
+
+
+def case_key_with_plan(
+    plan_label: str,
+    plan_batch: int,
+    infer_batch: int,
+    streams: int,
+    cuda_graph: bool,
+) -> str:
+    return (
+        f"pl{normalize_key_token(plan_label)}_"
+        f"{case_key(plan_batch, infer_batch, streams, cuda_graph)}"
+    )
+
+
 def should_skip_result(existing: Optional[Dict[str, object]], rerun_failed: bool) -> bool:
     if not existing:
         return False
@@ -234,6 +252,56 @@ def should_skip_result(existing: Optional[Dict[str, object]], rerun_failed: bool
     if status == "error" and not rerun_failed:
         return True
     return False
+
+
+def parse_plan_file_args(specs: Optional[List[str]]) -> List[Tuple[str, str]]:
+    parsed: List[Tuple[str, str]] = []
+    if not specs:
+        return parsed
+
+    for spec in specs:
+        for token in split_csv([spec]):
+            item = token.strip()
+            if not item:
+                continue
+
+            if "=" in item:
+                label, raw_path = item.split("=", 1)
+                label = label.strip()
+                raw_path = raw_path.strip()
+                if not raw_path:
+                    raise ValueError(f"Invalid --plan-file entry: {item}")
+                if not label:
+                    label = Path(raw_path).name
+            else:
+                raw_path = item
+                label = Path(raw_path).name
+
+            plan_path = Path(raw_path).expanduser()
+            if not plan_path.exists():
+                raise FileNotFoundError(f"plan path not found: {plan_path}")
+            parsed.append((label, str(plan_path.resolve())))
+
+    dedup_labels: Dict[str, int] = {}
+    unique: List[Tuple[str, str]] = []
+    for label, path in parsed:
+        base = label
+        suffix = dedup_labels.get(base, 0)
+        if suffix == 0 and base not in dedup_labels:
+            dedup_labels[base] = 1
+            unique.append((base, path))
+            continue
+
+        while True:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+            if candidate not in dedup_labels:
+                dedup_labels[base] = suffix
+                dedup_labels[candidate] = 1
+                unique.append((candidate, path))
+                break
+
+    return unique
 
 
 def ensure_plan(
@@ -253,6 +321,7 @@ def ensure_plan(
     print(f"\n[plan] ensure batch={plan_batch}")
     override_parts = [
         f"nnMaxBatchSize={plan_batch}",
+        "trtMultiProfile=true",
         "numSearchThreads=1",
         "numNNServerThreadsPerModel=1",
         "ponderingEnabled=false",
@@ -321,17 +390,18 @@ def main() -> int:
     )
     parser.add_argument("--output-json", default="build/trtexec_benchmark.json")
     parser.add_argument("--tensorrt-lib", default="/opt/tensorrt/lib")
-    parser.add_argument("--plan-batch-min", type=int, default=1)
-    parser.add_argument("--plan-batch-max", type=int, default=16)
+    parser.add_argument("--plan-batch", type=int, default=16)
+    parser.add_argument(
+        "--plan-file",
+        action="append",
+        default=[],
+        help="Use existing plan file(s), format: /path/to/plan or label=/path/to/plan. Can be passed multiple times.",
+    )
+    parser.add_argument("--infer-batch-min", type=int, default=1)
     parser.add_argument("--infer-batch-max", type=int, default=None)
     parser.add_argument("--stream-min", type=int, default=1)
     parser.add_argument("--stream-max", type=int, default=4)
     parser.add_argument("--graph-modes", default="off,on", help="Comma separated: off,on")
-    parser.add_argument(
-        "--mismatch-streams",
-        default="1,2",
-        help="Comma separated streams used when infer_batch != plan_batch (graph is fixed on).",
-    )
     parser.add_argument(
         "--shape-template",
         action="append",
@@ -354,8 +424,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.smoke:
-        args.plan_batch_min = 1
-        args.plan_batch_max = min(args.plan_batch_max, 1)
+        args.plan_batch = 1
+        args.infer_batch_min = 1
         args.infer_batch_max = 1
         args.stream_min = 1
         args.stream_max = 1
@@ -365,20 +435,32 @@ def main() -> int:
         args.iterations = min(args.iterations, 20)
         args.avg_runs = min(args.avg_runs, 10)
 
-    if args.plan_batch_min <= 0 or args.plan_batch_max < args.plan_batch_min:
-        raise ValueError("Invalid plan batch range")
+    if args.plan_batch <= 0:
+        raise ValueError("plan-batch must be positive")
+    if args.infer_batch_min <= 0:
+        raise ValueError("infer-batch-min must be positive")
     if args.stream_min <= 0 or args.stream_max < args.stream_min:
         raise ValueError("Invalid stream range")
     if args.infer_batch_max is not None and args.infer_batch_max <= 0:
         raise ValueError("infer-batch-max must be positive")
+    if args.infer_batch_max is not None and args.infer_batch_max < args.infer_batch_min:
+        raise ValueError("infer-batch-max must be >= infer-batch-min")
+    if args.infer_batch_min > args.plan_batch:
+        raise ValueError("infer-batch-min cannot exceed plan-batch")
+
+    parsed_plan_files = parse_plan_file_args(args.plan_file)
+    use_existing_plan_files = len(parsed_plan_files) > 0
 
     katago_bin = Path(args.katago_bin)
     trtexec_bin = Path(args.trtexec_bin)
     config = Path(args.config)
     model = Path(args.model)
-    for path_obj, label in [(katago_bin, "katago"), (trtexec_bin, "trtexec"), (config, "config"), (model, "model")]:
-        if not path_obj.exists():
-            raise FileNotFoundError(f"{label} path not found: {path_obj}")
+    if not trtexec_bin.exists():
+        raise FileNotFoundError(f"trtexec path not found: {trtexec_bin}")
+    if not use_existing_plan_files:
+        for path_obj, label in [(katago_bin, "katago"), (config, "config"), (model, "model")]:
+            if not path_obj.exists():
+                raise FileNotFoundError(f"{label} path not found: {path_obj}")
 
     shape_templates = split_csv(args.shape_template)
     if not shape_templates:
@@ -388,7 +470,6 @@ def main() -> int:
         ]
 
     graph_modes = parse_graph_modes(args.graph_modes)
-    mismatch_streams = parse_positive_int_csv(args.mismatch_streams, "mismatch-streams")
     stream_values = list(range(args.stream_min, args.stream_max + 1))
     env = build_env(args.tensorrt_lib)
     output_path = Path(args.output_json)
@@ -396,34 +477,61 @@ def main() -> int:
     meta = {
         "created_at": now_iso(),
         "cmdline": sys.argv,
-        "katago_bin": str(katago_bin.resolve()),
+        "katago_bin": str(katago_bin.resolve()) if katago_bin.exists() else str(katago_bin),
         "trtexec_bin": str(trtexec_bin.resolve()),
-        "config": str(config.resolve()),
-        "model": str(model.resolve()),
+        "config": str(config.resolve()) if config.exists() else str(config),
+        "model": str(model.resolve()) if model.exists() else str(model),
+        "plan_batch": args.plan_batch,
         "shape_templates": shape_templates,
+        "plan_files": [{"label": label, "path": path} for label, path in parsed_plan_files],
     }
     state = load_or_init_state(output_path, resume=(not args.no_resume), meta=meta)
     state["meta"]["last_run_at"] = now_iso()
     atomic_save_json(output_path, state)
 
-    cases: List[Tuple[int, int, int, bool]] = []
-    for plan_batch in range(args.plan_batch_min, args.plan_batch_max + 1):
+    plan_entries: List[Dict[str, object]] = []
+    if use_existing_plan_files:
+        for label, plan_path in parsed_plan_files:
+            plan_entries.append(
+                {
+                    "label": label,
+                    "path": plan_path,
+                    "plan_batch": args.plan_batch,
+                    "source": "cli-plan-file",
+                }
+            )
+    else:
+        plan_path = ensure_plan(args.plan_batch, args, state, output_path, env)
+        plan_entries.append(
+            {
+                "label": f"pb{args.plan_batch}",
+                "path": plan_path,
+                "plan_batch": args.plan_batch,
+                "source": "katago-gtp",
+            }
+        )
+
+    infer_min = args.infer_batch_min
+    cases: List[Tuple[str, str, int, int, int, bool]] = []
+    for plan_entry in plan_entries:
+        plan_label = str(plan_entry["label"])
+        plan_path = str(plan_entry["path"])
+        plan_batch = int(plan_entry["plan_batch"])
         infer_max = plan_batch
         if args.infer_batch_max is not None:
             infer_max = min(infer_max, args.infer_batch_max)
-        for infer_batch in range(1, infer_max + 1):
-            # For mismatched plan/infer batches, only test graph-on on selected streams.
-            if infer_batch != plan_batch:
-                for streams in mismatch_streams:
-                    cases.append((plan_batch, infer_batch, streams, True))
-                continue
+        if infer_min > infer_max:
+            raise ValueError(
+                f"No infer batch to run after applying plan-batch and infer-batch range for plan {plan_label}"
+            )
+        for infer_batch in range(infer_min, infer_max + 1):
             for streams in stream_values:
                 for graph_mode in graph_modes:
-                    cases.append((plan_batch, infer_batch, streams, graph_mode))
+                    cases.append((plan_label, plan_path, plan_batch, infer_batch, streams, graph_mode))
 
     skipped = 0
-    for pb, ib, s, g in cases:
-        existing = state["results"].get(case_key(pb, ib, s, g))
+    for plan_label, _plan_path, pb, ib, s, g in cases:
+        existing = state["results"].get(case_key_with_plan(plan_label, pb, ib, s, g))
         if should_skip_result(existing, args.rerun_failed):
             skipped += 1
 
@@ -433,8 +541,8 @@ def main() -> int:
 
     ok_count = 0
     err_count = 0
-    for plan_batch, infer_batch, streams, graph_mode in cases:
-        key = case_key(plan_batch, infer_batch, streams, graph_mode)
+    for plan_label, plan_path, plan_batch, infer_batch, streams, graph_mode in cases:
+        key = case_key_with_plan(plan_label, plan_batch, infer_batch, streams, graph_mode)
         existing = state["results"].get(key)
         if should_skip_result(existing, args.rerun_failed):
             if existing.get("status") == "ok":
@@ -443,7 +551,6 @@ def main() -> int:
                 err_count += 1
             continue
 
-        plan_path = ensure_plan(plan_batch, args, state, output_path, env)
         shapes = ",".join(t.replace("{batch}", str(infer_batch)) for t in shape_templates)
 
         cmd = [
@@ -456,6 +563,7 @@ def main() -> int:
             f"--avgRuns={args.avg_runs}",
             f"--infStreams={streams}",
             f"--device={args.device}",
+            f"--useProfile={infer_batch - 1}",
             "--threads",
         ]
         if graph_mode:
@@ -484,6 +592,7 @@ def main() -> int:
         result = {
             "status": status,
             "error": error_text,
+            "plan_label": plan_label,
             "plan_batch": plan_batch,
             "infer_batch": infer_batch,
             "streams": streams,
@@ -509,7 +618,10 @@ def main() -> int:
         render_progress(
             done,
             total,
-            f"pb={plan_batch} ib={infer_batch} s={streams} g={1 if graph_mode else 0} {status}",
+            (
+                f"plan={normalize_key_token(plan_label)} "
+                f"pb={plan_batch} ib={infer_batch} s={streams} g={1 if graph_mode else 0} {status}"
+            ),
         )
 
         if status == "error" and args.stop_on_error:

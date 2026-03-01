@@ -1,33 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CLEAR_TRT_CACHE=0
+TRT_BUILDER_OPT_LEVEL=3
+TRT_AVG_TIMING_ITERS=0
+TRT_MAX_AUX_STREAMS=0
+TRT_SET_TACTIC_SOURCES=true
+TRT_MULTI_PROFILE=true
+NN_MAX_BATCHSIZE=16
+NUM_SEARCH_THREADS=30
+TRT_CUDA_STREAMS=2
+TRT_DEVICE_ID=0
+
 # Default to rebuilding TensorRT engine/tactics for the current tuning knobs.
 # Set CLEAR_TRT_CACHE=0 to reuse existing cache.
-if [[ "${CLEAR_TRT_CACHE:-1}" == "1" ]]; then
+if [[ "${CLEAR_TRT_CACHE}" == "1" ]]; then
   rm -rf "${HOME}/.katago/trtcache"
   mkdir -p "${HOME}/.katago/trtcache"
 fi
 
-TRT_BUILDER_OPT_LEVEL=5
-TRT_AVG_TIMING_ITERS=8
-TRT_MAX_AUX_STREAMS=4
-TRT_SET_TACTIC_SOURCES=true
-TRT_NUM_OPT_PROFILES=3
+if ! [[ "${TRT_CUDA_STREAMS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "numNNServerThreadsPerModel must be a positive integer, got: ${TRT_CUDA_STREAMS}" >&2
+  exit 1
+fi
 
-OVERRIDE_CONFIG="numNNServerThreadsPerModel=2"
-OVERRIDE_CONFIG+=",trtDeviceToUseThread0=0"
-OVERRIDE_CONFIG+=",trtDeviceToUseThread1=0"
+if ! [[ "${TRT_DEVICE_ID}" =~ ^[0-9]+$ ]]; then
+  echo "TRT_DEVICE_ID must be a non-negative integer, got: ${TRT_DEVICE_ID}" >&2
+  exit 1
+fi
+
+OVERRIDE_CONFIG="numNNServerThreadsPerModel=${TRT_CUDA_STREAMS}"
+for ((thread_idx=0; thread_idx<TRT_CUDA_STREAMS; thread_idx++)); do
+  OVERRIDE_CONFIG+=",trtDeviceToUseThread${thread_idx}=${TRT_DEVICE_ID}"
+done
+
 OVERRIDE_CONFIG+=",trtUseCudaGraph=true"
 OVERRIDE_CONFIG+=",trtBuilderOptimizationLevel=${TRT_BUILDER_OPT_LEVEL}"
 OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
-OVERRIDE_CONFIG+=",trtNumOptimizationProfiles=${TRT_NUM_OPT_PROFILES}"
+OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 
 /opt/katago/katago benchmark \
   -model /opt/katago/weight/b18tf.onnx \
   -config /opt/katago/config/gtp_example.cfg \
   -v 10000 \
-  -t 40 \
-  -fixed-batch-size 10 \
+  -t "${NUM_SEARCH_THREADS}" \
+  -fixed-batch-size "${NN_MAX_BATCHSIZE}" \
   -override-config "${OVERRIDE_CONFIG}"

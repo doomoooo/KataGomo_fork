@@ -275,13 +275,13 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
 
     int trtAvgTimingIterations = 0;
     if(cfg.contains(backendPrefix+"AvgTimingIterations-"+idxStr))
-      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, 1, 1000);
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, 0, 1000);
     else if(cfg.contains("avgTimingIterations-"+idxStr))
-      trtAvgTimingIterations = cfg.getInt("avgTimingIterations-"+idxStr, 1, 1000);
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations-"+idxStr, 0, 1000);
     else if(cfg.contains(backendPrefix+"AvgTimingIterations"))
-      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations", 1, 1000);
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations", 0, 1000);
     else if(cfg.contains("avgTimingIterations"))
-      trtAvgTimingIterations = cfg.getInt("avgTimingIterations", 1, 1000);
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations", 0, 1000);
 
     int trtMaxAuxStreams = 0;
     if(cfg.contains(backendPrefix+"MaxAuxStreams-"+idxStr))
@@ -303,15 +303,15 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("setTacticSources"))
       trtSetTacticSources = cfg.getBool("setTacticSources");
 
-    int trtNumOptimizationProfiles = 1;
-    if(cfg.contains(backendPrefix+"NumOptimizationProfiles-"+idxStr))
-      trtNumOptimizationProfiles = cfg.getInt(backendPrefix+"NumOptimizationProfiles-"+idxStr, 1, 65536);
-    else if(cfg.contains("numOptimizationProfiles-"+idxStr))
-      trtNumOptimizationProfiles = cfg.getInt("numOptimizationProfiles-"+idxStr, 1, 65536);
-    else if(cfg.contains(backendPrefix+"NumOptimizationProfiles"))
-      trtNumOptimizationProfiles = cfg.getInt(backendPrefix+"NumOptimizationProfiles", 1, 65536);
-    else if(cfg.contains("numOptimizationProfiles"))
-      trtNumOptimizationProfiles = cfg.getInt("numOptimizationProfiles", 1, 65536);
+    bool trtMultiProfile = false;
+    if(cfg.contains(backendPrefix+"MultiProfile-"+idxStr))
+      trtMultiProfile = cfg.getBool(backendPrefix+"MultiProfile-"+idxStr);
+    else if(cfg.contains("multiProfile-"+idxStr))
+      trtMultiProfile = cfg.getBool("multiProfile-"+idxStr);
+    else if(cfg.contains(backendPrefix+"MultiProfile"))
+      trtMultiProfile = cfg.getBool(backendPrefix+"MultiProfile");
+    else if(cfg.contains("multiProfile"))
+      trtMultiProfile = cfg.getBool("multiProfile");
 
     // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
     cfg.markAllKeysUsedWithPrefix(backendPrefix+"RecordBatchSizeHistogram");
@@ -330,7 +330,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " trtAvgTimingIterations " + Global::intToString(trtAvgTimingIterations)
       + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
       + " trtSetTacticSources " + Global::boolToString(trtSetTacticSources)
-      + " trtNumOptimizationProfiles " + Global::intToString(trtNumOptimizationProfiles)
+      + " trtMultiProfile " + Global::boolToString(trtMultiProfile)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -424,7 +424,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       trtAvgTimingIterations,
       trtMaxAuxStreams,
       trtSetTacticSources,
-      trtNumOptimizationProfiles
+      trtMultiProfile
     );
 
     nnEval->spawnServerThreads();

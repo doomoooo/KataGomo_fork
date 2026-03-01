@@ -109,7 +109,7 @@ class NNEvaluator {
     int trtAvgTimingIterations = 0,
     int trtMaxAuxStreams = 0,
     bool trtSetTacticSources = true,
-    int trtNumOptimizationProfiles = 1
+    bool trtMultiProfile = false
   );
   ~NNEvaluator();
 

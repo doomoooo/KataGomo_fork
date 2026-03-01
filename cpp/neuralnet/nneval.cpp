@@ -77,7 +77,7 @@ NNEvaluator::NNEvaluator(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
-  int trtNumOptimizationProfiles
+  bool trtMultiProfile
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -164,7 +164,7 @@ NNEvaluator::NNEvaluator(
       gpuIdxs,logger,nnXLen,nnYLen,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
       usingFP16Mode,usingNHWCMode,useCudaGraph,
-      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtNumOptimizationProfiles,
+      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtMultiProfile,
       loadedModel
     );
   }
@@ -452,6 +452,7 @@ void NNEvaluator::serve(
 ) {
   int64_t numBatchesHandledThisThread = 0;
   int64_t numRowsHandledThisThread = 0;
+  vector<int64_t> batchSizeHistogramThisThread((size_t)maxBatchSize + 1, 0);
 
   ComputeHandle* gpuHandle = NULL;
   if(loadedModel != NULL)
@@ -595,6 +596,7 @@ void NNEvaluator::serve(
       m_numBatchesProcessed.fetch_add(1, std::memory_order_relaxed);
       numRowsHandledThisThread += numRows;
       numBatchesHandledThisThread += 1;
+      batchSizeHistogramThisThread[(size_t)numRows] += 1;
 
       for(int row = 0; row < numRows; row++) {
         assert(resultBufs[row] != NULL);
@@ -630,6 +632,23 @@ void NNEvaluator::serve(
       Global::int64ToString(numRowsHandledThisThread) + " rows " +
       Global::int64ToString(numBatchesHandledThisThread) + " batches"
     );
+    if(numBatchesHandledThisThread > 0) {
+      string histogram = "GPU " + Global::intToString(gpuIdxForThisThread) + " batch histogram:";
+      bool hasBin = false;
+      for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
+        int64_t count = batchSizeHistogramThisThread[(size_t)batchSize];
+        if(count <= 0)
+          continue;
+        hasBin = true;
+        double pct = 100.0 * (double)count / (double)numBatchesHandledThisThread;
+        histogram += " " +
+          Global::intToString(batchSize) + "=" + Global::int64ToString(count) +
+          "(" + Global::strprintf("%.1f", pct) + "%)";
+      }
+      if(!hasBin)
+        histogram += " empty";
+      logger->write(histogram);
+    }
   }
 }
 

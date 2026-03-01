@@ -63,7 +63,7 @@ namespace NeuralNet {
     int trtAvgTimingIterations,
     int trtMaxAuxStreams,
     bool trtSetTacticSources,
-    int trtNumOptimizationProfiles,
+    bool trtMultiProfile,
     const LoadedModel* loadedModel
   );
   //A ComputeContext should NOT be freed until all ComputeHandles created using it have also been freed.
