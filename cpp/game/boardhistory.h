@@ -48,6 +48,8 @@ struct BoardHistory {
   bool wasEverOccupiedOrPlayed[Board::MAX_ARR_SIZE];
   //Locations where the next player is not allowed to play due to superko
   bool superKoBanned[Board::MAX_ARR_SIZE];
+  //XOR aggregate of all locations with superKoBanned[loc] == true.
+  Hash128 superKoBannedHash;
 
   //Number of consecutive passes made that count for ending the game or phase
   int consecutiveEndingPasses;
@@ -77,6 +79,8 @@ struct BoardHistory {
 
   //State of the grid as of the start of encore phase 2 for territory scoring
   Color secondEncoreStartColors[Board::MAX_ARR_SIZE];
+  //XOR aggregate of all non-empty secondEncoreStartColors for quick hashing.
+  Hash128 secondEncoreStartHash;
 
   //Amount that should be added to komi
   float whiteBonusScore;
@@ -198,6 +202,12 @@ struct BoardHistory {
   static Hash128 getSituationRulesAndKoHash(const Board& board, const BoardHistory& hist, Player nextPlayer, double drawEquivalentWinsForWhite);
 
 private:
+  void setSuperKoBanned(Loc loc, bool b);
+  void recomputeSecondEncoreStartHash(const Board& board);
+#ifndef NDEBUG
+  Hash128 computeSuperKoBannedHashSlow(const Board& board) const;
+  Hash128 computeSecondEncoreStartHashSlow(const Board& board) const;
+#endif
   bool koHashOccursInHistory(Hash128 koHash, const KoHashTable* rootKoHashTable) const;
   void setKoRecapBlocked(Loc loc, bool b);
   int countAreaScoreWhiteMinusBlack(const Board& board, Color area[Board::MAX_ARR_SIZE]) const;

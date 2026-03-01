@@ -40,6 +40,7 @@ BoardHistory::BoardHistory()
    recentBoards(),
    currentRecentBoardIdx(0),
    presumedNextMovePla(P_BLACK),
+   superKoBannedHash(),
    consecutiveEndingPasses(0),
    hashesBeforeBlackPass(),hashesBeforeWhitePass(),
    encorePhase(0),
@@ -48,6 +49,7 @@ BoardHistory::BoardHistory()
    numConsecValidTurnsThisGame(0),
    koRecapBlockHash(),
    koCapturesInEncore(),
+   secondEncoreStartHash(),
    whiteBonusScore(0.0f),
    whiteHandicapBonusScore(0.0f),
    hasButton(false),
@@ -80,6 +82,7 @@ BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int e
    recentBoards(),
    currentRecentBoardIdx(0),
    presumedNextMovePla(pla),
+   superKoBannedHash(),
    consecutiveEndingPasses(0),
    hashesBeforeBlackPass(),hashesBeforeWhitePass(),
    encorePhase(0),
@@ -88,6 +91,7 @@ BoardHistory::BoardHistory(const Board& board, Player pla, const Rules& r, int e
    numConsecValidTurnsThisGame(0),
    koRecapBlockHash(),
    koCapturesInEncore(),
+   secondEncoreStartHash(),
    whiteBonusScore(0.0f),
    whiteHandicapBonusScore(0.0f),
    hasButton(false),
@@ -119,6 +123,7 @@ BoardHistory::BoardHistory(const BoardHistory& other)
    recentBoards(),
    currentRecentBoardIdx(other.currentRecentBoardIdx),
    presumedNextMovePla(other.presumedNextMovePla),
+   superKoBannedHash(other.superKoBannedHash),
    consecutiveEndingPasses(other.consecutiveEndingPasses),
    hashesBeforeBlackPass(other.hashesBeforeBlackPass),hashesBeforeWhitePass(other.hashesBeforeWhitePass),
    encorePhase(other.encorePhase),
@@ -127,6 +132,7 @@ BoardHistory::BoardHistory(const BoardHistory& other)
    numConsecValidTurnsThisGame(other.numConsecValidTurnsThisGame),
    koRecapBlockHash(other.koRecapBlockHash),
    koCapturesInEncore(other.koCapturesInEncore),
+   secondEncoreStartHash(other.secondEncoreStartHash),
    whiteBonusScore(other.whiteBonusScore),
    whiteHandicapBonusScore(other.whiteHandicapBonusScore),
    hasButton(other.hasButton),
@@ -163,6 +169,7 @@ BoardHistory& BoardHistory::operator=(const BoardHistory& other)
   presumedNextMovePla = other.presumedNextMovePla;
   std::copy(other.wasEverOccupiedOrPlayed, other.wasEverOccupiedOrPlayed+Board::MAX_ARR_SIZE, wasEverOccupiedOrPlayed);
   std::copy(other.superKoBanned, other.superKoBanned+Board::MAX_ARR_SIZE, superKoBanned);
+  superKoBannedHash = other.superKoBannedHash;
   consecutiveEndingPasses = other.consecutiveEndingPasses;
   hashesBeforeBlackPass = other.hashesBeforeBlackPass;
   hashesBeforeWhitePass = other.hashesBeforeWhitePass;
@@ -174,6 +181,7 @@ BoardHistory& BoardHistory::operator=(const BoardHistory& other)
   koRecapBlockHash = other.koRecapBlockHash;
   koCapturesInEncore = other.koCapturesInEncore;
   std::copy(other.secondEncoreStartColors, other.secondEncoreStartColors+Board::MAX_ARR_SIZE, secondEncoreStartColors);
+  secondEncoreStartHash = other.secondEncoreStartHash;
   whiteBonusScore = other.whiteBonusScore;
   whiteHandicapBonusScore = other.whiteHandicapBonusScore;
   hasButton = other.hasButton;
@@ -204,6 +212,7 @@ BoardHistory::BoardHistory(BoardHistory&& other) noexcept
   recentBoards(),
   currentRecentBoardIdx(other.currentRecentBoardIdx),
   presumedNextMovePla(other.presumedNextMovePla),
+  superKoBannedHash(other.superKoBannedHash),
   consecutiveEndingPasses(other.consecutiveEndingPasses),
   hashesBeforeBlackPass(std::move(other.hashesBeforeBlackPass)),hashesBeforeWhitePass(std::move(other.hashesBeforeWhitePass)),
   encorePhase(other.encorePhase),
@@ -212,6 +221,7 @@ BoardHistory::BoardHistory(BoardHistory&& other) noexcept
   numConsecValidTurnsThisGame(other.numConsecValidTurnsThisGame),
   koRecapBlockHash(other.koRecapBlockHash),
   koCapturesInEncore(std::move(other.koCapturesInEncore)),
+  secondEncoreStartHash(other.secondEncoreStartHash),
   whiteBonusScore(other.whiteBonusScore),
   whiteHandicapBonusScore(other.whiteHandicapBonusScore),
   hasButton(other.hasButton),
@@ -245,6 +255,7 @@ BoardHistory& BoardHistory::operator=(BoardHistory&& other) noexcept
   presumedNextMovePla = other.presumedNextMovePla;
   std::copy(other.wasEverOccupiedOrPlayed, other.wasEverOccupiedOrPlayed+Board::MAX_ARR_SIZE, wasEverOccupiedOrPlayed);
   std::copy(other.superKoBanned, other.superKoBanned+Board::MAX_ARR_SIZE, superKoBanned);
+  superKoBannedHash = other.superKoBannedHash;
   consecutiveEndingPasses = other.consecutiveEndingPasses;
   hashesBeforeBlackPass = std::move(other.hashesBeforeBlackPass);
   hashesBeforeWhitePass = std::move(other.hashesBeforeWhitePass);
@@ -256,6 +267,7 @@ BoardHistory& BoardHistory::operator=(BoardHistory&& other) noexcept
   koRecapBlockHash = other.koRecapBlockHash;
   koCapturesInEncore = std::move(other.koCapturesInEncore);
   std::copy(other.secondEncoreStartColors, other.secondEncoreStartColors+Board::MAX_ARR_SIZE, secondEncoreStartColors);
+  secondEncoreStartHash = other.secondEncoreStartHash;
   whiteBonusScore = other.whiteBonusScore;
   whiteHandicapBonusScore = other.whiteHandicapBonusScore;
   hasButton = other.hasButton;
@@ -301,6 +313,7 @@ void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int ePh
   }
 
   std::fill(superKoBanned, superKoBanned+Board::MAX_ARR_SIZE, false);
+  superKoBannedHash = Hash128();
   consecutiveEndingPasses = 0;
   hashesBeforeBlackPass.clear();
   hashesBeforeWhitePass.clear();
@@ -331,6 +344,7 @@ void BoardHistory::clear(const Board& board, Player pla, const Rules& r, int ePh
     std::copy(board.colors, board.colors+Board::MAX_ARR_SIZE, secondEncoreStartColors);
   else
     std::fill(secondEncoreStartColors, secondEncoreStartColors+Board::MAX_ARR_SIZE, C_EMPTY);
+  recomputeSecondEncoreStartHash(board);
 
   //Push hash for the new board state
   koHashHistory.push_back(getKoHash(rules,board,pla,encorePhase,koRecapBlockHash));
@@ -768,6 +782,56 @@ void BoardHistory::setKoRecapBlocked(Loc loc, bool b) {
   }
 }
 
+void BoardHistory::setSuperKoBanned(Loc loc, bool b) {
+  if(superKoBanned[loc] != b) {
+    superKoBanned[loc] = b;
+    superKoBannedHash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
+  }
+}
+
+void BoardHistory::recomputeSecondEncoreStartHash(const Board& board) {
+  secondEncoreStartHash = Hash128();
+  if(encorePhase != 2)
+    return;
+  for(int y = 0; y<board.y_size; y++) {
+    for(int x = 0; x<board.x_size; x++) {
+      Loc loc = Location::getLoc(x,y,board.x_size);
+      Color c = secondEncoreStartColors[loc];
+      if(c != C_EMPTY)
+        secondEncoreStartHash ^= Board::ZOBRIST_SECOND_ENCORE_START_HASH[loc][c];
+    }
+  }
+}
+
+#ifndef NDEBUG
+Hash128 BoardHistory::computeSuperKoBannedHashSlow(const Board& board) const {
+  Hash128 hash;
+  for(int y = 0; y<board.y_size; y++) {
+    for(int x = 0; x<board.x_size; x++) {
+      Loc loc = Location::getLoc(x,y,board.x_size);
+      if(superKoBanned[loc])
+        hash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
+    }
+  }
+  return hash;
+}
+
+Hash128 BoardHistory::computeSecondEncoreStartHashSlow(const Board& board) const {
+  Hash128 hash;
+  if(encorePhase != 2)
+    return hash;
+  for(int y = 0; y<board.y_size; y++) {
+    for(int x = 0; x<board.x_size; x++) {
+      Loc loc = Location::getLoc(x,y,board.x_size);
+      Color c = secondEncoreStartColors[loc];
+      if(c != C_EMPTY)
+        hash ^= Board::ZOBRIST_SECOND_ENCORE_START_HASH[loc][c];
+    }
+  }
+  return hash;
+}
+#endif
+
 bool BoardHistory::isLegal(const Board& board, Loc moveLoc, Player movePla) const {
   if(movePla != presumedNextMovePla)
     return false;
@@ -1056,15 +1120,15 @@ void BoardHistory::makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player mo
         Loc loc = Location::getLoc(x,y,board.x_size);
         //Cannot be superko banned if it's not a pseudolegal move in the first place, or we would already ban the move under simple ko.
         if(board.colors[loc] != C_EMPTY || board.isIllegalSuicide(loc,nextPla,rules.multiStoneSuicideLegal) || loc == board.ko_loc)
-          superKoBanned[loc] = false;
+          setSuperKoBanned(loc,false);
         //Also cannot be superko banned if a stone was never there or played there before AND the move is not suicide, because that means
         //the move results in a new stone there and if no stone was ever there in the past the it must be a new position.
         else if(!wasEverOccupiedOrPlayed[loc] && !board.isSuicide(loc,nextPla))
-          superKoBanned[loc] = false;
+          setSuperKoBanned(loc,false);
         else {
           Hash128 posHashAfterMove = board.getPosHashAfterMove(loc,nextPla);
           Hash128 koHashAfterMove = getKoHashAfterMoveNonEncore(rules, posHashAfterMove, getOpp(nextPla));
-          superKoBanned[loc] = koHashOccursInHistory(koHashAfterMove,rootKoHashTable);
+          setSuperKoBanned(loc,koHashOccursInHistory(koHashAfterMove,rootKoHashTable));
         }
       }
     }
@@ -1072,12 +1136,16 @@ void BoardHistory::makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player mo
   else if(encorePhase > 0) {
     //During the encore, only one capture of each ko in a given position by a given player
     std::fill(superKoBanned, superKoBanned+Board::MAX_ARR_SIZE, false);
+    superKoBannedHash = Hash128();
     for(size_t i = 0; i<koCapturesInEncore.size(); i++) {
       const EncoreKoCapture& ekc = koCapturesInEncore[i];
       if(ekc.posHashBeforeMove == board.pos_hash && ekc.movePla == nextPla)
-        superKoBanned[ekc.moveLoc] = true;
+        setSuperKoBanned(ekc.moveLoc,true);
     }
   }
+#ifndef NDEBUG
+  assert(superKoBannedHash == computeSuperKoBannedHashSlow(board));
+#endif
 
   //Territory scoring - chill 1 point per move in main phase and first encore
   if(rules.scoringRule == Rules::SCORING_TERRITORY && encorePhase <= 1 && moveLoc != Board::PASS_LOC && !wasPassForKo) {
@@ -1119,8 +1187,12 @@ void BoardHistory::makeBoardMoveAssumeLegal(Board& board, Loc moveLoc, Player mo
           numApproxValidTurnsThisPhase = 0;
           if(encorePhase == 2)
             std::copy(board.colors, board.colors+Board::MAX_ARR_SIZE, secondEncoreStartColors);
+          else
+            std::fill(secondEncoreStartColors, secondEncoreStartColors+Board::MAX_ARR_SIZE, C_EMPTY);
+          recomputeSecondEncoreStartHash(board);
 
           std::fill(superKoBanned, superKoBanned+Board::MAX_ARR_SIZE, false);
+          superKoBannedHash = Hash128();
           consecutiveEndingPasses = 0;
           hashesBeforeBlackPass.clear();
           hashesBeforeWhitePass.clear();
@@ -1202,8 +1274,10 @@ Hash128 BoardHistory::getSituationAndSimpleKoAndPrevPosHash(const Board& board, 
 }
 
 Hash128 BoardHistory::getSituationRulesAndKoHash(const Board& board, const BoardHistory& hist, Player nextPlayer, double drawEquivalentWinsForWhite) {
-  int xSize = board.x_size;
-  int ySize = board.y_size;
+#ifndef NDEBUG
+  assert(hist.superKoBannedHash == hist.computeSuperKoBannedHashSlow(board));
+  assert(hist.secondEncoreStartHash == hist.computeSecondEncoreStartHashSlow(board));
+#endif
 
   //Note that board.pos_hash also incorporates the size of the board.
   Hash128 hash = board.pos_hash;
@@ -1215,34 +1289,17 @@ Hash128 BoardHistory::getSituationRulesAndKoHash(const Board& board, const Board
   if(hist.encorePhase == 0) {
     if(board.ko_loc != Board::NULL_LOC)
       hash ^= Board::ZOBRIST_KO_LOC_HASH[board.ko_loc];
-    for(int y = 0; y<ySize; y++) {
-      for(int x = 0; x<xSize; x++) {
-        Loc loc = Location::getLoc(x,y,xSize);
-        if(hist.superKoBanned[loc] && loc != board.ko_loc)
-          hash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
-      }
+    hash ^= hist.superKoBannedHash;
+    // In phase 0, simple ko is represented separately, so if superko also bans ko_loc, remove it.
+    if(board.ko_loc != Board::NULL_LOC && hist.superKoBanned[board.ko_loc]) {
+      hash ^= Board::ZOBRIST_KO_LOC_HASH[board.ko_loc];
     }
   }
   else {
-    for(int y = 0; y<ySize; y++) {
-      for(int x = 0; x<xSize; x++) {
-        Loc loc = Location::getLoc(x,y,xSize);
-        if(hist.superKoBanned[loc])
-          hash ^= Board::ZOBRIST_KO_LOC_HASH[loc];
-        if(hist.koRecapBlocked[loc])
-          hash ^= Board::ZOBRIST_KO_MARK_HASH[loc][P_BLACK] ^ Board::ZOBRIST_KO_MARK_HASH[loc][P_WHITE];
-      }
-    }
-    if(hist.encorePhase == 2) {
-      for(int y = 0; y<ySize; y++) {
-        for(int x = 0; x<xSize; x++) {
-          Loc loc = Location::getLoc(x,y,xSize);
-          Color c = hist.secondEncoreStartColors[loc];
-          if(c != C_EMPTY)
-            hash ^= Board::ZOBRIST_SECOND_ENCORE_START_HASH[loc][c];
-        }
-      }
-    }
+    hash ^= hist.superKoBannedHash;
+    hash ^= hist.koRecapBlockHash;
+    if(hist.encorePhase == 2)
+      hash ^= hist.secondEncoreStartHash;
   }
 
   float selfKomi = hist.currentSelfKomi(nextPlayer,drawEquivalentWinsForWhite);
