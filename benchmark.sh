@@ -63,6 +63,8 @@ OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
+OVERRIDE_CONFIG+=",useGraphSearch=true"
+OVERRIDE_CONFIG+=",useEvalCache=true"
 
 "${KATAGO_BIN_PATH}" benchmark \
   -model "${KATAGO_MODEL_PATH}" \

@@ -7,13 +7,13 @@
 export TENSORRT_ROOT=/opt/tensorrt
 
 # 2) Deploy location
-export KATAGO_DEPLOY_DIR=/opt/katago
+export KATAGO_DEPLOY_DIR=/opt/katago_dbginfo
 
 # 3) KataGo binary location
-export KATAGO_BIN_PATH=/opt/katago/katago_modified
+export KATAGO_BIN_PATH="${KATAGO_DEPLOY_DIR}/katago"
 
 # 4) Model location
-export KATAGO_MODEL_PATH="${KATAGO_DEPLOY_DIR}/weights/b18tf.onnx"
+export KATAGO_MODEL_PATH="/opt/katago/weights/b18tf.onnx"
 
 # 5) Config location
-export KATAGO_CONFIG_PATH="${KATAGO_DEPLOY_DIR}/configs/gtp_example.cfg"
+export KATAGO_CONFIG_PATH="/opt/katago/configs/gtp_example.cfg"
