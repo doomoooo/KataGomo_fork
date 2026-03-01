@@ -5,8 +5,8 @@ CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=3
 TRT_AVG_TIMING_ITERS=0
 TRT_MAX_AUX_STREAMS=0
-TRT_SET_TACTIC_SOURCES=false
-TRT_MULTI_PROFILE=false
+TRT_SET_TACTIC_SOURCES=true
+TRT_MULTI_PROFILE=true
 NN_MAX_BATCHSIZE=4
 NN_MIN_BATCHSIZE=4
 NUM_SEARCH_THREADS=16
@@ -51,17 +51,17 @@ for ((thread_idx=0; thread_idx<TRT_CUDA_STREAMS; thread_idx++)); do
 done
 
 OVERRIDE_CONFIG+=",trtUseCudaGraph=true"
+OVERRIDE_CONFIG+=",analysisPVLen=99"
 OVERRIDE_CONFIG+=",trtBuilderOptimizationLevel=${TRT_BUILDER_OPT_LEVEL}"
 OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
+OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
+OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"
 
-/opt/katago/katago benchmark \
+/opt/katago/katago gtp \
   -model /opt/katago/weight/b18tf.onnx \
   -config /opt/katago/config/gtp_example.cfg \
-  -v 10000 \
-  -t "${NUM_SEARCH_THREADS}" \
-  -fixed-batch-size "${NN_MAX_BATCHSIZE}" \
   -override-config "${OVERRIDE_CONFIG}"
