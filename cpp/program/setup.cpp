@@ -273,7 +273,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("builderOptimizationLevel"))
       trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel", 0, 5);
 
-    int trtAvgTimingIterations = 4;
+    int trtAvgTimingIterations = 0;
     if(cfg.contains(backendPrefix+"AvgTimingIterations-"+idxStr))
       trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, 1, 1000);
     else if(cfg.contains("avgTimingIterations-"+idxStr))
@@ -303,6 +303,16 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("setTacticSources"))
       trtSetTacticSources = cfg.getBool("setTacticSources");
 
+    int trtNumOptimizationProfiles = 1;
+    if(cfg.contains(backendPrefix+"NumOptimizationProfiles-"+idxStr))
+      trtNumOptimizationProfiles = cfg.getInt(backendPrefix+"NumOptimizationProfiles-"+idxStr, 1, 65536);
+    else if(cfg.contains("numOptimizationProfiles-"+idxStr))
+      trtNumOptimizationProfiles = cfg.getInt("numOptimizationProfiles-"+idxStr, 1, 65536);
+    else if(cfg.contains(backendPrefix+"NumOptimizationProfiles"))
+      trtNumOptimizationProfiles = cfg.getInt(backendPrefix+"NumOptimizationProfiles", 1, 65536);
+    else if(cfg.contains("numOptimizationProfiles"))
+      trtNumOptimizationProfiles = cfg.getInt("numOptimizationProfiles", 1, 65536);
+
     // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
     cfg.markAllKeysUsedWithPrefix(backendPrefix+"RecordBatchSizeHistogram");
     cfg.markAllKeysUsedWithPrefix("recordBatchSizeHistogram");
@@ -320,6 +330,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " trtAvgTimingIterations " + Global::intToString(trtAvgTimingIterations)
       + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
       + " trtSetTacticSources " + Global::boolToString(trtSetTacticSources)
+      + " trtNumOptimizationProfiles " + Global::intToString(trtNumOptimizationProfiles)
     );
 
     int nnCacheSizePowerOfTwo =
@@ -412,7 +423,8 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       trtBuilderOptimizationLevel,
       trtAvgTimingIterations,
       trtMaxAuxStreams,
-      trtSetTacticSources
+      trtSetTacticSources,
+      trtNumOptimizationProfiles
     );
 
     nnEval->spawnServerThreads();

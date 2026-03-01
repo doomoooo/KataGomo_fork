@@ -106,9 +106,10 @@ class NNEvaluator {
     int backendNumThreads,
     bool useCudaGraph = false,
     int trtBuilderOptimizationLevel = 3,
-    int trtAvgTimingIterations = 4,
+    int trtAvgTimingIterations = 0,
     int trtMaxAuxStreams = 0,
-    bool trtSetTacticSources = true
+    bool trtSetTacticSources = true,
+    int trtNumOptimizationProfiles = 1
   );
   ~NNEvaluator();
 

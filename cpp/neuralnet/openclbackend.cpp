@@ -466,6 +466,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
+  int trtNumOptimizationProfiles,
   const LoadedModel* loadedModel
 ) {
   (void)useCudaGraph;
@@ -473,6 +474,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
   (void)trtSetTacticSources;
+  (void)trtNumOptimizationProfiles;
 
   if(gpuIdxs.size() <= 0)
     throw StringError("NeuralNet::createComputeContext - specified no gpus to use");

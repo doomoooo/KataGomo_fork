@@ -76,7 +76,8 @@ NNEvaluator::NNEvaluator(
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
-  bool trtSetTacticSources
+  bool trtSetTacticSources,
+  int trtNumOptimizationProfiles
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -163,7 +164,7 @@ NNEvaluator::NNEvaluator(
       gpuIdxs,logger,nnXLen,nnYLen,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
       usingFP16Mode,usingNHWCMode,useCudaGraph,
-      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,
+      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtNumOptimizationProfiles,
       loadedModel
     );
   }

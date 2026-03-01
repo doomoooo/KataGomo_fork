@@ -53,6 +53,7 @@ struct ComputeContext {
   int trtAvgTimingIterations;
   int trtMaxAuxStreams;
   bool trtSetTacticSources;
+  int trtNumOptimizationProfiles;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -108,6 +109,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
+  int trtNumOptimizationProfiles,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
   (void)logger;
@@ -127,6 +129,7 @@ ComputeContext* NeuralNet::createComputeContext(
   context->trtAvgTimingIterations = trtAvgTimingIterations;
   context->trtMaxAuxStreams = trtMaxAuxStreams;
   context->trtSetTacticSources = trtSetTacticSources;
+  context->trtNumOptimizationProfiles = trtNumOptimizationProfiles;
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -1157,6 +1160,8 @@ struct ComputeHandle {
   int modelVersion;
   int maxAuxStreamsRequested;
   int engineAuxStreamsUsed;
+  int numOptimizationProfiles;
+  vector<int> profileIndexByBatch;
   vector<pair<string, string>> debugOutputs;
 
   TRTLogger trtLogger;
@@ -1164,8 +1169,11 @@ struct ComputeHandle {
   map<string, void*> buffers;
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
-  unique_ptr<IExecutionContext> exec;
-  vector<cudaStream_t> execAuxStreams;
+  struct RuntimeExecState {
+    unique_ptr<IExecutionContext> exec;
+    vector<cudaStream_t> auxStreams;
+  };
+  vector<RuntimeExecState> runtimeExecStates;
   bool useCudaGraph;
   void* sharedExecDeviceMemory;
   int64_t sharedExecDeviceMemoryBytes;
@@ -1191,6 +1199,12 @@ struct ComputeHandle {
   map<int, BatchGraphState> batchGraphStates;
   bool cudaGraphsPreCaptured;
   InputBuffers* cudaGraphInputBuffers;
+  struct ProfileBatchRange {
+    int minBatch;
+    int optBatch;
+    int maxBatch;
+  };
+  vector<ProfileBatchRange> optimizationProfiles;
 
   ComputeHandle(
     Logger* logger,
@@ -1208,6 +1222,11 @@ struct ComputeHandle {
     modelVersion = loadedModel->modelDesc.modelVersion;
     maxAuxStreamsRequested = 0;
     engineAuxStreamsUsed = 0;
+    numOptimizationProfiles = 1;
+    profileIndexByBatch.clear();
+    profileIndexByBatch.resize((size_t)maxBatchSize + 1, 0);
+    runtimeExecStates.clear();
+    optimizationProfiles.clear();
     useCudaGraph = context->useCudaGraph;
     sharedExecDeviceMemory = nullptr;
     sharedExecDeviceMemoryBytes = 0;
@@ -1240,9 +1259,10 @@ struct ComputeHandle {
     const int avgTimingIterations = ctx->trtAvgTimingIterations;
     maxAuxStreamsRequested = ctx->trtMaxAuxStreams;
     if(logger != nullptr) {
+      string avgTimingDesc = avgTimingIterations > 0 ? Global::intToString(avgTimingIterations) : "default";
       logger->write(
         "TensorRT backend: builderOptimizationLevel=" + Global::intToString(builderOptimizationLevel) +
-        " avgTimingIterations=" + Global::intToString(avgTimingIterations) +
+        " avgTimingIterations=" + avgTimingDesc +
         " maxAuxStreams=" + Global::intToString(maxAuxStreamsRequested) +
         " setTacticSources=" + Global::boolToString(ctx->trtSetTacticSources)
       );
@@ -1278,9 +1298,45 @@ struct ComputeHandle {
     if(!network) {
       throw StringError("TensorRT backend: failed to create network definition");
     }
-    auto profile = builder->createOptimizationProfile();
-    if(!profile) {
-      throw StringError("TensorRT backend: failed to create optimization profile");
+
+    int requestedOptimizationProfiles = ctx->trtNumOptimizationProfiles;
+    if(requestedOptimizationProfiles < 1) {
+      requestedOptimizationProfiles = 1;
+    }
+    if(requestedOptimizationProfiles > maxBatchSize) {
+      if(logger != nullptr) {
+        logger->write(
+          "TensorRT backend: trtNumOptimizationProfiles=" + Global::intToString(requestedOptimizationProfiles) +
+          " exceeds maxBatchSize=" + Global::intToString(maxBatchSize) +
+          ", clamping to maxBatchSize"
+        );
+      }
+      requestedOptimizationProfiles = maxBatchSize;
+    }
+    numOptimizationProfiles = requestedOptimizationProfiles;
+    optimizationProfiles.clear();
+    optimizationProfiles.reserve((size_t)numOptimizationProfiles);
+    int firstProfileMaxBatch = maxBatchSize - (numOptimizationProfiles - 1);
+    optimizationProfiles.push_back({1, firstProfileMaxBatch, firstProfileMaxBatch});
+    for(int singleBatch = firstProfileMaxBatch + 1; singleBatch <= maxBatchSize; singleBatch++) {
+      optimizationProfiles.push_back({singleBatch, singleBatch, singleBatch});
+    }
+    runtimeExecStates.clear();
+    runtimeExecStates.resize((size_t)numOptimizationProfiles);
+    profileIndexByBatch.assign((size_t)maxBatchSize + 1, 0);
+    for(int profileIndex = 0; profileIndex < numOptimizationProfiles; profileIndex++) {
+      const ProfileBatchRange& range = optimizationProfiles[(size_t)profileIndex];
+      for(int batch = range.minBatch; batch <= range.maxBatch; batch++) {
+        profileIndexByBatch[(size_t)batch] = profileIndex;
+      }
+      if(logger != nullptr) {
+        logger->write(
+          "TensorRT backend: optimization profile " + Global::intToString(profileIndex) +
+          " min=" + Global::intToString(range.minBatch) +
+          " opt=" + Global::intToString(range.optBatch) +
+          " max=" + Global::intToString(range.maxBatch)
+        );
+      }
     }
 
     unique_ptr<TRTModel> model;
@@ -1314,20 +1370,80 @@ struct ComputeHandle {
       
       int64_t spatialC = NNModelVersion::getNumSpatialFeatures(modelVersion);
       int64_t globalC = NNModelVersion::getNumGlobalFeatures(modelVersion);
-      profile->setDimensions("input_spatial", OptProfileSelector::kMIN, Dims4(1, spatialC, ctx->nnYLen, ctx->nnXLen));
-      profile->setDimensions("input_spatial", OptProfileSelector::kOPT, Dims4(maxBatchSize, spatialC, ctx->nnYLen, ctx->nnXLen));
-      profile->setDimensions("input_spatial", OptProfileSelector::kMAX, Dims4(maxBatchSize, spatialC, ctx->nnYLen, ctx->nnXLen));
-      profile->setDimensions("input_global", OptProfileSelector::kMIN, Dims2(1, globalC));
-      profile->setDimensions("input_global", OptProfileSelector::kOPT, Dims2(maxBatchSize, globalC));
-      profile->setDimensions("input_global", OptProfileSelector::kMAX, Dims2(maxBatchSize, globalC));
-      config->addOptimizationProfile(profile);
+      for(int profileIndex = 0; profileIndex < numOptimizationProfiles; profileIndex++) {
+        const ProfileBatchRange& range = optimizationProfiles[(size_t)profileIndex];
+        auto profile = builder->createOptimizationProfile();
+        if(!profile) {
+          throw StringError("TensorRT backend: failed to create optimization profile");
+        }
+        profile->setDimensions(
+          "input_spatial", OptProfileSelector::kMIN, Dims4(range.minBatch, spatialC, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions(
+          "input_spatial", OptProfileSelector::kOPT, Dims4(range.optBatch, spatialC, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions(
+          "input_spatial", OptProfileSelector::kMAX, Dims4(range.maxBatch, spatialC, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions("input_global", OptProfileSelector::kMIN, Dims2(range.minBatch, globalC));
+        profile->setDimensions("input_global", OptProfileSelector::kOPT, Dims2(range.optBatch, globalC));
+        profile->setDimensions("input_global", OptProfileSelector::kMAX, Dims2(range.maxBatch, globalC));
+        config->addOptimizationProfile(profile);
+      }
     }
     else {
+      auto applyClassicProfileDimensions = [this, loadedModel](IOptimizationProfile* profile, const ProfileBatchRange& range) {
+        const ModelDesc& m = loadedModel->modelDesc;
+        const int numInputChannels = m.numInputChannels;
+        const int numInputGlobalChannels = m.numInputGlobalChannels;
+        const int numInputMetaChannels = m.numInputMetaChannels;
+        profile->setDimensions("InputMask", OptProfileSelector::kMIN, Dims4(range.minBatch, 1, ctx->nnYLen, ctx->nnXLen));
+        profile->setDimensions("InputMask", OptProfileSelector::kOPT, Dims4(range.optBatch, 1, ctx->nnYLen, ctx->nnXLen));
+        profile->setDimensions("InputMask", OptProfileSelector::kMAX, Dims4(range.maxBatch, 1, ctx->nnYLen, ctx->nnXLen));
+        profile->setDimensions(
+          "InputSpatial", OptProfileSelector::kMIN, Dims4(range.minBatch, numInputChannels, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions(
+          "InputSpatial", OptProfileSelector::kOPT, Dims4(range.optBatch, numInputChannels, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions(
+          "InputSpatial", OptProfileSelector::kMAX, Dims4(range.maxBatch, numInputChannels, ctx->nnYLen, ctx->nnXLen)
+        );
+        profile->setDimensions(
+          "InputGlobal", OptProfileSelector::kMIN, Dims4(range.minBatch, numInputGlobalChannels, 1, 1)
+        );
+        profile->setDimensions(
+          "InputGlobal", OptProfileSelector::kOPT, Dims4(range.optBatch, numInputGlobalChannels, 1, 1)
+        );
+        profile->setDimensions(
+          "InputGlobal", OptProfileSelector::kMAX, Dims4(range.maxBatch, numInputGlobalChannels, 1, 1)
+        );
+        if(numInputMetaChannels > 0) {
+          profile->setDimensions("InputMeta", OptProfileSelector::kMIN, Dims4(range.minBatch, numInputMetaChannels, 1, 1));
+          profile->setDimensions("InputMeta", OptProfileSelector::kOPT, Dims4(range.optBatch, numInputMetaChannels, 1, 1));
+          profile->setDimensions("InputMeta", OptProfileSelector::kMAX, Dims4(range.maxBatch, numInputMetaChannels, 1, 1));
+        }
+      };
+
+      auto primaryProfile = builder->createOptimizationProfile();
+      if(!primaryProfile) {
+        throw StringError("TensorRT backend: failed to create optimization profile");
+      }
       auto modelParser = make_unique<ModelParser>();
       model = modelParser->build(
-        move(network), profile, loadedModel, ctx->nnXLen, ctx->nnYLen, maxBatchSize, requireExactNNLen);
+        move(network), primaryProfile, loadedModel, ctx->nnXLen, ctx->nnYLen, maxBatchSize, requireExactNNLen);
       debugOutputs = model->debugOutputs;
-      config->addOptimizationProfile(profile);
+      applyClassicProfileDimensions(primaryProfile, optimizationProfiles[0]);
+      config->addOptimizationProfile(primaryProfile);
+
+      for(int profileIndex = 1; profileIndex < numOptimizationProfiles; profileIndex++) {
+        auto extraProfile = builder->createOptimizationProfile();
+        if(!extraProfile) {
+          throw StringError("TensorRT backend: failed to create optimization profile");
+        }
+        applyClassicProfileDimensions(extraProfile, optimizationProfiles[(size_t)profileIndex]);
+        config->addOptimizationProfile(extraProfile);
+      }
     }
 
     if(ctx->trtSetTacticSources) {
@@ -1344,11 +1460,13 @@ struct ComputeHandle {
       if(prop->major >= 8) {
         // This is to avoid tactics that have shape switching overhead
         config->setTacticSources(1U << static_cast<uint32_t>(TacticSource::kJIT_CONVOLUTIONS));
-      }
+    }
 #endif
     }
     config->setBuilderOptimizationLevel(builderOptimizationLevel);
-    config->setAvgTimingIterations(avgTimingIterations);
+    if(avgTimingIterations > 0) {
+      config->setAvgTimingIterations(avgTimingIterations);
+    }
     config->setMaxAuxStreams(maxAuxStreamsRequested);
 
     // So that there are no concurrent kernel executions probably from other parts of code while profiling
@@ -1625,6 +1743,15 @@ struct ComputeHandle {
       }
     }
 
+    int engineProfileCount = engine->getNbOptimizationProfiles();
+    if(engineProfileCount != numOptimizationProfiles) {
+      throw StringError(
+        "TensorRT backend: engine optimization profile count " + Global::intToString(engineProfileCount) +
+        " does not match requested " + Global::intToString(numOptimizationProfiles) +
+        ". Delete trtcache and rebuild."
+      );
+    }
+
     if(useCudaGraph) {
       sharedExecDeviceMemoryBytes = engine->getDeviceMemorySizeV2();
       if(sharedExecDeviceMemoryBytes < 0) {
@@ -1633,13 +1760,6 @@ struct ComputeHandle {
       if(sharedExecDeviceMemoryBytes > 0) {
         CUDA_ERR("ComputeHandle", cudaMalloc(&sharedExecDeviceMemory, (size_t)sharedExecDeviceMemoryBytes));
       }
-    }
-    else {
-      exec.reset(engine->createExecutionContext());
-      if(!exec) {
-        throw StringError("TensorRT backend: failed to create execution context");
-      }
-      initializeExecutionContext(exec.get(), &execAuxStreams);
     }
     if(useCudaGraph) {
       // Pre-capture now includes H2D/D2H, so it must use the owning thread's InputBuffers addresses.
@@ -1654,8 +1774,11 @@ struct ComputeHandle {
   ~ComputeHandle() {
     destroyAllBatchGraphs();
     batchGraphStates.clear();
-    exec.reset();
-    destroyAuxStreams(execAuxStreams);
+    for(auto& state : runtimeExecStates) {
+      state.exec.reset();
+      destroyAuxStreams(state.auxStreams);
+    }
+    runtimeExecStates.clear();
 
     if(sharedExecDeviceMemory != nullptr) {
       CUDA_ERR("~ComputeHandle", cudaFree(sharedExecDeviceMemory));
@@ -1725,8 +1848,20 @@ struct ComputeHandle {
     }
   }
 
-  void initializeExecutionContext(IExecutionContext* targetExec, vector<cudaStream_t>* targetAuxStreams) {
-    targetExec->setOptimizationProfileAsync(0, cudaStreamPerThread);
+  int getProfileIndexForBatch(int batchSize) const {
+    if(batchSize <= 0 || batchSize > maxBatchSize) {
+      throw StringError("TensorRT backend: invalid batch size for profile lookup");
+    }
+    return profileIndexByBatch[(size_t)batchSize];
+  }
+
+  void initializeExecutionContext(IExecutionContext* targetExec, int profileIndex, vector<cudaStream_t>* targetAuxStreams) {
+    bool profileSet = targetExec->setOptimizationProfileAsync(profileIndex, cudaStreamPerThread);
+    if(!profileSet) {
+      throw StringError(
+        "TensorRT backend: setOptimizationProfileAsync failed for profile index " + Global::intToString(profileIndex)
+      );
+    }
     cudaStreamSynchronize(cudaStreamPerThread);
     bindTensorAddresses(targetExec);
     if(targetAuxStreams != nullptr) {
@@ -1763,7 +1898,8 @@ struct ComputeHandle {
     if(sharedExecDeviceMemoryBytes > 0) {
       state.exec->setDeviceMemoryV2(sharedExecDeviceMemory, sharedExecDeviceMemoryBytes);
     }
-    initializeExecutionContext(state.exec.get(), &state.auxStreams);
+    int profileIndex = getProfileIndexForBatch(batchSize);
+    initializeExecutionContext(state.exec.get(), profileIndex, &state.auxStreams);
 
     auto inserted = batchGraphStates.emplace(batchSize, std::move(state));
     return inserted.first->second;
@@ -1785,14 +1921,16 @@ struct ComputeHandle {
 
   IExecutionContext* getExecutionContextForBatch(int batchSize) {
     if(!useCudaGraph) {
-      if(exec == nullptr) {
-        exec.reset(engine->createExecutionContext());
-        if(!exec) {
+      int profileIndex = getProfileIndexForBatch(batchSize);
+      RuntimeExecState& runtimeState = runtimeExecStates[(size_t)profileIndex];
+      if(runtimeState.exec == nullptr) {
+        runtimeState.exec.reset(engine->createExecutionContext());
+        if(!runtimeState.exec) {
           throw StringError("TensorRT backend: failed to create fallback execution context");
         }
-        initializeExecutionContext(exec.get(), &execAuxStreams);
+        initializeExecutionContext(runtimeState.exec.get(), profileIndex, &runtimeState.auxStreams);
       }
-      return exec.get();
+      return runtimeState.exec.get();
     }
     BatchGraphState& state = getOrCreateBatchGraphState(batchSize);
     return state.exec.get();

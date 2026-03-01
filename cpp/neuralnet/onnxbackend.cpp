@@ -91,6 +91,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
   bool trtSetTacticSources,
+  int trtNumOptimizationProfiles,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -103,6 +104,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
   (void)trtSetTacticSources;
+  (void)trtNumOptimizationProfiles;
 
   if(useNHWCMode == enabled_t::True) {
     throw StringError("ONNX backend: useNHWC = false required");
