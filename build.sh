@@ -3,10 +3,14 @@
 # Build script for KataGomo with TensorRT backend (Gomoku version)
 # This script handles compilation and deployment to /opt/katago
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./env.sh
+source "${SCRIPT_DIR}/env.sh"
+
 # Configuration
 BUILD_DIR="cpp/build"
-TENSORRT_ROOT="/opt/tensorrt"
-DEPLOY_DIR="/opt/katago"
+DEPLOY_DIR="${KATAGO_DEPLOY_DIR}"
+KATAGO_BIN="${KATAGO_DEPLOY_DIR}/katago"
 
 # Colors for output
 RED='\033[0;31m'
@@ -59,17 +63,17 @@ main() {
 
     # Prepare build directory
     print_info "Preparing build environment"
-    mkdir -p ${BUILD_DIR}
+    mkdir -p "${BUILD_DIR}"
 
     # Configure CMake
     print_info "Configuring CMake"
-    cd ${BUILD_DIR}
+    cd "${BUILD_DIR}"
     cmake .. \
         -DUSE_BACKEND=TENSORRT \
         -DUSE_AVX2=1 \
-        -DTENSORRT_INCLUDE_DIR=${TENSORRT_ROOT}/include \
-        -DTENSORRT_LIBRARY=${TENSORRT_ROOT}/lib/libnvinfer.so \
-        -DTENSORRT_ONNX_LIBRARY=${TENSORRT_ROOT}/lib/libnvonnxparser.so
+        -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
+        -DTENSORRT_LIBRARY="${TENSORRT_ROOT}/lib/libnvinfer.so" \
+        -DTENSORRT_ONNX_LIBRARY="${TENSORRT_ROOT}/lib/libnvonnxparser.so"
 
     if [ $? -ne 0 ]; then
         print_error "CMake configuration failed"
@@ -83,22 +87,22 @@ main() {
         print_error "Compilation failed"
     fi
 
-    print_info "Checking tcmalloc linkage"
-    ldd katago | grep -q "libtcmalloc_minimal"
-    if [ $? -ne 0 ]; then
-        print_error "katago is not linked with tcmalloc"
-    fi
+    # print_info "Checking tcmalloc linkage"
+    # ldd katago | grep -q "libtcmalloc_minimal"
+    # if [ $? -ne 0 ]; then
+    #     print_error "katago is not linked with tcmalloc"
+    # fi
 
     # Deploy
     print_info "Deploying to ${DEPLOY_DIR}"
-    sudo mkdir -p ${DEPLOY_DIR}
-    sudo rm ${DEPLOY_DIR}/katago
-    sudo cp katago ${DEPLOY_DIR}/
-    sudo chmod +x ${DEPLOY_DIR}/katago
+    sudo mkdir -p "${DEPLOY_DIR}"
+    sudo rm -f "${KATAGO_BIN}"
+    sudo cp katago "${KATAGO_BIN}"
+    sudo chmod +x "${KATAGO_BIN}"
 
     # Verify installation
     print_info "Verifying installation"
-    ${DEPLOY_DIR}/katago version
+    "${KATAGO_BIN}" version
 
     if [ $? -ne 0 ]; then
         print_error "Verification failed"

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./env.sh
+source "${SCRIPT_DIR}/env.sh"
+
+export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=-1
 TRT_AVG_TIMING_ITERS=-1
@@ -58,9 +64,9 @@ OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 
-/opt/katago/katago benchmark \
-  -model /opt/katago/weight/b18tf.onnx \
-  -config /opt/katago/config/gtp_example.cfg \
+"${KATAGO_DEPLOY_DIR}/katago" benchmark \
+  -model "${KATAGO_MODEL_PATH}" \
+  -config "${KATAGO_CONFIG_PATH}" \
   -v 10000 \
   -t "${NUM_SEARCH_THREADS}" \
   -fixed-batch-size "${NN_MAX_BATCHSIZE}" \
