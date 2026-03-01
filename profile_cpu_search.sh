@@ -218,7 +218,6 @@ print_info "Profiling ${BINARY}"
 print_info "Output tag: ${TAG}"
 print_info "Writing logs to ${OUT_DIR}"
 
-export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 LD_PRELOAD="${LIBPROFILER_PATH}" \
 CPUPROFILE="${PROFILE_PATH}" \
 "${BINARY}" benchmark \

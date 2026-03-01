@@ -313,6 +313,34 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("multiProfile"))
       trtMultiProfile = cfg.getBool("multiProfile");
 
+    string cudaHostWaitPolicy = "blocking";
+    if(cfg.contains(backendPrefix+"HostWaitPolicy-"+idxStr))
+      cudaHostWaitPolicy = cfg.getString(backendPrefix+"HostWaitPolicy-"+idxStr);
+    else if(cfg.contains("hostWaitPolicy-"+idxStr))
+      cudaHostWaitPolicy = cfg.getString("hostWaitPolicy-"+idxStr);
+    else if(cfg.contains(backendPrefix+"CudaHostWaitPolicy-"+idxStr))
+      cudaHostWaitPolicy = cfg.getString(backendPrefix+"CudaHostWaitPolicy-"+idxStr);
+    else if(cfg.contains("cudaHostWaitPolicy-"+idxStr))
+      cudaHostWaitPolicy = cfg.getString("cudaHostWaitPolicy-"+idxStr);
+    else if(cfg.contains(backendPrefix+"HostWaitPolicy"))
+      cudaHostWaitPolicy = cfg.getString(backendPrefix+"HostWaitPolicy");
+    else if(cfg.contains("hostWaitPolicy"))
+      cudaHostWaitPolicy = cfg.getString("hostWaitPolicy");
+    else if(cfg.contains(backendPrefix+"CudaHostWaitPolicy"))
+      cudaHostWaitPolicy = cfg.getString(backendPrefix+"CudaHostWaitPolicy");
+    else if(cfg.contains("cudaHostWaitPolicy"))
+      cudaHostWaitPolicy = cfg.getString("cudaHostWaitPolicy");
+    cudaHostWaitPolicy = Global::toLower(Global::trim(cudaHostWaitPolicy));
+    if(cudaHostWaitPolicy.empty())
+      cudaHostWaitPolicy = "blocking";
+    if(cudaHostWaitPolicy == "blocking_sync" || cudaHostWaitPolicy == "blocking-sync" || cudaHostWaitPolicy == "blockingsync")
+      cudaHostWaitPolicy = "blocking";
+    if(cudaHostWaitPolicy != "auto" && cudaHostWaitPolicy != "spin" && cudaHostWaitPolicy != "yield" && cudaHostWaitPolicy != "blocking") {
+      throw StringError(
+        "cudaHostWaitPolicy must be one of auto, spin, yield, blocking, got: " + cudaHostWaitPolicy
+      );
+    }
+
     // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
     cfg.markAllKeysUsedWithPrefix(backendPrefix+"RecordBatchSizeHistogram");
     cfg.markAllKeysUsedWithPrefix("recordBatchSizeHistogram");
@@ -331,6 +359,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
       + " trtSetTacticSources " + Global::boolToString(trtSetTacticSources)
       + " trtMultiProfile " + Global::boolToString(trtMultiProfile)
+      + " cudaHostWaitPolicy " + cudaHostWaitPolicy
     );
 
     int nnCacheSizePowerOfTwo =
@@ -430,6 +459,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       defaultSymmetry,
       backendNumThreads,
       useCudaGraph,
+      cudaHostWaitPolicy,
       trtBuilderOptimizationLevel,
       trtAvgTimingIterations,
       trtMaxAuxStreams,

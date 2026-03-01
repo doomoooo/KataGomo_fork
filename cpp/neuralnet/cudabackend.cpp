@@ -33,6 +33,27 @@ void NeuralNet::globalCleanup() {
   cudaDeviceReset();
 }
 
+namespace {
+  unsigned int getCudaHostWaitFlag(const string& policy) {
+    if(policy == "auto") {
+      return cudaDeviceScheduleAuto;
+    }
+    if(policy == "spin") {
+      return cudaDeviceScheduleSpin;
+    }
+    if(policy == "yield") {
+      return cudaDeviceScheduleYield;
+    }
+    if(policy == "blocking") {
+      return cudaDeviceScheduleBlockingSync;
+    }
+    throw StringError(
+      "Cuda backend: unsupported cudaHostWaitPolicy = " + policy +
+      ", expected one of auto|spin|yield|blocking"
+    );
+  }
+}
+
 struct CudaHandles {
   cublasHandle_t cublas;
   cudnnHandle_t cudnn;
@@ -2274,6 +2295,7 @@ struct ComputeContext {
   int nnYLen;
   enabled_t useFP16Mode;
   enabled_t useNHWCMode;
+  string cudaHostWaitPolicy;
 };
 
 ComputeContext* NeuralNet::createComputeContext(
@@ -2288,6 +2310,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
@@ -2314,6 +2337,11 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
   context->useNHWCMode = useNHWCMode;
+  context->cudaHostWaitPolicy = Global::toLower(Global::trim(cudaHostWaitPolicy));
+  if(context->cudaHostWaitPolicy == "blocking_sync" || context->cudaHostWaitPolicy == "blocking-sync" || context->cudaHostWaitPolicy == "blockingsync")
+    context->cudaHostWaitPolicy = "blocking";
+  if(context->cudaHostWaitPolicy.empty())
+    context->cudaHostWaitPolicy = "blocking";
   return context;
 }
 
@@ -2388,6 +2416,17 @@ ComputeHandle* NeuralNet::createComputeHandle(
   if(gpuIdxForThisThread == -1)
     gpuIdxForThisThread = 0;
 
+  const string& cudaHostWaitPolicy = context->cudaHostWaitPolicy;
+  unsigned int cudaHostWaitFlag = getCudaHostWaitFlag(cudaHostWaitPolicy);
+  cudaError_t setDeviceFlagsStatus = cudaSetDeviceFlags(cudaHostWaitFlag);
+  if(setDeviceFlagsStatus == cudaErrorSetOnActiveProcess) {
+    // CUDA was already initialized on this thread, so flags are fixed and cannot be changed now.
+    (void)cudaGetLastError();
+  }
+  else {
+    CUDA_ERR("createComputeHandle",setDeviceFlagsStatus);
+  }
+
   CUDA_ERR("createComputeHandle",cudaSetDevice(gpuIdxForThisThread));
 
   cudaDeviceProp prop;
@@ -2427,6 +2466,18 @@ ComputeHandle* NeuralNet::createComputeHandle(
   }
 
   if(logger != NULL) {
+    if(setDeviceFlagsStatus == cudaSuccess) {
+      logger->write(
+        "Cuda backend thread " + Global::intToString(serverThreadIdx) +
+        ": CUDA host wait policy = " + cudaHostWaitPolicy
+      );
+    }
+    else {
+      logger->write(
+        "Cuda backend thread " + Global::intToString(serverThreadIdx) +
+        ": CUDA host wait policy unchanged (CUDA already active on this thread)"
+      );
+    }
     logger->write(
       "Cuda backend thread " + Global::intToString(serverThreadIdx) + ": Found GPU " + string(prop.name)
       + " memory " + Global::uint64ToString(prop.totalGlobalMem)

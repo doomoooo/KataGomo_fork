@@ -5,14 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./env.sh
 source "${SCRIPT_DIR}/env.sh"
 
-export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
 CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=-1
 TRT_AVG_TIMING_ITERS=-1
 TRT_MAX_AUX_STREAMS=-1
 TRT_SET_TACTIC_SOURCES=true
 TRT_MULTI_PROFILE=true
+TRT_HOST_WAIT_POLICY=blocking
 NN_MAX_BATCHSIZE=4
 NN_MIN_BATCHSIZE=4
 NUM_SEARCH_THREADS=16
@@ -37,6 +36,12 @@ fi
 
 if ! [[ "${TRT_DEVICE_ID}" =~ ^[0-9]+$ ]]; then
   echo "TRT_DEVICE_ID must be a non-negative integer, got: ${TRT_DEVICE_ID}" >&2
+  exit 1
+fi
+
+TRT_HOST_WAIT_POLICY="$(echo "${TRT_HOST_WAIT_POLICY}" | tr '[:upper:]' '[:lower:]')"
+if ! [[ "${TRT_HOST_WAIT_POLICY}" =~ ^(auto|spin|yield|blocking)$ ]]; then
+  echo "TRT_HOST_WAIT_POLICY must be one of: auto|spin|yield|blocking, got: ${TRT_HOST_WAIT_POLICY}" >&2
   exit 1
 fi
 
@@ -91,6 +96,7 @@ OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
+OVERRIDE_CONFIG+=",trtHostWaitPolicy=${TRT_HOST_WAIT_POLICY}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
 OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"

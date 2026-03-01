@@ -36,7 +36,7 @@ Usage: ./build_with_debuginfo.sh [options] [-- <extra-cmake-args>...]
 
 Options:
   --clean               Remove the build directory before configure.
-  --no-deploy           Build only, do not copy to KATAGO_DEPLOY_DIR.
+  --no-deploy           Build only, do not copy to KATAGO_BIN_PATH.
   --jobs <N>            Parallel build jobs (default: nproc).
   --build-dir <DIR>     Build directory (default: cpp/build_dbginfo).
   --help                Show this help.
@@ -107,8 +107,8 @@ LOCAL_BIN="${SCRIPT_DIR}/${BUILD_DIR}/katago"
 
 TARGET_BIN="${LOCAL_BIN}"
 if [[ "${DO_DEPLOY}" == "1" ]]; then
-  DEPLOY_DIR="${KATAGO_DEPLOY_DIR}"
-  TARGET_BIN="${DEPLOY_DIR}/katago"
+  TARGET_BIN="${KATAGO_BIN_PATH}"
+  DEPLOY_DIR="$(dirname "${TARGET_BIN}")"
   print_info "Deploying to ${TARGET_BIN}"
   sudo mkdir -p "${DEPLOY_DIR}"
   sudo cp "${LOCAL_BIN}" "${TARGET_BIN}"

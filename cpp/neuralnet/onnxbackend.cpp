@@ -88,6 +88,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
@@ -102,6 +103,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)homeDataDirOverride;
   (void)openCLReTunePerBoardSize;
   (void)useCudaGraph;
+  (void)cudaHostWaitPolicy;
   (void)trtBuilderOptimizationLevel;
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;

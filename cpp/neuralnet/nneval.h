@@ -106,6 +106,7 @@ class NNEvaluator {
     int defaultSymmetry,
     int backendNumThreads,
     bool useCudaGraph = false,
+    const std::string& cudaHostWaitPolicy = "blocking",
     int trtBuilderOptimizationLevel = -1,
     int trtAvgTimingIterations = -1,
     int trtMaxAuxStreams = -1,

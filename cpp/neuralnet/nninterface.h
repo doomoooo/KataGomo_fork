@@ -60,6 +60,7 @@ namespace NeuralNet {
     enabled_t useFP16Mode,
     enabled_t useNHWCMode,
     bool useCudaGraph,
+    const std::string& cudaHostWaitPolicy,
     int trtBuilderOptimizationLevel,
     int trtAvgTimingIterations,
     int trtMaxAuxStreams,
@@ -122,6 +123,16 @@ namespace NeuralNet {
     NNResultBuf** inputBufs,
     std::vector<NNOutput*>& outputs
   );
+
+#ifdef USE_TENSORRT_BACKEND
+  struct TRTInferenceTiming {
+    double inputPrepareSeconds;
+    double launchAndSyncSeconds;
+    double outputPostprocessSeconds;
+  };
+  // Returns timing of the most recent getOutput() call on this thread.
+  bool getAndResetLastInferenceTiming(TRTInferenceTiming& timing);
+#endif
 
 
   //FOR TESTING -----------------------------------------------------------------------

@@ -7,6 +7,7 @@
 #include "NvOnnxParser.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include "../core/fileutils.h"
 #include "../core/makedir.h"
@@ -21,6 +22,36 @@
 
 using namespace std;
 using namespace nvinfer1;
+
+namespace {
+  struct TRTInferenceTimingTLS {
+    bool hasValue;
+    NeuralNet::TRTInferenceTiming timing;
+  };
+  thread_local TRTInferenceTimingTLS trtInferenceTimingTLS = {
+    false,
+    {0.0,0.0,0.0}
+  };
+
+  unsigned int getCudaHostWaitFlag(const string& policy) {
+    if(policy == "auto") {
+      return cudaDeviceScheduleAuto;
+    }
+    if(policy == "spin") {
+      return cudaDeviceScheduleSpin;
+    }
+    if(policy == "yield") {
+      return cudaDeviceScheduleYield;
+    }
+    if(policy == "blocking") {
+      return cudaDeviceScheduleBlockingSync;
+    }
+    throw StringError(
+      "TensorRT backend: unsupported cudaHostWaitPolicy = " + policy +
+      ", expected one of auto|spin|yield|blocking"
+    );
+  }
+}
 
 // Define this to print out some of the intermediate values of the neural net
 //#define DEBUG_INTERMEDIATE_VALUES
@@ -44,6 +75,14 @@ void NeuralNet::globalCleanup() {
   // Empty for TensorRT backend
 }
 
+bool NeuralNet::getAndResetLastInferenceTiming(TRTInferenceTiming& timing) {
+  if(!trtInferenceTimingTLS.hasValue)
+    return false;
+  timing = trtInferenceTimingTLS.timing;
+  trtInferenceTimingTLS.hasValue = false;
+  return true;
+}
+
 struct ComputeContext {
   int nnXLen;
   int nnYLen;
@@ -55,6 +94,7 @@ struct ComputeContext {
   int trtMaxAuxStreams;
   bool trtSetTacticSources;
   bool trtMultiProfile;
+  string cudaHostWaitPolicy;
   string homeDataDirOverride;
   string onnxModelPath;
   bool isOnnx;
@@ -107,6 +147,7 @@ ComputeContext* NeuralNet::createComputeContext(
   enabled_t useFP16Mode,
   enabled_t useNHWCMode,
   bool useCudaGraph,
+  const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
@@ -145,6 +186,11 @@ ComputeContext* NeuralNet::createComputeContext(
   context->trtMaxAuxStreams = trtMaxAuxStreams;
   context->trtSetTacticSources = trtSetTacticSources;
   context->trtMultiProfile = trtMultiProfile;
+  context->cudaHostWaitPolicy = Global::toLower(Global::trim(cudaHostWaitPolicy));
+  if(context->cudaHostWaitPolicy == "blocking_sync" || context->cudaHostWaitPolicy == "blocking-sync" || context->cudaHostWaitPolicy == "blockingsync")
+    context->cudaHostWaitPolicy = "blocking";
+  if(context->cudaHostWaitPolicy.empty())
+    context->cudaHostWaitPolicy = "blocking";
   context->homeDataDirOverride = homeDataDirOverride;
   context->isOnnx = loadedModel->isOnnx;
   context->onnxModelPath = loadedModel->fileName;
@@ -2166,12 +2212,32 @@ ComputeHandle* NeuralNet::createComputeHandle(
   // Use whatever CUDA believes GPU 0 to be.
   if(gpuIdxForThisThread == -1)
     gpuIdxForThisThread = 0;
+  const string& cudaHostWaitPolicy = context->cudaHostWaitPolicy;
+  unsigned int cudaHostWaitFlag = getCudaHostWaitFlag(cudaHostWaitPolicy);
+  cudaError_t setDeviceFlagsStatus = cudaSetDeviceFlags(cudaHostWaitFlag);
+  if(setDeviceFlagsStatus == cudaErrorSetOnActiveProcess) {
+    // CUDA was already initialized on this thread, so flags are fixed and cannot be changed now.
+    (void)cudaGetLastError();
+  }
+  else {
+    CUDA_ERR("createComputeHandle", setDeviceFlagsStatus);
+  }
   CUDA_ERR("createComputeHandle", cudaSetDevice(gpuIdxForThisThread));
 
   cudaDeviceProp prop;
   CUDA_ERR("createComputeHandle", cudaGetDeviceProperties(&prop, gpuIdxForThisThread));
 
   if(logger != NULL) {
+    if(setDeviceFlagsStatus == cudaSuccess) {
+      logger->write(
+        "TensorRT backend thread " + Global::intToString(serverThreadIdx) +
+        ": CUDA host wait policy = " + cudaHostWaitPolicy);
+    }
+    else {
+      logger->write(
+        "TensorRT backend thread " + Global::intToString(serverThreadIdx) +
+        ": CUDA host wait policy unchanged (CUDA already active on this thread)");
+    }
     logger->write(
       "TensorRT backend thread " + Global::intToString(serverThreadIdx) + ": Found GPU " + string(prop.name) +
       " memory " + Global::uint64ToString(prop.totalGlobalMem) + " compute capability major " +
@@ -2701,6 +2767,9 @@ void NeuralNet::getOutput(
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
   vector<NNOutput*>& outputs) {
+  TRTInferenceTiming localTiming = {0.0,0.0,0.0};
+  auto overallStart = std::chrono::steady_clock::now();
+
   assert(numBatchEltsFilled <= inputBuffers->maxBatchSize);
   assert(numBatchEltsFilled > 0);
 
@@ -2780,6 +2849,8 @@ void NeuralNet::getOutput(
   if(shouldSetInputShapes) {
     gpuHandle->markInputShapeInitializedForBatch(batchSize);
   }
+  auto beforeLaunchAndSync = std::chrono::steady_clock::now();
+  localTiming.inputPrepareSeconds = std::chrono::duration<double>(beforeLaunchAndSync - overallStart).count();
   if(!gpuHandle->useCudaGraph) {
     gpuHandle->enqueueInputCopies(inputBuffers, batchSize);
   }
@@ -2788,6 +2859,8 @@ void NeuralNet::getOutput(
     gpuHandle->enqueueOutputCopies(inputBuffers, batchSize);
   }
   CUDA_ERR("getOutput", cudaStreamSynchronize(cudaStreamPerThread));
+  auto afterLaunchAndSync = std::chrono::steady_clock::now();
+  localTiming.launchAndSyncSeconds = std::chrono::duration<double>(afterLaunchAndSync - beforeLaunchAndSync).count();
 
   gpuHandle->printDebugOutput(batchSize);
   gpuHandle->trtErrorRecorder.clear();
@@ -2950,6 +3023,11 @@ void NeuralNet::getOutput(
       }
     }
   }
+
+  auto overallEnd = std::chrono::steady_clock::now();
+  localTiming.outputPostprocessSeconds = std::chrono::duration<double>(overallEnd - afterLaunchAndSync).count();
+  trtInferenceTimingTLS.timing = localTiming;
+  trtInferenceTimingTLS.hasValue = true;
 }
 
 bool NeuralNet::testEvaluateConv(

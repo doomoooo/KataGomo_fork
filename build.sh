@@ -20,10 +20,7 @@ PGO_GENERATE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-generate=${PGO_PROFILE_DIR}"
 PGO_USE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-use=${PGO_PROFILE_DIR} -fprofile-correction -Wno-error=coverage-mismatch"
 
 # PGO benchmark workload knobs (override via env if needed)
-PGO_BENCH_THREADS="${PGO_BENCH_THREADS:-16}"
-PGO_BENCH_VISITS="${PGO_BENCH_VISITS:-30000}"
-PGO_BENCH_BATCH="${PGO_BENCH_BATCH:-4}"
-PGO_BENCH_STREAMS="${PGO_BENCH_STREAMS:-4}"
+PGO_BENCH_VISITS=1000
 
 # Colors for output
 RED='\033[0;31m'
@@ -102,12 +99,8 @@ run_pgo_training_workload() {
     fi
 
     print_info "Running PGO training workload via benchmark.sh"
-    KATAGO_BIN_PATH_OVERRIDE="${pgo_bin}" \
-    NUM_SEARCH_THREADS="${PGO_BENCH_THREADS}" \
-    BENCH_VISITS="${PGO_BENCH_VISITS}" \
-    NN_MAX_BATCHSIZE="${PGO_BENCH_BATCH}" \
-    NN_MIN_BATCHSIZE="${PGO_BENCH_BATCH}" \
-    TRT_CUDA_STREAMS="${PGO_BENCH_STREAMS}" \
+    PGO_KATAGO_BIN_PATH_OVERRIDE="${pgo_bin}" \
+    PGO_BENCH_VISITS="${PGO_BENCH_VISITS}" \
     "${benchmark_script}"
     if [ $? -ne 0 ]; then
         print_error "PGO training workload failed"

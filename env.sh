@@ -6,11 +6,11 @@
 # 1) TensorRT location
 export TENSORRT_ROOT=/opt/tensorrt
 
-# 2) Deploy location
-export KATAGO_DEPLOY_DIR=/opt/katago_dbginfo
+# 2) KataGo binary location
+export KATAGO_BIN_PATH="/opt/katago_dbginfo/katago"
 
-# 3) KataGo binary location
-export KATAGO_BIN_PATH="${KATAGO_DEPLOY_DIR}/katago"
+# 3) Runtime library search path (shared by all scripts)
+export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # 4) Model location
 export KATAGO_MODEL_PATH="/opt/katago/weights/b18tf.onnx"

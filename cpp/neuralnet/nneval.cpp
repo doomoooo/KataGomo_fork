@@ -75,6 +75,7 @@ NNEvaluator::NNEvaluator(
   int defaultSymmetry,
   int backendNumThr,
   bool useCudaGraph,
+  const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
@@ -172,7 +173,7 @@ NNEvaluator::NNEvaluator(
     computeContext = NeuralNet::createComputeContext(
       gpuIdxs,logger,nnXLen,nnYLen,minBatchSize,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
-      usingFP16Mode,usingNHWCMode,useCudaGraph,
+      usingFP16Mode,usingNHWCMode,useCudaGraph,cudaHostWaitPolicy,
       trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtMultiProfile,
       loadedModel
     );
@@ -507,6 +508,15 @@ void NNEvaluator::serve(
   int64_t numBatchesHandledThisThread = 0;
   int64_t numRowsHandledThisThread = 0;
   vector<int64_t> batchSizeHistogramThisThread((size_t)maxBatchSize + 1, 0);
+  double queueWaitSecondsThisThread = 0.0;
+  double batchPrepareSecondsThisThread = 0.0;
+  double nnCallTotalSecondsThisThread = 0.0;
+  double publishResultsSecondsThisThread = 0.0;
+#ifdef USE_TENSORRT_BACKEND
+  double trtInputPrepareSecondsThisThread = 0.0;
+  double trtLaunchAndSyncSecondsThisThread = 0.0;
+  double trtOutputPostprocessSecondsThisThread = 0.0;
+#endif
 
   ComputeHandle* gpuHandle = NULL;
   if(loadedModel != NULL)
@@ -541,12 +551,14 @@ void NNEvaluator::serve(
     resultBufs.clear();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
     int desiredMinBatchSize = std::min(minBatchSize, desiredBatchSize);
+    auto queueWaitStart = std::chrono::steady_clock::now();
     bool gotAnything = queryQueue.waitPopUpToNWithMin(
       resultBufs,
       (size_t)desiredBatchSize,
       (size_t)desiredMinBatchSize,
       &numOngoingEvalsApprox
     );
+    queueWaitSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - queueWaitStart).count();
     //Queue being closed is a signal that we're done.
     if(!gotAnything)
       break;
@@ -626,6 +638,7 @@ void NNEvaluator::serve(
       }
     }
     else {
+      auto batchPrepareStart = std::chrono::steady_clock::now();
       outputBuf.clear();
       for(int row = 0; row<numRows; row++) {
         NNOutput* emptyOutput = new NNOutput();
@@ -649,7 +662,21 @@ void NNEvaluator::serve(
           }
         }
       }
+      batchPrepareSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - batchPrepareStart).count();
+
+      auto nnCallStart = std::chrono::steady_clock::now();
       NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
+      nnCallTotalSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - nnCallStart).count();
+#ifdef USE_TENSORRT_BACKEND
+      {
+        NeuralNet::TRTInferenceTiming trtTiming;
+        if(NeuralNet::getAndResetLastInferenceTiming(trtTiming)) {
+          trtInputPrepareSecondsThisThread += trtTiming.inputPrepareSeconds;
+          trtLaunchAndSyncSecondsThisThread += trtTiming.launchAndSyncSeconds;
+          trtOutputPostprocessSecondsThisThread += trtTiming.outputPostprocessSeconds;
+        }
+      }
+#endif
       assert(outputBuf.size() == numRows);
 
       m_numRowsProcessed.fetch_add(numRows, std::memory_order_relaxed);
@@ -658,6 +685,7 @@ void NNEvaluator::serve(
       numBatchesHandledThisThread += 1;
       batchSizeHistogramThisThread[(size_t)numRows] += 1;
 
+      auto publishResultsStart = std::chrono::steady_clock::now();
       for(int row = 0; row < numRows; row++) {
         assert(resultBufs[row] != NULL);
         NNResultBuf* resultBuf = resultBufs[row];
@@ -670,6 +698,7 @@ void NNEvaluator::serve(
         resultBuf->clientWaitingForResult.notify_all();
         resultLock.unlock();
       }
+      publishResultsSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - publishResultsStart).count();
     }
 
     //Lock and update stats before looping again
@@ -711,6 +740,41 @@ void NNEvaluator::serve(
         histogram += " empty";
       logger->write(histogram);
     }
+    double timingTotalSeconds =
+      queueWaitSecondsThisThread +
+      batchPrepareSecondsThisThread +
+      nnCallTotalSecondsThisThread +
+      publishResultsSecondsThisThread;
+    if(timingTotalSeconds > 0.0) {
+      logger->write(
+        "GPU " + Global::intToString(gpuIdxForThisThread) +
+        " timing: queueWait " +
+        Global::strprintf("%.3fs(%.1f%%)", queueWaitSecondsThisThread, 100.0 * queueWaitSecondsThisThread / timingTotalSeconds) +
+        " batchPrepare " +
+        Global::strprintf("%.3fs(%.1f%%)", batchPrepareSecondsThisThread, 100.0 * batchPrepareSecondsThisThread / timingTotalSeconds) +
+        " nnCall " +
+        Global::strprintf("%.3fs(%.1f%%)", nnCallTotalSecondsThisThread, 100.0 * nnCallTotalSecondsThisThread / timingTotalSeconds) +
+        " publish " +
+        Global::strprintf("%.3fs(%.1f%%)", publishResultsSecondsThisThread, 100.0 * publishResultsSecondsThisThread / timingTotalSeconds)
+      );
+    }
+#ifdef USE_TENSORRT_BACKEND
+    double trtTimingTotalSeconds =
+      trtInputPrepareSecondsThisThread +
+      trtLaunchAndSyncSecondsThisThread +
+      trtOutputPostprocessSecondsThisThread;
+    if(trtTimingTotalSeconds > 0.0) {
+      logger->write(
+        "GPU " + Global::intToString(gpuIdxForThisThread) +
+        " TensorRT nnCall timing: inputPrepare " +
+        Global::strprintf("%.3fs(%.1f%%)", trtInputPrepareSecondsThisThread, 100.0 * trtInputPrepareSecondsThisThread / trtTimingTotalSeconds) +
+        " launch+sync " +
+        Global::strprintf("%.3fs(%.1f%%)", trtLaunchAndSyncSecondsThisThread, 100.0 * trtLaunchAndSyncSecondsThisThread / trtTimingTotalSeconds) +
+        " outputPostprocess " +
+        Global::strprintf("%.3fs(%.1f%%)", trtOutputPostprocessSecondsThisThread, 100.0 * trtOutputPostprocessSecondsThisThread / trtTimingTotalSeconds)
+      );
+    }
+#endif
   }
 }
 
