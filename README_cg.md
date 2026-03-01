@@ -1,114 +1,172 @@
-# CUDA Graph And Benchmark Notes
+# CUDA Graph And Benchmark Notes (Current Code)
 
-This document summarizes the branch changes introduced after commit `55a48792` (`add QAT settings to onnx proto`), excluding that commit itself.
+This file documents the current behavior in this repo (not a commit-by-commit history).
 
-## New Commits In This Branch
+## Scope
 
-1. `285ca441` - Add TensorRT cudaGraph option with per-batch graph capture
-2. `b9f691af` - benchmark: allow exact fixed batch size values
-3. `085853a5` - Add python benchmark using trtexec
+- Focus: TensorRT backend CUDA Graph behavior, batching knobs, and benchmark tooling.
+- Code paths covered:
+  - `cpp/program/setup.cpp`
+  - `cpp/neuralnet/nneval.cpp`
+  - `cpp/neuralnet/trtbackend.cpp`
+  - `cpp/command/benchmark.cpp`
+  - `run.sh`, `benchmark.sh`, `python/benchmark.py`, `python/visualize_benchmark.py`
 
-## What Changed And How To Use
+## Key Runtime Behavior
 
-### 1) TensorRT cudaGraph option (`285ca441`)
+### `trtUseCudaGraph`
 
-- Added config key: `trtUseCudaGraph`.
-- Added/updated TensorRT build-time option behavior:
-  - `trtBuilderOptimizationLevel`
-  - `trtAvgTimingIterations`
-  - `trtMaxAuxStreams`
-- Behavior:
-  - When enabled, TensorRT pre-captures CUDA Graph for batch sizes `1..nnMaxBatchSize`.
-  - Runtime uses graph launch path when capture succeeds.
-  - Current branch behavior is fail-fast for cudaGraph issues in TensorRT path (no silent fallback), to expose problems during development.
-  - `trtBuilderOptimizationLevel = -1` (default): do not call `setBuilderOptimizationLevel`, use TensorRT default.
-  - `trtAvgTimingIterations = -1` (default): do not call `setAvgTimingIterations`, use TensorRT default.
-  - `trtMaxAuxStreams = -1` (default): do not call `setMaxAuxStreams`, use TensorRT default.
-  - Set explicit values to force calls:
-    - `trtBuilderOptimizationLevel = 0..5`
-    - `trtAvgTimingIterations = 0..1000`
-    - `trtMaxAuxStreams = 0..1024`
-- Usage:
-  - In config file:
-    - `trtUseCudaGraph = true`
-    - `trtBuilderOptimizationLevel = -1`
-    - `trtAvgTimingIterations = -1`
-    - `trtMaxAuxStreams = -1`
-  - Or CLI override:
-    - `-override-config trtUseCudaGraph=true`
-    - `-override-config trtBuilderOptimizationLevel=-1`
-    - `-override-config trtAvgTimingIterations=-1`
-    - `-override-config trtMaxAuxStreams=-1`
+- Config key: `trtUseCudaGraph` (or generic `useCudaGraph` alias via setup parsing).
+- Effective today only on TensorRT backend. Other backends parse but ignore this flag.
+- In `cpp/configs/gtp_example.cfg`, it is enabled by default:
+  - `trtUseCudaGraph = true`
 
-### 2) Benchmark exact fixed batch size (`b9f691af`)
+When enabled in TensorRT:
 
-- `benchmark` now supports exact requested batch size without forced round-up behavior in evaluator init path.
-- Related flags:
-  - `--fixed-batch-size <N>`
-  - `--half-batch-size`
-- Example:
-  - `./katago benchmark -config cpp/configs/gtp_example.cfg -model /path/model.onnx --fixed-batch-size 9 -threads 27`
+- CUDA Graphs are pre-captured at startup for every batch size `1..nnMaxBatchSize`.
+- Capture includes:
+  - H2D input copies (`cudaMemcpyAsync`)
+  - inference launch (`enqueueV3`)
+  - D2H output copies (`cudaMemcpyAsync`)
+- Host input/output arrays are pinned (`cudaMallocHost`) so graph-captured async copies are valid.
+- Runtime executes `cudaGraphLaunch` using pre-captured graph exec objects (no lazy capture in first request path).
+- Failure mode is fail-fast:
+  - capture/instantiate/launch issues throw immediately (no silent fallback path).
+- Startup pre-capture is globally serialized across threads to avoid TensorRT/Myelin legacy-stream race:
+  - `"operation would make the legacy stream depend on a capturing blocking stream"`
 
-### 3) Python TensorRT benchmark pipeline (`085853a5`)
+### `nnMinBatchSize`
 
-- Added:
-  - `python/benchmark.py`
-  - `python/visualize_benchmark.py`
-- Purpose:
-  - Generate/ensure TensorRT plans via `katago gtp`.
-  - Run `trtexec` benchmark across combinations of:
-    - plan batch (`pb`)
-    - infer batch (`ib`)
-    - stream count
-    - cudaGraph mode on/off
-  - Save structured results to JSON.
-- Typical commands:
-  - Run smoke:
-    - `python3 python/benchmark.py --smoke`
-  - Full run:
-    - `python3 python/benchmark.py --katago-bin build/katago --config cpp/configs/gtp_example.cfg --model /path/model.onnx --output-json build/trtexec_benchmark.json`
-  - Visualize:
-    - `python3 python/visualize_benchmark.py --input-json build/trtexec_benchmark.json --output-dir build/benchmark_plots`
+- Config key: `nnMinBatchSize` (default `1`).
+- Constraint: `1 <= nnMinBatchSize <= nnMaxBatchSize`.
+- Queue behavior:
+  - NN server threads try to dequeue at least `nnMinBatchSize` requests.
+  - If queue has fewer, they may wait for more.
+  - They still make forward progress when pending-eval upper bound indicates no more requests are coming immediately.
+- Practical guidance:
+  - Keep at `1` for lower latency.
+  - Increase only if intentionally trading latency for larger effective batch size / throughput.
 
-### 4) Fail-fast cudaGraph behavior (`a7188629`)
+## TensorRT Build/Engine Knobs
 
-- cudaGraph failures in TensorRT path now throw immediately (development-mode fail-fast).
+All are parsed in `setup.cpp` and passed into TensorRT backend.
 
-### 5) cudaGraph startup crash fix (post `a7188629`)
+### `trtBuilderOptimizationLevel`
 
-- Fixed an intermittent TensorRT cudaGraph pre-capture startup crash:
-  - `operation would make the legacy stream depend on a capturing blocking stream`
-  - Seen as warmup failure during pre-capture of some batch sizes.
-- Change:
-  - Serialize pre-capture across NN server threads to avoid the startup race with TensorRT/Myelin internal legacy-stream operations.
-- Impact:
-  - Slightly slower startup pre-capture when multiple NN server threads initialize on the same GPU.
-  - Runtime inference path for this commit stayed unchanged (later updated in section 8).
+- Range: `-1..5`
+- `-1` means do not call `setBuilderOptimizationLevel` (TensorRT default).
 
-### 6) cudaGraph now captures copy + inference
+### `trtAvgTimingIterations`
 
-- TensorRT cudaGraph capture path now includes:
-  - host-to-device input copies
-  - `enqueueV3` inference launch
-  - device-to-host output copies
-- `InputBuffers` host arrays are now allocated as pinned memory (`cudaMallocHost`) to support async copy nodes in graph capture.
-- Graph pre-capture runs during NN server thread initialization (after per-thread `InputBuffers` creation), so the first `getOutput` does not pay capture cost.
+- Range: `-1..1000`
+- `-1` means do not call `setAvgTimingIterations` (TensorRT default).
 
-### 7) NN minimum dequeue batch size (`nnMinBatchSize`)
+### `trtMaxAuxStreams`
 
-- Added config key: `nnMinBatchSize` (default `1`).
-- Behavior:
-  - NN server threads target at least `nnMinBatchSize` requests when dequeuing from the shared NN queue.
-  - If fewer are queued, they wait for more requests.
-  - If no additional requests are pending, they proceed with the currently queued requests to avoid stalling.
-- Guidance:
-  - Keep `nnMinBatchSize = 1` for latency-sensitive use.
-  - Increase only when intentionally trading latency for larger batches / throughput.
+- Range: `-1..1024`
+- `-1` means do not call `setMaxAuxStreams` (TensorRT default).
 
-## Default Config On This Branch
+### `trtSetTacticSources`
 
-The default `gtp` config has been set as:
+- Bool, default `true`.
+- Controls whether backend constrains tactic sources (architecture-dependent path in `trtbackend.cpp`).
 
-- `trtUseCudaGraph = true`
+### `trtMultiProfile`
 
-Location: `cpp/configs/gtp_example.cfg`
+- Bool, default `false`.
+- If enabled:
+  - Build multiple optimization profiles keyed by batch ranges.
+  - Runtime maps each batch size to a specific profile.
+  - Plan cache can reuse a previously built larger-batch multi-profile plan and clip mapping to current `nnMaxBatchSize`.
+
+## Multi-GPU Thread Mapping
+
+- Main knob: `numNNServerThreadsPerModel`.
+- Per-thread device mapping:
+  - `trtDeviceToUseThread0`, `trtDeviceToUseThread1`, ...
+- Also supports model/thread-scoped forms via setup parser, but thread-scoped keys above are the common path.
+
+## Benchmark Command Behavior
+
+`katago benchmark` currently supports exact fixed batch size in evaluator init:
+
+- `-fixed-batch-size <N>`
+- `-half-batch-size`
+
+It no longer forces internal round-up to older alignment heuristics when fixed batch is requested.
+
+Example:
+
+```bash
+./katago benchmark \
+  -config cpp/configs/gtp_example.cfg \
+  -model /path/to/model.onnx \
+  -fixed-batch-size 9 \
+  -threads 27
+```
+
+## Included Scripts
+
+### `run.sh` (GTP run helper)
+
+- Launches `katago gtp` with a composed `-override-config`.
+- Exposes env-editable knobs near top of script:
+  - `TRT_BUILDER_OPT_LEVEL`
+  - `TRT_AVG_TIMING_ITERS`
+  - `TRT_MAX_AUX_STREAMS`
+  - `TRT_SET_TACTIC_SOURCES`
+  - `TRT_MULTI_PROFILE`
+  - `NN_MAX_BATCHSIZE`
+  - `NN_MIN_BATCHSIZE`
+  - `TRT_CUDA_STREAMS`
+  - `TRT_DEVICE_ID`
+- Adds per-thread `trtDeviceToUseThreadN` automatically.
+
+### `benchmark.sh` (KataGo benchmark helper)
+
+- Launches `katago benchmark` with:
+  - `-fixed-batch-size "${NN_MAX_BATCHSIZE}"`
+  - `numNNServerThreadsPerModel=${TRT_CUDA_STREAMS}`
+  - `nnMinBatchSize=${NN_MIN_BATCHSIZE}`
+  - TensorRT tuning overrides listed above.
+
+### `python/benchmark.py` (trtexec matrix runner)
+
+- Can either:
+  - build/ensure plan via `katago gtp`, or
+  - use prebuilt plans via `--plan-file`.
+- Runs `trtexec` over combinations of:
+  - plan batch (`pb`)
+  - infer batch (`ib`)
+  - streams
+  - cuda graph on/off (`--graph-modes off,on`)
+- Persists resumable JSON results with parsed throughput/latency metrics.
+
+Quick smoke:
+
+```bash
+python3 python/benchmark.py --smoke
+```
+
+### `python/visualize_benchmark.py`
+
+- Reads JSON from `python/benchmark.py`.
+- Plots fixed-plan curves by `ib`, split by stream count and graph mode.
+- Default metric is `nn_evals_per_sec` (`throughput_qps * infer_batch`).
+
+Example:
+
+```bash
+python3 python/visualize_benchmark.py \
+  --input-json build/trtexec_benchmark.json \
+  --output-dir build/benchmark_plots
+```
+
+## Practical Defaults In Repo Configs
+
+- `cpp/configs/gtp_example.cfg`:
+  - `trtUseCudaGraph = true` (enabled)
+  - `nnMinBatchSize` documented, default remains `1` unless set.
+- `analysis_example.cfg` / `match_example.cfg`:
+  - include `nnMinBatchSize` docs
+  - keep `trtUseCudaGraph` commented (`false` if explicitly set).
