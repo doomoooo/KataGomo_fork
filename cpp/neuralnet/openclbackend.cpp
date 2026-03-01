@@ -456,6 +456,7 @@ ComputeContext* NeuralNet::createComputeContext(
   Logger* logger,
   int nnXLen,
   int nnYLen,
+  int nnMinBatchSize,
   const string& openCLTunerFile,
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
@@ -469,6 +470,7 @@ ComputeContext* NeuralNet::createComputeContext(
   bool trtMultiProfile,
   const LoadedModel* loadedModel
 ) {
+  (void)nnMinBatchSize;
   (void)useCudaGraph;
   (void)trtBuilderOptimizationLevel;
   (void)trtAvgTimingIterations;

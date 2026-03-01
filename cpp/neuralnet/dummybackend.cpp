@@ -18,6 +18,7 @@ ComputeContext* NeuralNet::createComputeContext(
   Logger* logger,
   int nnXLen,
   int nnYLen,
+  int nnMinBatchSize,
   const string& openCLTunerFile,
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
@@ -35,6 +36,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)logger;
   (void)nnXLen;
   (void)nnYLen;
+  (void)nnMinBatchSize;
   (void)openCLTunerFile;
   (void)homeDataDirOverride;
   (void)openCLReTunePerBoardSize;

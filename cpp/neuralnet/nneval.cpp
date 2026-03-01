@@ -166,7 +166,7 @@ NNEvaluator::NNEvaluator(
     numInputMetaChannels = desc.numInputMetaChannels;
     postProcessParams = desc.postProcessParams;
     computeContext = NeuralNet::createComputeContext(
-      gpuIdxs,logger,nnXLen,nnYLen,
+      gpuIdxs,logger,nnXLen,nnYLen,minBatchSize,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
       usingFP16Mode,usingNHWCMode,useCudaGraph,
       trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtMultiProfile,

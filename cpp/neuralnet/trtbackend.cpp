@@ -7,9 +7,6 @@
 #include "NvOnnxParser.h"
 
 #include <algorithm>
-#include <cerrno>
-#include <cstring>
-#include <unistd.h>
 
 #include "../core/fileutils.h"
 #include "../core/makedir.h"
@@ -50,6 +47,7 @@ void NeuralNet::globalCleanup() {
 struct ComputeContext {
   int nnXLen;
   int nnYLen;
+  int nnMinBatchSize;
   enabled_t useFP16Mode;
   bool useCudaGraph;
   int trtBuilderOptimizationLevel;
@@ -102,6 +100,7 @@ ComputeContext* NeuralNet::createComputeContext(
   Logger* logger,
   int nnXLen,
   int nnYLen,
+  int nnMinBatchSize,
   const string& openCLTunerFile,
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
@@ -122,6 +121,9 @@ ComputeContext* NeuralNet::createComputeContext(
   if(useNHWCMode == enabled_t::True) {
     throw StringError("TensorRT backend: useNHWC = false required, other configurations not supported");
   }
+  if(nnMinBatchSize <= 0) {
+    throw StringError("TensorRT backend: nnMinBatchSize must be >= 1");
+  }
   if(trtBuilderOptimizationLevel < -1 || trtBuilderOptimizationLevel > 5) {
     throw StringError("TensorRT backend: trtBuilderOptimizationLevel must be in [-1,5]");
   }
@@ -135,6 +137,7 @@ ComputeContext* NeuralNet::createComputeContext(
   ComputeContext* context = new ComputeContext();
   context->nnXLen = nnXLen;
   context->nnYLen = nnYLen;
+  context->nnMinBatchSize = nnMinBatchSize;
   context->useFP16Mode = useFP16Mode;
   context->useCudaGraph = useCudaGraph;
   context->trtBuilderOptimizationLevel = trtBuilderOptimizationLevel;
@@ -1328,14 +1331,24 @@ struct ComputeHandle {
       throw StringError("TensorRT backend: failed to create network definition");
     }
 
-    numOptimizationProfiles = ctx->trtMultiProfile ? maxBatchSize : 1;
     optimizationProfiles.clear();
-    optimizationProfiles.reserve((size_t)numOptimizationProfiles);
-    int firstProfileMaxBatch = maxBatchSize - (numOptimizationProfiles - 1);
-    optimizationProfiles.push_back({1, firstProfileMaxBatch, firstProfileMaxBatch});
-    for(int singleBatch = firstProfileMaxBatch + 1; singleBatch <= maxBatchSize; singleBatch++) {
-      optimizationProfiles.push_back({singleBatch, singleBatch, singleBatch});
+    if(ctx->trtMultiProfile) {
+      // Keep low batches dynamic and pin [nnMinBatchSize, maxBatchSize] to static one-batch profiles.
+      const int staticMinBatch = std::max(1, std::min(ctx->nnMinBatchSize, maxBatchSize));
+      const int dynamicMaxBatch = staticMinBatch - 1;
+      optimizationProfiles.reserve((size_t)(maxBatchSize - staticMinBatch + 2));
+      if(dynamicMaxBatch >= 1) {
+        optimizationProfiles.push_back({1, dynamicMaxBatch, dynamicMaxBatch});
+      }
+      for(int staticBatch = staticMinBatch; staticBatch <= maxBatchSize; staticBatch++) {
+        optimizationProfiles.push_back({staticBatch, staticBatch, staticBatch});
+      }
     }
+    else {
+      optimizationProfiles.reserve(1);
+      optimizationProfiles.push_back({1, maxBatchSize, maxBatchSize});
+    }
+    numOptimizationProfiles = (int)optimizationProfiles.size();
     runtimeExecStates.clear();
     runtimeExecStates.resize((size_t)numOptimizationProfiles);
     profileIndexByBatch.assign((size_t)maxBatchSize + 1, 0);
@@ -1533,7 +1546,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d_mp%d_mbs%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1544,7 +1557,9 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32,
             builderOptimizationLevel,
             avgTimingIterations,
-            maxAuxStreamsRequested
+            maxAuxStreamsRequested,
+            ctx->trtMultiProfile ? 1 : 0,
+            ctx->nnMinBatchSize
           );
         }
         else {
@@ -1563,7 +1578,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d_mp%d_mbs%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1574,7 +1589,9 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32,
             builderOptimizationLevel,
             avgTimingIterations,
-            maxAuxStreamsRequested
+            maxAuxStreamsRequested,
+            ctx->trtMultiProfile ? 1 : 0,
+            ctx->nnMinBatchSize
           );
         }
       };
@@ -1628,62 +1645,7 @@ struct ComputeHandle {
       string paramStr;
       buildPlanCacheFileAndParam(maxBatchSize, planCacheFile, paramStr);
 
-      string loadedFromPlanCacheFile = planCacheFile;
-      bool loadedFromReusableHigherBatchPlan = false;
-      bool loadedFromExistingPlan = tryLoadValidatedPlan(planCacheFile, paramStr, true, plan);
-      if(!loadedFromExistingPlan && ctx->trtMultiProfile) {
-        string planCacheFileBaseName = planCacheFile;
-        size_t slashPos = planCacheFileBaseName.find_last_of("/\\");
-        if(slashPos != string::npos) {
-          planCacheFileBaseName = planCacheFileBaseName.substr(slashPos + 1);
-        }
-
-        const size_t batchPos = planCacheFileBaseName.rfind("_batch");
-        const size_t fpPos = batchPos == string::npos ? string::npos : planCacheFileBaseName.find("_fp", batchPos);
-        if(batchPos != string::npos && fpPos != string::npos && fpPos > batchPos + 6) {
-          const string batchPrefix = planCacheFileBaseName.substr(0, batchPos + 6);
-          const string batchSuffix = planCacheFileBaseName.substr(fpPos);
-
-          vector<int> candidateBatches;
-          vector<string> filesInCacheDir;
-          try {
-            filesInCacheDir = FileUtils::listFiles(cacheDir);
-          } catch(const StringError& e) {
-            (void)e;
-          }
-
-          for(const string& cacheFileName : filesInCacheDir) {
-            if(!Global::isPrefix(cacheFileName, batchPrefix) || !Global::isSuffix(cacheFileName, batchSuffix)) {
-              continue;
-            }
-            if(cacheFileName.size() <= batchPrefix.size() + batchSuffix.size()) {
-              continue;
-            }
-            string batchStr = cacheFileName.substr(
-              batchPrefix.size(),
-              cacheFileName.size() - batchPrefix.size() - batchSuffix.size()
-            );
-            int candidateBatch = 0;
-            if(!Global::tryStringToInt(batchStr, candidateBatch) || candidateBatch <= maxBatchSize) {
-              continue;
-            }
-            candidateBatches.push_back(candidateBatch);
-          }
-
-          std::sort(candidateBatches.begin(), candidateBatches.end());
-          candidateBatches.erase(std::unique(candidateBatches.begin(), candidateBatches.end()), candidateBatches.end());
-          for(int candidateBatch : candidateBatches) {
-            string candidatePlanCacheFile;
-            string candidateParamStr;
-            buildPlanCacheFileAndParam(candidateBatch, candidatePlanCacheFile, candidateParamStr);
-            if(tryLoadValidatedPlan(candidatePlanCacheFile, candidateParamStr, false, plan)) {
-              loadedFromPlanCacheFile = candidatePlanCacheFile;
-              loadedFromReusableHigherBatchPlan = true;
-              break;
-            }
-          }
-        }
-      }
+      tryLoadValidatedPlan(planCacheFile, paramStr, true, plan);
 
       if(plan.size() <= 0) {
         logger->write("Creating new plan cache");
@@ -1715,28 +1677,8 @@ struct ComputeHandle {
         plan.erase(plan.size() - 64 - paramStr.size());
         tuneMutex.unlock();
       } else {
-        if(loadedFromReusableHigherBatchPlan && loadedFromPlanCacheFile != planCacheFile && logger != nullptr) {
-          logger->write(
-            "TensorRT backend: reusing cached multi-profile plan from " + loadedFromPlanCacheFile +
-            " for requested maxBatchSize=" + Global::intToString(maxBatchSize)
-          );
-          if(!FileUtils::exists(planCacheFile)) {
-            if(::symlink(loadedFromPlanCacheFile.c_str(), planCacheFile.c_str()) == 0) {
-              logger->write(
-                "TensorRT backend: created plan cache symlink " + planCacheFile +
-                " -> " + loadedFromPlanCacheFile
-              );
-            }
-            else if(errno != EEXIST) {
-              logger->write(
-                "TensorRT backend: failed to create plan cache symlink " + planCacheFile +
-                " -> " + loadedFromPlanCacheFile + " error: " + string(strerror(errno))
-              );
-            }
-          }
-        }
         tuneMutex.unlock();
-        logger->write("Using existing plan cache at " + loadedFromPlanCacheFile);
+        logger->write("Using existing plan cache at " + planCacheFile);
       }
 #else
       string timingCacheFile = "";
@@ -1864,9 +1806,6 @@ struct ComputeHandle {
       }
     }
 
-    int configuredProfileCount = numOptimizationProfiles;
-    rebuildProfileMappingFromEngine(configuredProfileCount);
-
     if(useCudaGraph) {
       sharedExecDeviceMemoryBytes = engine->getDeviceMemorySizeV2();
       if(sharedExecDeviceMemoryBytes < 0) {
@@ -1970,120 +1909,6 @@ struct ComputeHandle {
       throw StringError("TensorRT backend: no optimization profile mapped for batch size " + Global::intToString(batchSize));
     }
     return profileIndex;
-  }
-
-  void rebuildProfileMappingFromEngine(int configuredProfileCount) {
-    int engineProfileCount = engine->getNbOptimizationProfiles();
-    if(engineProfileCount <= 0) {
-      throw StringError("TensorRT backend: engine has no optimization profiles");
-    }
-
-    vector<string> inputTensorNames;
-    inputTensorNames.reserve((size_t)engine->getNbIOTensors());
-    for(int i = 0; i < engine->getNbIOTensors(); i++) {
-      const char* name = engine->getIOTensorName(i);
-      if(engine->getTensorIOMode(name) == TensorIOMode::kINPUT) {
-        inputTensorNames.emplace_back(name);
-      }
-    }
-    if(inputTensorNames.empty()) {
-      throw StringError("TensorRT backend: engine has no input tensors");
-    }
-
-    optimizationProfiles.clear();
-    optimizationProfiles.reserve((size_t)engineProfileCount);
-    int engineMaxBatch = 0;
-    for(int profileIndex = 0; profileIndex < engineProfileCount; profileIndex++) {
-      int minBatch = -1;
-      int optBatch = -1;
-      int maxBatch = -1;
-      for(const string& inputName : inputTensorNames) {
-        Dims minDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kMIN);
-        Dims optDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kOPT);
-        Dims maxDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kMAX);
-        if(minDims.nbDims <= 0 || optDims.nbDims <= 0 || maxDims.nbDims <= 0) {
-          throw StringError(
-            "TensorRT backend: invalid profile dimensions from engine for input " + inputName +
-            " profile " + Global::intToString(profileIndex)
-          );
-        }
-        int tensorMinBatch = minDims.d[0];
-        int tensorOptBatch = optDims.d[0];
-        int tensorMaxBatch = maxDims.d[0];
-        if(minBatch < 0) {
-          minBatch = tensorMinBatch;
-          optBatch = tensorOptBatch;
-          maxBatch = tensorMaxBatch;
-        }
-        else if(
-          tensorMinBatch != minBatch ||
-          tensorOptBatch != optBatch ||
-          tensorMaxBatch != maxBatch
-        ) {
-          throw StringError(
-            "TensorRT backend: inconsistent batch dimension profile in engine for input " + inputName +
-            " profile " + Global::intToString(profileIndex)
-          );
-        }
-      }
-
-      if(minBatch <= 0 || optBatch <= 0 || maxBatch <= 0) {
-        throw StringError(
-          "TensorRT backend: invalid non-positive profile batch range in engine for profile " +
-          Global::intToString(profileIndex)
-        );
-      }
-      if(minBatch > optBatch || optBatch > maxBatch) {
-        throw StringError(
-          "TensorRT backend: invalid profile order min/opt/max in engine for profile " +
-          Global::intToString(profileIndex)
-        );
-      }
-      if(maxBatch > engineMaxBatch) {
-        engineMaxBatch = maxBatch;
-      }
-
-      optimizationProfiles.push_back({minBatch, optBatch, maxBatch});
-    }
-
-    profileIndexByBatch.assign((size_t)maxBatchSize + 1, -1);
-    for(int batch = 1; batch <= maxBatchSize; batch++) {
-      int selectedProfile = -1;
-      for(int profileIndex = 0; profileIndex < engineProfileCount; profileIndex++) {
-        const ProfileBatchRange& range = optimizationProfiles[(size_t)profileIndex];
-        if(batch >= range.minBatch && batch <= range.maxBatch) {
-          selectedProfile = profileIndex;
-          break;
-        }
-      }
-      if(selectedProfile < 0) {
-        throw StringError(
-          "TensorRT backend: engine optimization profiles do not cover batch size " + Global::intToString(batch)
-        );
-      }
-      profileIndexByBatch[(size_t)batch] = selectedProfile;
-    }
-
-    numOptimizationProfiles = engineProfileCount;
-    runtimeExecStates.clear();
-    runtimeExecStates.resize((size_t)numOptimizationProfiles);
-
-    if(logger != nullptr) {
-      if(engineProfileCount != configuredProfileCount) {
-        logger->write(
-          "TensorRT backend: using optimization profiles from cached plan (engineProfiles=" +
-          Global::intToString(engineProfileCount) +
-          ", configuredProfiles=" + Global::intToString(configuredProfileCount) + ")"
-        );
-      }
-      if(engineMaxBatch > maxBatchSize) {
-        logger->write(
-          "TensorRT backend: cached plan supports maxBatch=" + Global::intToString(engineMaxBatch) +
-          ", runtime configured maxBatch=" + Global::intToString(maxBatchSize) +
-          ", clipping runtime profile mapping to configured maxBatch"
-        );
-      }
-    }
   }
 
   void initializeExecutionContext(IExecutionContext* targetExec, int profileIndex, vector<cudaStream_t>* targetAuxStreams) {

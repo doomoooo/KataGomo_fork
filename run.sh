@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export LD_LIBRARY_PATH="/opt/tensorrt/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=-1
 TRT_AVG_TIMING_ITERS=-1

@@ -53,6 +53,7 @@ namespace NeuralNet {
     Logger* logger,
     int nnXLen,
     int nnYLen,
+    int nnMinBatchSize,
     const std::string& openCLTunerFile,
     const std::string& homeDataDirOverride,
     bool openCLReTunePerBoardSize,
