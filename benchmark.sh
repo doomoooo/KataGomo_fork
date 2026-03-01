@@ -7,7 +7,7 @@ TRT_AVG_TIMING_ITERS=0
 TRT_MAX_AUX_STREAMS=0
 TRT_SET_TACTIC_SOURCES=true
 TRT_MULTI_PROFILE=true
-NN_MAX_BATCHSIZE=16
+NN_MAX_BATCHSIZE=4
 NN_MIN_BATCHSIZE=4
 NUM_SEARCH_THREADS=20
 TRT_CUDA_STREAMS=4
@@ -59,7 +59,7 @@ OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 
 /opt/katago/katago benchmark \
-  -model /opt/katago/weight/b28.bin.gz \
+  -model /opt/katago/weight/b18tf.onnx \
   -config /opt/katago/config/gtp_example.cfg \
   -v 10000 \
   -t "${NUM_SEARCH_THREADS}" \

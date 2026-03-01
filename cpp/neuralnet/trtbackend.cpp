@@ -1332,14 +1332,6 @@ struct ComputeHandle {
       for(int batch = range.minBatch; batch <= range.maxBatch; batch++) {
         profileIndexByBatch[(size_t)batch] = profileIndex;
       }
-      if(logger != nullptr) {
-        logger->write(
-          "TensorRT backend: optimization profile " + Global::intToString(profileIndex) +
-          " min=" + Global::intToString(range.minBatch) +
-          " opt=" + Global::intToString(range.optBatch) +
-          " max=" + Global::intToString(range.maxBatch)
-        );
-      }
     }
 
     unique_ptr<TRTModel> model;
@@ -2065,15 +2057,6 @@ struct ComputeHandle {
           "TensorRT backend: cached plan supports maxBatch=" + Global::intToString(engineMaxBatch) +
           ", runtime configured maxBatch=" + Global::intToString(maxBatchSize) +
           ", clipping runtime profile mapping to configured maxBatch"
-        );
-      }
-      for(int profileIndex = 0; profileIndex < numOptimizationProfiles; profileIndex++) {
-        const ProfileBatchRange& range = optimizationProfiles[(size_t)profileIndex];
-        logger->write(
-          "TensorRT backend: runtime optimization profile " + Global::intToString(profileIndex) +
-          " min=" + Global::intToString(range.minBatch) +
-          " opt=" + Global::intToString(range.optBatch) +
-          " max=" + Global::intToString(range.maxBatch)
         );
       }
     }
