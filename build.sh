@@ -8,9 +8,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/env.sh"
 
 # Configuration
-BUILD_DIR="cpp/build"
-DEPLOY_DIR="${KATAGO_DEPLOY_DIR}"
-KATAGO_BIN="${KATAGO_DEPLOY_DIR}/katago"
+BUILD_DIR="${SCRIPT_DIR}/cpp/build"
+PGO_GEN_BUILD_DIR="${SCRIPT_DIR}/cpp/build_pgo_gen"
+PGO_PROFILE_DIR="${SCRIPT_DIR}/cpp/pgo_profiles"
+KATAGO_BIN="${KATAGO_BIN_PATH}"
+DEPLOY_DIR="$(dirname "${KATAGO_BIN}")"
+NUM_JOBS="${NUM_JOBS:-$(nproc)}"
+
+BASE_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fomit-frame-pointer"
+PGO_GENERATE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-generate=${PGO_PROFILE_DIR}"
+PGO_USE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-use=${PGO_PROFILE_DIR} -fprofile-correction -Wno-error=coverage-mismatch"
+
+# PGO benchmark workload knobs (override via env if needed)
+PGO_BENCH_THREADS="${PGO_BENCH_THREADS:-16}"
+PGO_BENCH_VISITS="${PGO_BENCH_VISITS:-30000}"
+PGO_BENCH_BATCH="${PGO_BENCH_BATCH:-4}"
+PGO_BENCH_STREAMS="${PGO_BENCH_STREAMS:-4}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,8 +64,62 @@ ensure_tcmalloc() {
     fi
 }
 
+configure_and_build() {
+    local build_dir="$1"
+    local c_flags_release="$2"
+    local cxx_flags_release="$3"
+
+    print_info "Configuring CMake in ${build_dir}"
+    cmake -S "${SCRIPT_DIR}/cpp" -B "${build_dir}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+        -DCMAKE_C_FLAGS_RELEASE="${c_flags_release}" \
+        -DCMAKE_CXX_FLAGS_RELEASE="${cxx_flags_release}" \
+        -DUSE_BACKEND=TENSORRT \
+        -DUSE_AVX2=1 \
+        -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
+        -DTENSORRT_LIBRARY="${TENSORRT_ROOT}/lib/libnvinfer.so" \
+        -DTENSORRT_ONNX_LIBRARY="${TENSORRT_ROOT}/lib/libnvonnxparser.so"
+    if [ $? -ne 0 ]; then
+        print_error "CMake configuration failed for ${build_dir}"
+    fi
+
+    print_info "Compiling KataGomo in ${build_dir} with ${NUM_JOBS} jobs"
+    cmake --build "${build_dir}" --parallel "${NUM_JOBS}"
+    if [ $? -ne 0 ]; then
+        print_error "Compilation failed for ${build_dir}"
+    fi
+}
+
+run_pgo_training_workload() {
+    local pgo_bin="${PGO_GEN_BUILD_DIR}/katago"
+    local benchmark_script="${SCRIPT_DIR}/benchmark.sh"
+    if [ ! -x "${pgo_bin}" ]; then
+        print_error "Instrumented PGO binary not found: ${pgo_bin}"
+    fi
+    if [ ! -x "${benchmark_script}" ]; then
+        print_error "benchmark.sh not found or not executable: ${benchmark_script}"
+    fi
+
+    print_info "Running PGO training workload via benchmark.sh"
+    KATAGO_BIN_PATH_OVERRIDE="${pgo_bin}" \
+    NUM_SEARCH_THREADS="${PGO_BENCH_THREADS}" \
+    BENCH_VISITS="${PGO_BENCH_VISITS}" \
+    NN_MAX_BATCHSIZE="${PGO_BENCH_BATCH}" \
+    NN_MIN_BATCHSIZE="${PGO_BENCH_BATCH}" \
+    TRT_CUDA_STREAMS="${PGO_BENCH_STREAMS}" \
+    "${benchmark_script}"
+    if [ $? -ne 0 ]; then
+        print_error "PGO training workload failed"
+    fi
+
+    if ! find "${PGO_PROFILE_DIR}" -type f -name "*.gcda" | grep -q .; then
+        print_error "No PGO profile data (*.gcda) was generated in ${PGO_PROFILE_DIR}"
+    fi
+}
+
 # Check if we're in the right directory
-if [ ! -d "cpp" ]; then
+if [ ! -d "${SCRIPT_DIR}/cpp" ]; then
     print_error "This script must be run from the root directory of the KataGomo repository"
 fi
 
@@ -61,31 +128,20 @@ main() {
     print_info "Starting KataGomo build process"
     # ensure_tcmalloc
 
-    # Prepare build directory
+    # Prepare build directories and fresh PGO profile output
     print_info "Preparing build environment"
-    mkdir -p "${BUILD_DIR}"
+    mkdir -p "${BUILD_DIR}" "${PGO_GEN_BUILD_DIR}"
+    rm -rf "${PGO_PROFILE_DIR}"
+    mkdir -p "${PGO_PROFILE_DIR}"
 
-    # Configure CMake
-    print_info "Configuring CMake"
-    cd "${BUILD_DIR}"
-    cmake .. \
-        -DUSE_BACKEND=TENSORRT \
-        -DUSE_AVX2=1 \
-        -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
-        -DTENSORRT_LIBRARY="${TENSORRT_ROOT}/lib/libnvinfer.so" \
-        -DTENSORRT_ONNX_LIBRARY="${TENSORRT_ROOT}/lib/libnvonnxparser.so"
+    # Stage 1: build instrumented binary to generate PGO profiles
+    configure_and_build "${PGO_GEN_BUILD_DIR}" "${PGO_GENERATE_FLAGS}" "${PGO_GENERATE_FLAGS}"
 
-    if [ $? -ne 0 ]; then
-        print_error "CMake configuration failed"
-    fi
+    # Stage 2: run representative workload to collect profile data
+    run_pgo_training_workload
 
-    # Build
-    print_info "Compiling KataGomo"
-    make -j$(nproc)
-
-    if [ $? -ne 0 ]; then
-        print_error "Compilation failed"
-    fi
+    # Stage 3: rebuild optimized binary using generated profile + LTO + native
+    configure_and_build "${BUILD_DIR}" "${PGO_USE_FLAGS}" "${PGO_USE_FLAGS}"
 
     # print_info "Checking tcmalloc linkage"
     # ldd katago | grep -q "libtcmalloc_minimal"
@@ -97,7 +153,7 @@ main() {
     print_info "Deploying to ${DEPLOY_DIR}"
     sudo mkdir -p "${DEPLOY_DIR}"
     sudo rm -f "${KATAGO_BIN}"
-    sudo cp katago "${KATAGO_BIN}"
+    sudo cp "${BUILD_DIR}/katago" "${KATAGO_BIN}"
     sudo chmod +x "${KATAGO_BIN}"
 
     # Verify installation
