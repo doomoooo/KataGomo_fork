@@ -448,7 +448,13 @@ void Search::selectBestChildToDescend(
     parentUtility, parentWeightPerVisit, parentUtilityStdevFactor
   );
 
-  bool posesWithChildBuf[NNPos::MAX_NN_POLICY_SIZE] = { }; // Initialize all to false
+  // Reuse a per-thread epoch buffer instead of zeroing an entire boolean array per call.
+  uint16_t posesWithChildEpoch = (uint16_t)(thread.posesWithChildCurEpoch + 1);
+  if(posesWithChildEpoch == 0) {
+    thread.posesWithChildEpoch.fill(0);
+    posesWithChildEpoch = 1;
+  }
+  thread.posesWithChildCurEpoch = posesWithChildEpoch;
   bool antiMirror = searchParams.antiMirror && mirroringPla != C_EMPTY && isMirroringSinceSearchStart(thread.history,0);
 
   double exploreScaling;
@@ -460,6 +466,8 @@ void Search::selectBestChildToDescend(
   //Try all existing children
   //Also count how many children we actually find
   numChildrenFound = 0;
+  bool hasPassMove = false;
+  bool hasNonPassMove = false;
   for(int i = 0; i<childrenCapacity; i++) {
     const SearchChildPointer& childPointer = children[i];
     const SearchNode* child = childPointer.getIfAllocated();
@@ -492,7 +500,11 @@ void Search::selectBestChildToDescend(
       bestChildMoveLoc = moveLoc;
     }
 
-    posesWithChildBuf[getPos(moveLoc)] = true;
+    thread.posesWithChildEpoch[getPos(moveLoc)] = posesWithChildEpoch;
+    if(moveLoc == Board::PASS_LOC)
+      hasPassMove = true;
+    else
+      hasNonPassMove = true;
   }
 
   const std::vector<int>& avoidMoveUntilByLoc = thread.pla == P_BLACK ? avoidMoveUntilByLocBlack : avoidMoveUntilByLocWhite;
@@ -504,7 +516,7 @@ void Search::selectBestChildToDescend(
     for(const auto& pair: node.evalCacheEntry->firstExploreEvals) {
       Loc moveLoc = pair.first;
       int movePos = getPos(moveLoc);
-      bool alreadyTried = posesWithChildBuf[movePos];
+      bool alreadyTried = thread.posesWithChildEpoch[movePos] == posesWithChildEpoch;
       if(alreadyTried)
         continue;
 
@@ -553,11 +565,11 @@ void Search::selectBestChildToDescend(
   Loc bestNewMoveLoc = Board::NULL_LOC;
   float bestNewNNPolicyProb = -1.0f;
   for(int movePos = 0; movePos<policySize; movePos++) {
-    bool alreadyTried = posesWithChildBuf[movePos];
+    bool alreadyTried = thread.posesWithChildEpoch[movePos] == posesWithChildEpoch;
     if(alreadyTried)
       continue;
 
-    Loc moveLoc = NNPos::posToLoc(movePos,thread.board.x_size,thread.board.y_size,nnXLen,nnYLen);
+    Loc moveLoc = getLocFromPolicyPos(movePos);
     if(moveLoc == Board::NULL_LOC)
       continue;
 
@@ -611,19 +623,6 @@ void Search::selectBestChildToDescend(
      thread.history.passWouldEndPhase(thread.board,thread.pla) &&
      avoidMoveUntilByLoc.size() == 0 // Don't force playouts if there's any chance we're specifying specific moves since we don't want to force an avoided move
   ) {
-    bool hasPassMove = false;
-    bool hasNonPassMove = false;
-    for(int i = 0; i<childrenCapacity; i++) {
-      const SearchChildPointer& childPointer = children[i];
-      const SearchNode* child = childPointer.getIfAllocated();
-      if(child == NULL)
-        break;
-      Loc moveLoc = childPointer.getMoveLocRelaxed();
-      if(moveLoc == Board::PASS_LOC)
-        hasPassMove = true;
-      else
-        hasNonPassMove = true;
-    }
     if(!hasPassMove && bestChildMoveLoc != Board::PASS_LOC && bestChildMoveLoc != Board::NULL_LOC) {
       bestChildIdx = numChildrenFound;
       bestChildMoveLoc = Board::PASS_LOC;

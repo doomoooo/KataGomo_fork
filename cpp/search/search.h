@@ -1,6 +1,7 @@
 #ifndef SEARCH_SEARCH_H_
 #define SEARCH_SEARCH_H_
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <unordered_set>
@@ -60,6 +61,8 @@ struct SearchThread {
 
   NNResultBuf nnResultBuf;
   std::vector<MoreNodeStats> statsBuf;
+  std::array<uint16_t,NNPos::MAX_NN_POLICY_SIZE> posesWithChildEpoch;
+  uint16_t posesWithChildCurEpoch;
 
   double upperBoundVisitsLeft;
 
@@ -153,6 +156,8 @@ struct Search {
   int nnXLen;
   int nnYLen;
   int policySize;
+  std::array<int,Board::MAX_ARR_SIZE> policyPosByLoc;
+  std::array<Loc,NNPos::MAX_NN_POLICY_SIZE> locByPolicyPos;
 
   //================================================================================================================
   // Mutated during search
@@ -217,6 +222,7 @@ struct Search {
 
   //Get the NNPos corresponding to a loc, convenience method
   int getPos(Loc moveLoc) const;
+  Loc getLocFromPolicyPos(int movePos) const;
 
   //Clear all results of search and sets a new position or something else
   void setPosition(Player pla, const Board& board, const BoardHistory& history);

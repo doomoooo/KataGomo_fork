@@ -45,6 +45,8 @@ SearchThread::SearchThread(int tIdx, const Search& search)
    rand(makeSeed(search,tIdx)),
    nnResultBuf(),
    statsBuf(),
+   posesWithChildEpoch(),
+   posesWithChildCurEpoch(0),
    upperBoundVisitsLeft(1e30),
    oldNNOutputsToCleanUp(),
    illegalMoveHashes()
@@ -100,6 +102,8 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
    nnXLen(),
    nnYLen(),
    policySize(),
+   policyPosByLoc(),
+   locByPolicyPos(),
    rootNode(NULL),
    nodeTable(NULL),
    mutexPool(NULL),
@@ -141,6 +145,13 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
 
   rootHistory.clear(rootBoard,rootPla,Rules(),0);
   rootKoHashTable->recompute(rootHistory);
+
+  for(int loc = 0; loc<Board::MAX_ARR_SIZE; loc++)
+    policyPosByLoc[loc] = NNPos::locToPos((Loc)loc,rootBoard.x_size,nnXLen,nnYLen);
+  for(int movePos = 0; movePos<NNPos::MAX_NN_POLICY_SIZE; movePos++)
+    locByPolicyPos[movePos] = Board::NULL_LOC;
+  for(int movePos = 0; movePos<policySize; movePos++)
+    locByPolicyPos[movePos] = NNPos::posToLoc(movePos,rootBoard.x_size,rootBoard.y_size,nnXLen,nnYLen);
 }
 
 Search::~Search() {
@@ -172,7 +183,15 @@ Player Search::getPlayoutDoublingAdvantagePla() const {
 }
 
 int Search::getPos(Loc moveLoc) const {
+  if(moveLoc >= 0 && moveLoc < Board::MAX_ARR_SIZE)
+    return policyPosByLoc[moveLoc];
   return NNPos::locToPos(moveLoc,rootBoard.x_size,nnXLen,nnYLen);
+}
+
+Loc Search::getLocFromPolicyPos(int movePos) const {
+  if(movePos >= 0 && movePos < policySize)
+    return locByPolicyPos[movePos];
+  return Board::NULL_LOC;
 }
 
 void Search::setPosition(Player pla, const Board& board, const BoardHistory& history) {
@@ -182,6 +201,12 @@ void Search::setPosition(Player pla, const Board& board, const BoardHistory& his
   rootBoard = board;
   rootHistory = history;
   rootKoHashTable->recompute(rootHistory);
+  for(int loc = 0; loc<Board::MAX_ARR_SIZE; loc++)
+    policyPosByLoc[loc] = NNPos::locToPos((Loc)loc,rootBoard.x_size,nnXLen,nnYLen);
+  for(int movePos = 0; movePos<NNPos::MAX_NN_POLICY_SIZE; movePos++)
+    locByPolicyPos[movePos] = Board::NULL_LOC;
+  for(int movePos = 0; movePos<policySize; movePos++)
+    locByPolicyPos[movePos] = NNPos::posToLoc(movePos,rootBoard.x_size,rootBoard.y_size,nnXLen,nnYLen);
   avoidMoveUntilByLocBlack.clear();
   avoidMoveUntilByLocWhite.clear();
 }
@@ -289,6 +314,12 @@ void Search::setNNEval(NNEvaluator* nnEval) {
   assert(nnXLen > 0 && nnXLen <= NNPos::MAX_BOARD_LEN);
   assert(nnYLen > 0 && nnYLen <= NNPos::MAX_BOARD_LEN);
   policySize = NNPos::getPolicySize(nnXLen,nnYLen);
+  for(int loc = 0; loc<Board::MAX_ARR_SIZE; loc++)
+    policyPosByLoc[loc] = NNPos::locToPos((Loc)loc,rootBoard.x_size,nnXLen,nnYLen);
+  for(int movePos = 0; movePos<NNPos::MAX_NN_POLICY_SIZE; movePos++)
+    locByPolicyPos[movePos] = Board::NULL_LOC;
+  for(int movePos = 0; movePos<policySize; movePos++)
+    locByPolicyPos[movePos] = NNPos::posToLoc(movePos,rootBoard.x_size,rootBoard.y_size,nnXLen,nnYLen);
 
   if(humanEvaluator != NULL) {
     if(humanEvaluator->getNNXLen() != nnXLen || humanEvaluator->getNNYLen() != nnYLen)
