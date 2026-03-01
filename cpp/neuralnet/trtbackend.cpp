@@ -30,8 +30,6 @@ using namespace nvinfer1;
 
 #define CACHE_TENSORRT_PLAN
 
-const int TensorRT_BuilderOptimizationLevel = 3; //0 for fast init, 2 is default, 5 is max
-
 static void checkCudaError(const cudaError_t status, const char* opName, const char* file, const char* func, int line) {
   if(status != cudaSuccess)
     throw StringError(
@@ -123,6 +121,15 @@ ComputeContext* NeuralNet::createComputeContext(
 
   if(useNHWCMode == enabled_t::True) {
     throw StringError("TensorRT backend: useNHWC = false required, other configurations not supported");
+  }
+  if(trtBuilderOptimizationLevel < -1 || trtBuilderOptimizationLevel > 5) {
+    throw StringError("TensorRT backend: trtBuilderOptimizationLevel must be in [-1,5]");
+  }
+  if(trtAvgTimingIterations < -1) {
+    throw StringError("TensorRT backend: trtAvgTimingIterations must be >= -1");
+  }
+  if(trtMaxAuxStreams < -1) {
+    throw StringError("TensorRT backend: trtMaxAuxStreams must be >= -1");
   }
 
   ComputeContext* context = new ComputeContext();
@@ -1229,7 +1236,7 @@ struct ComputeHandle {
 
     maxBatchSize = maxBatchSz;
     modelVersion = loadedModel->modelDesc.modelVersion;
-    maxAuxStreamsRequested = 0;
+    maxAuxStreamsRequested = -1;
     engineAuxStreamsUsed = 0;
     numOptimizationProfiles = 1;
     profileIndexByBatch.clear();
@@ -1274,12 +1281,17 @@ struct ComputeHandle {
     const int avgTimingIterations = ctx->trtAvgTimingIterations;
     maxAuxStreamsRequested = ctx->trtMaxAuxStreams;
     if(logger != nullptr) {
-      string avgTimingDesc = avgTimingIterations > 0 ? Global::intToString(avgTimingIterations) : "default";
+      string builderOptimizationDesc =
+        builderOptimizationLevel >= 0 ? Global::intToString(builderOptimizationLevel) : "unset(default)";
+      string avgTimingDesc =
+        avgTimingIterations >= 0 ? Global::intToString(avgTimingIterations) : "unset(default)";
+      string maxAuxStreamsDesc =
+        maxAuxStreamsRequested >= 0 ? Global::intToString(maxAuxStreamsRequested) : "unset(default)";
       logger->write(
-        "TensorRT backend: builderOptimizationLevel=" + Global::intToString(builderOptimizationLevel) +
+        "TensorRT backend: builderOptimizationLevel=" + builderOptimizationDesc +
         " avgTimingIterations=" + avgTimingDesc +
         " maxThreads=" + Global::intToString(builderMaxThreads) +
-        " maxAuxStreams=" + Global::intToString(maxAuxStreamsRequested) +
+        " maxAuxStreams=" + maxAuxStreamsDesc +
         " setTacticSources=" + Global::boolToString(ctx->trtSetTacticSources) +
         " multiProfile=" + Global::boolToString(ctx->trtMultiProfile)
       );
@@ -1458,11 +1470,15 @@ struct ComputeHandle {
     }
 #endif
     }
-    config->setBuilderOptimizationLevel(builderOptimizationLevel);
-    if(avgTimingIterations > 0) {
+    if(builderOptimizationLevel >= 0) {
+      config->setBuilderOptimizationLevel(builderOptimizationLevel);
+    }
+    if(avgTimingIterations >= 0) {
       config->setAvgTimingIterations(avgTimingIterations);
     }
-    config->setMaxAuxStreams(maxAuxStreamsRequested);
+    if(maxAuxStreamsRequested >= 0) {
+      config->setMaxAuxStreams(maxAuxStreamsRequested);
+    }
 
     // So that there are no concurrent kernel executions probably from other parts of code while profiling
     // See CUDA Runtime API document for more details related to NULL stream and synchronization behaviors
@@ -1506,7 +1522,7 @@ struct ComputeHandle {
             "%s/trt-onnx-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
             cacheDir.c_str(),
             getInferLibVersion(),
-            TensorRT_BuilderOptimizationLevel,
+            builderOptimizationLevel,
             deviceIdent,
             modelHashStr.substr(0, 12).c_str(),
             ModelParser::tuneSalt,
@@ -1517,7 +1533,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1525,7 +1541,10 @@ struct ComputeHandle {
             ctx->nnYLen,
             ctx->nnXLen,
             cacheBatchSize,
-            usingFP16 ? 16 : 32
+            usingFP16 ? 16 : 32,
+            builderOptimizationLevel,
+            avgTimingIterations,
+            maxAuxStreamsRequested
           );
         }
         else {
@@ -1533,7 +1552,7 @@ struct ComputeHandle {
             "%s/trt-%d_olv-%d_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
             cacheDir.c_str(),
             getInferLibVersion(),
-            TensorRT_BuilderOptimizationLevel,
+            builderOptimizationLevel,
             deviceIdent,
             loadedModel->modelDesc.name.c_str(),
             ModelParser::tuneSalt,
@@ -1544,7 +1563,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1552,7 +1571,10 @@ struct ComputeHandle {
             ctx->nnYLen,
             ctx->nnXLen,
             cacheBatchSize,
-            usingFP16 ? 16 : 32
+            usingFP16 ? 16 : 32,
+            builderOptimizationLevel,
+            avgTimingIterations,
+            maxAuxStreamsRequested
           );
         }
       };
@@ -1822,8 +1844,10 @@ struct ComputeHandle {
     }
     engineAuxStreamsUsed = engine->getNbAuxStreams();
     if(logger != nullptr) {
+      string maxAuxStreamsDesc =
+        maxAuxStreamsRequested >= 0 ? Global::intToString(maxAuxStreamsRequested) : "unset(default)";
       logger->write(
-        "TensorRT backend: aux streams requested=" + Global::intToString(maxAuxStreamsRequested) +
+        "TensorRT backend: aux streams requested=" + maxAuxStreamsDesc +
         " engineUses=" + Global::intToString(engineAuxStreamsUsed)
       );
     }

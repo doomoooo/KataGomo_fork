@@ -263,35 +263,35 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("useCudaGraph"))
       useCudaGraph = cfg.getBool("useCudaGraph");
 
-    int trtBuilderOptimizationLevel = 3;
+    int trtBuilderOptimizationLevel = -1;
     if(cfg.contains(backendPrefix+"BuilderOptimizationLevel-"+idxStr))
-      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel-"+idxStr, 0, 5);
+      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel-"+idxStr, -1, 5);
     else if(cfg.contains("builderOptimizationLevel-"+idxStr))
-      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel-"+idxStr, 0, 5);
+      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel-"+idxStr, -1, 5);
     else if(cfg.contains(backendPrefix+"BuilderOptimizationLevel"))
-      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel", 0, 5);
+      trtBuilderOptimizationLevel = cfg.getInt(backendPrefix+"BuilderOptimizationLevel", -1, 5);
     else if(cfg.contains("builderOptimizationLevel"))
-      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel", 0, 5);
+      trtBuilderOptimizationLevel = cfg.getInt("builderOptimizationLevel", -1, 5);
 
-    int trtAvgTimingIterations = 0;
+    int trtAvgTimingIterations = -1;
     if(cfg.contains(backendPrefix+"AvgTimingIterations-"+idxStr))
-      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, 0, 1000);
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations-"+idxStr, -1, 1000);
     else if(cfg.contains("avgTimingIterations-"+idxStr))
-      trtAvgTimingIterations = cfg.getInt("avgTimingIterations-"+idxStr, 0, 1000);
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations-"+idxStr, -1, 1000);
     else if(cfg.contains(backendPrefix+"AvgTimingIterations"))
-      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations", 0, 1000);
+      trtAvgTimingIterations = cfg.getInt(backendPrefix+"AvgTimingIterations", -1, 1000);
     else if(cfg.contains("avgTimingIterations"))
-      trtAvgTimingIterations = cfg.getInt("avgTimingIterations", 0, 1000);
+      trtAvgTimingIterations = cfg.getInt("avgTimingIterations", -1, 1000);
 
-    int trtMaxAuxStreams = 0;
+    int trtMaxAuxStreams = -1;
     if(cfg.contains(backendPrefix+"MaxAuxStreams-"+idxStr))
-      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams-"+idxStr, 0, 1024);
+      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams-"+idxStr, -1, 1024);
     else if(cfg.contains("maxAuxStreams-"+idxStr))
-      trtMaxAuxStreams = cfg.getInt("maxAuxStreams-"+idxStr, 0, 1024);
+      trtMaxAuxStreams = cfg.getInt("maxAuxStreams-"+idxStr, -1, 1024);
     else if(cfg.contains(backendPrefix+"MaxAuxStreams"))
-      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams", 0, 1024);
+      trtMaxAuxStreams = cfg.getInt(backendPrefix+"MaxAuxStreams", -1, 1024);
     else if(cfg.contains("maxAuxStreams"))
-      trtMaxAuxStreams = cfg.getInt("maxAuxStreams", 0, 1024);
+      trtMaxAuxStreams = cfg.getInt("maxAuxStreams", -1, 1024);
 
     bool trtSetTacticSources = true;
     if(cfg.contains(backendPrefix+"SetTacticSources-"+idxStr))

@@ -13,15 +13,32 @@ This document summarizes the branch changes introduced after commit `55a48792` (
 ### 1) TensorRT cudaGraph option (`285ca441`)
 
 - Added config key: `trtUseCudaGraph`.
+- Added/updated TensorRT build-time option behavior:
+  - `trtBuilderOptimizationLevel`
+  - `trtAvgTimingIterations`
+  - `trtMaxAuxStreams`
 - Behavior:
   - When enabled, TensorRT pre-captures CUDA Graph for batch sizes `1..nnMaxBatchSize`.
   - Runtime uses graph launch path when capture succeeds.
   - Current branch behavior is fail-fast for cudaGraph issues in TensorRT path (no silent fallback), to expose problems during development.
+  - `trtBuilderOptimizationLevel = -1` (default): do not call `setBuilderOptimizationLevel`, use TensorRT default.
+  - `trtAvgTimingIterations = -1` (default): do not call `setAvgTimingIterations`, use TensorRT default.
+  - `trtMaxAuxStreams = -1` (default): do not call `setMaxAuxStreams`, use TensorRT default.
+  - Set explicit values to force calls:
+    - `trtBuilderOptimizationLevel = 0..5`
+    - `trtAvgTimingIterations = 0..1000`
+    - `trtMaxAuxStreams = 0..1024`
 - Usage:
   - In config file:
     - `trtUseCudaGraph = true`
+    - `trtBuilderOptimizationLevel = -1`
+    - `trtAvgTimingIterations = -1`
+    - `trtMaxAuxStreams = -1`
   - Or CLI override:
     - `-override-config trtUseCudaGraph=true`
+    - `-override-config trtBuilderOptimizationLevel=-1`
+    - `-override-config trtAvgTimingIterations=-1`
+    - `-override-config trtMaxAuxStreams=-1`
 
 ### 2) Benchmark exact fixed batch size (`b9f691af`)
 

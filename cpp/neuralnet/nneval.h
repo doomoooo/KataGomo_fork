@@ -106,9 +106,9 @@ class NNEvaluator {
     int defaultSymmetry,
     int backendNumThreads,
     bool useCudaGraph = false,
-    int trtBuilderOptimizationLevel = 3,
-    int trtAvgTimingIterations = 0,
-    int trtMaxAuxStreams = 0,
+    int trtBuilderOptimizationLevel = -1,
+    int trtAvgTimingIterations = -1,
+    int trtMaxAuxStreams = -1,
     bool trtSetTacticSources = true,
     bool trtMultiProfile = false
   );
