@@ -2,6 +2,7 @@
 #include "../neuralnet/modelversion.h"
 
 #include <algorithm>
+#include <chrono>
 #include <thread>
 
 using namespace std;
@@ -109,6 +110,9 @@ NNEvaluator::NNEvaluator(
    minBatchSize(minBatchSz),
    m_numRowsProcessed(0),
    m_numBatchesProcessed(0),
+   m_searchThreadWaitForGpuNanos(0),
+   m_searchThreadWorkNanos(0),
+   m_searchThreadCount(0),
    bufferMutex(),
    isKilled(false),
    numServerThreadsStartingUp(0),
@@ -360,6 +364,27 @@ double NNEvaluator::averageProcessedBatchSize() const {
 void NNEvaluator::clearStats() {
   m_numRowsProcessed.store(0);
   m_numBatchesProcessed.store(0);
+  m_searchThreadWaitForGpuNanos.store(0);
+  m_searchThreadWorkNanos.store(0);
+  m_searchThreadCount.store(0);
+}
+
+void NNEvaluator::recordSearchThreadTiming(double waitForGpuSeconds, double workSeconds) {
+  if(waitForGpuSeconds < 0.0)
+    waitForGpuSeconds = 0.0;
+  if(workSeconds < 0.0)
+    workSeconds = 0.0;
+
+  int64_t waitNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(waitForGpuSeconds)
+  ).count();
+  int64_t workNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(workSeconds)
+  ).count();
+
+  m_searchThreadWaitForGpuNanos.fetch_add(waitNanos, std::memory_order_relaxed);
+  m_searchThreadWorkNanos.fetch_add(workNanos, std::memory_order_relaxed);
+  m_searchThreadCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NNEvaluator::clearCache() {
@@ -404,6 +429,10 @@ void NNEvaluator::spawnServerThreads() {
   if(serverThreads.size() != 0)
     throw StringError("NNEvaluator::spawnServerThreads called when threads were already running!");
 
+  m_searchThreadWaitForGpuNanos.store(0, std::memory_order_relaxed);
+  m_searchThreadWorkNanos.store(0, std::memory_order_relaxed);
+  m_searchThreadCount.store(0, std::memory_order_relaxed);
+
   {
     lock_guard<std::mutex> lock(bufferMutex);
     serverThreadsIsUsingFP16.resize(numThreads,0);
@@ -441,6 +470,26 @@ void NNEvaluator::killServerThreads() {
     delete serverThreads[i];
   serverThreads.clear();
   serverThreadsIsUsingFP16.clear();
+
+  if(logger != NULL) {
+    uint64_t threadCount = m_searchThreadCount.load(std::memory_order_relaxed);
+    int64_t waitForGpuNanos = m_searchThreadWaitForGpuNanos.load(std::memory_order_relaxed);
+    int64_t workNanos = m_searchThreadWorkNanos.load(std::memory_order_relaxed);
+    int64_t totalNanos = waitForGpuNanos + workNanos;
+    if(threadCount > 0) {
+      double waitForGpuSeconds = (double)waitForGpuNanos / 1e9;
+      double workSeconds = (double)workNanos / 1e9;
+      double waitPct = totalNanos > 0 ? 100.0 * (double)waitForGpuNanos / (double)totalNanos : 0.0;
+      double workPct = totalNanos > 0 ? 100.0 * (double)workNanos / (double)totalNanos : 0.0;
+      logger->write(
+        "Search thread timing: " +
+        Global::uint64ToString(threadCount) + " thread-runs, wait GPU " +
+        Global::strprintf("%.3fs(%.1f%%)", waitForGpuSeconds, waitPct) +
+        ", work " +
+        Global::strprintf("%.3fs(%.1f%%)", workSeconds, workPct)
+      );
+    }
+  }
 
   //Can unset now that threads are dead
   isKilled = false;

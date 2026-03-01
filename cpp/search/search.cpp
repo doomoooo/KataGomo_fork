@@ -49,7 +49,9 @@ SearchThread::SearchThread(int tIdx, const Search& search)
    posesWithChildCurEpoch(0),
    upperBoundVisitsLeft(1e30),
    oldNNOutputsToCleanUp(),
-   illegalMoveHashes()
+   illegalMoveHashes(),
+   startTime(std::chrono::steady_clock::now()),
+   waitForGpuTimeSum(0.0)
 {
   statsBuf.resize(NNPos::MAX_NN_POLICY_SIZE);
   graphPath.reserve(256);
@@ -554,6 +556,18 @@ void Search::runWholeSearch(
     &shouldStopNow,&shouldStopEarly,maxVisits,maxPlayouts,maxTime,pondering,searchFactor
   ](int threadIdx) {
     SearchThread* stbuf = new SearchThread(threadIdx,*this);
+    auto reportThreadTiming = [&]() {
+      if(nnEvaluator == NULL)
+        return;
+      double totalTime = std::chrono::duration<double>(std::chrono::steady_clock::now() - stbuf->startTime).count();
+      double waitForGpuTime = stbuf->waitForGpuTimeSum;
+      if(waitForGpuTime < 0.0)
+        waitForGpuTime = 0.0;
+      if(waitForGpuTime > totalTime)
+        waitForGpuTime = totalTime;
+      double workTime = totalTime - waitForGpuTime;
+      nnEvaluator->recordSearchThreadTiming(waitForGpuTime, workTime);
+    };
 
     int64_t numPlayouts = numPlayoutsShared.load(std::memory_order_relaxed);
     try {
@@ -617,11 +631,13 @@ void Search::runWholeSearch(
       }
     }
     catch(...) {
+      reportThreadTiming();
       transferOldNNOutputs(*stbuf);
       delete stbuf;
       throw;
     }
 
+    reportThreadTiming();
     transferOldNNOutputs(*stbuf);
     delete stbuf;
   };
@@ -1194,7 +1210,9 @@ bool Search::playoutDescend(
   if(thread.history.isGameFinished && !node.forceNonTerminal) {
     //Avoid running "too fast", by making sure that a leaf evaluation takes roughly the same time as a genuine nn eval
     //This stops a thread from building a silly number of visits to distort MCTS statistics while other threads are stuck on the GPU.
+    auto waitStart = std::chrono::steady_clock::now();
     nnEvaluator->waitForNextNNEvalIfAny();
+    thread.waitForGpuTimeSum += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
     if(thread.history.isNoResult) {
       double winLossValue = 0.0;
       double noResultValue = 1.0;

@@ -84,34 +84,42 @@ bool Search::initNodeNNOutput(
   std::shared_ptr<NNOutput>* result = NULL;
   std::shared_ptr<NNOutput>* humanResult = NULL;
   if(isRoot && searchParams.rootNumSymmetriesToSample > 1) {
+    auto waitStart = std::chrono::steady_clock::now();
     result = nnEvaluator->averageMultipleSymmetries(
       thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
       nnInputParams,
       thread.nnResultBuf, includeOwnerMap,
       thread.rand, searchParams.rootNumSymmetriesToSample
     );
+    thread.waitForGpuTimeSum += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
+      waitStart = std::chrono::steady_clock::now();
       humanResult = humanEvaluator->averageMultipleSymmetries(
         thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
         nnInputParams,
         thread.nnResultBuf, includeOwnerMap,
         thread.rand, searchParams.rootNumSymmetriesToSample
       );
+      thread.waitForGpuTimeSum += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
     }
   }
   else {
+    auto waitStart = std::chrono::steady_clock::now();
     nnEvaluator->evaluate(
       thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
       nnInputParams,
       thread.nnResultBuf, skipCache, includeOwnerMap
     );
+    thread.waitForGpuTimeSum += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
     result = new std::shared_ptr<NNOutput>(std::move(thread.nnResultBuf.result));
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
+      waitStart = std::chrono::steady_clock::now();
       humanEvaluator->evaluate(
         thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
         nnInputParams,
         thread.nnResultBuf, skipCache, includeOwnerMap
       );
+      thread.waitForGpuTimeSum += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
       humanResult = new std::shared_ptr<NNOutput>(std::move(thread.nnResultBuf.result));
     }
   }

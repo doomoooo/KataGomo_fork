@@ -217,6 +217,9 @@ class NNEvaluator {
 
   void clearStats();
 
+  // Record aggregate search-thread timing. This is reported on shutdown alongside batch stats.
+  void recordSearchThreadTiming(double waitForGpuSeconds, double workSeconds);
+
  private:
   const std::string modelName;
   const std::string modelFileName;
@@ -254,6 +257,9 @@ class NNEvaluator {
   //Counters for statistics
   std::atomic<uint64_t> m_numRowsProcessed;
   std::atomic<uint64_t> m_numBatchesProcessed;
+  std::atomic<int64_t> m_searchThreadWaitForGpuNanos;
+  std::atomic<int64_t> m_searchThreadWorkNanos;
+  std::atomic<uint64_t> m_searchThreadCount;
 
   mutable std::mutex bufferMutex;
 

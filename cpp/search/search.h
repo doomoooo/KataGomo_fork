@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <unordered_set>
 
@@ -73,6 +74,10 @@ struct SearchThread {
 
   //Just controls some debug output
   std::set<Hash128> illegalMoveHashes;
+
+  //Per-thread timing for profiling waiting on GPU versus search work.
+  std::chrono::steady_clock::time_point startTime;
+  double waitForGpuTimeSum;
 
   SearchThread(int threadIdx, const Search& search);
   ~SearchThread();
