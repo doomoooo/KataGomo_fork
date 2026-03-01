@@ -64,7 +64,7 @@ OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
 OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 
-"${KATAGO_DEPLOY_DIR}/katago" benchmark \
+"${KATAGO_BIN_PATH}" benchmark \
   -model "${KATAGO_MODEL_PATH}" \
   -config "${KATAGO_CONFIG_PATH}" \
   -v 10000 \

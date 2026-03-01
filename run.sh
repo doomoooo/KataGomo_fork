@@ -95,7 +95,7 @@ OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
 OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"
 
-"${KATAGO_DEPLOY_DIR}/katago" gtp \
+"${KATAGO_BIN_PATH}" gtp \
   -model "${KATAGO_MODEL_PATH}" \
   -config "${KATAGO_CONFIG_PATH}" \
   -override-config "${OVERRIDE_CONFIG}"
