@@ -847,9 +847,9 @@ static void iterLadders(const Board& board, int nnXLen, std::function<void(Loc,i
   int xSize = board.x_size;
   int ySize = board.y_size;
 
-  Loc chainHeadsSolved[Board::MAX_PLAY_SIZE];
-  bool chainHeadsSolvedValue[Board::MAX_PLAY_SIZE];
-  int numChainHeadsSolved = 0;
+  // 0 = unsolved, 1 = solved and not laddered, 2 = solved and laddered
+  uint8_t chainHeadsSolvedState[Board::MAX_ARR_SIZE];
+  std::fill(chainHeadsSolvedState, chainHeadsSolvedState + Board::MAX_ARR_SIZE, (uint8_t)0);
   Board copy(board);
   vector<Loc> buf;
   vector<Loc> workingMoves;
@@ -862,34 +862,28 @@ static void iterLadders(const Board& board, int nnXLen, std::function<void(Loc,i
       if(stone == P_BLACK || stone == P_WHITE) {
         int libs = board.getNumLiberties(loc);
         if(libs == 1 || libs == 2) {
-          bool alreadySolved = false;
           Loc head = board.chain_head[loc];
-          for(int i = 0; i<numChainHeadsSolved; i++) {
-            if(chainHeadsSolved[i] == head) {
-              alreadySolved = true;
-              if(chainHeadsSolvedValue[i]) {
-                workingMoves.clear();
-                f(loc,pos,workingMoves);
-              }
-              break;
-            }
-          }
-          if(!alreadySolved) {
-            //Perform search on copy so as not to mess up tracking of solved heads
-            bool laddered;
-            if(libs == 1)
-              laddered = copy.searchIsLadderCaptured(loc,true,buf);
-            else {
+          uint8_t solvedState = chainHeadsSolvedState[head];
+          if(solvedState != 0) {
+            if(solvedState == 2) {
               workingMoves.clear();
-              laddered = copy.searchIsLadderCapturedAttackerFirst2Libs(loc,buf,workingMoves);
-            }
-
-            chainHeadsSolved[numChainHeadsSolved] = head;
-            chainHeadsSolvedValue[numChainHeadsSolved] = laddered;
-            numChainHeadsSolved++;
-            if(laddered)
               f(loc,pos,workingMoves);
+            }
+            continue;
           }
+
+          // Perform search on copy so as not to mess up tracking of solved heads
+          bool laddered;
+          if(libs == 1)
+            laddered = copy.searchIsLadderCaptured(loc,true,buf);
+          else {
+            workingMoves.clear();
+            laddered = copy.searchIsLadderCapturedAttackerFirst2Libs(loc,buf,workingMoves);
+          }
+
+          chainHeadsSolvedState[head] = laddered ? (uint8_t)2 : (uint8_t)1;
+          if(laddered)
+            f(loc,pos,workingMoves);
         }
       }
     }
