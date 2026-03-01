@@ -55,7 +55,7 @@ fi
 # Main build process
 main() {
     print_info "Starting KataGomo build process"
-    ensure_tcmalloc
+    # ensure_tcmalloc
 
     # Prepare build directory
     print_info "Preparing build environment"
@@ -67,7 +67,6 @@ main() {
     cmake .. \
         -DUSE_BACKEND=TENSORRT \
         -DUSE_AVX2=1 \
-        -DUSE_TCMALLOC=1 \
         -DTENSORRT_INCLUDE_DIR=${TENSORRT_ROOT}/include \
         -DTENSORRT_LIBRARY=${TENSORRT_ROOT}/lib/libnvinfer.so \
         -DTENSORRT_ONNX_LIBRARY=${TENSORRT_ROOT}/lib/libnvonnxparser.so
