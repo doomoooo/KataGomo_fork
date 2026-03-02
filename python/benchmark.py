@@ -71,23 +71,6 @@ def split_csv(values: Optional[List[str]]) -> List[str]:
     return out
 
 
-def parse_graph_modes(spec: str) -> List[bool]:
-    modes: List[bool] = []
-    mapping = {"off": False, "on": True, "false": False, "true": True, "0": False, "1": True}
-    for token in split_csv([spec]):
-        key = token.lower()
-        if key not in mapping:
-            raise ValueError(f"Invalid graph mode token: {token}")
-        modes.append(mapping[key])
-    if not modes:
-        raise ValueError("graph modes cannot be empty")
-    dedup: List[bool] = []
-    for mode in modes:
-        if mode not in dedup:
-            dedup.append(mode)
-    return dedup
-
-
 def parse_positive_int_csv(spec: str, label: str) -> List[int]:
     values: List[int] = []
     for token in split_csv([spec]):
@@ -221,8 +204,8 @@ def render_progress(done: int, total: int, status: str) -> None:
     sys.stdout.flush()
 
 
-def case_key(plan_batch: int, infer_batch: int, streams: int, cuda_graph: bool) -> str:
-    return f"pb{plan_batch}_ib{infer_batch}_s{streams}_g{1 if cuda_graph else 0}"
+def case_key(batch_size: int, streams: int) -> str:
+    return f"b{batch_size}_s{streams}"
 
 
 def normalize_key_token(text: str) -> str:
@@ -232,15 +215,112 @@ def normalize_key_token(text: str) -> str:
 
 def case_key_with_plan(
     plan_label: str,
-    plan_batch: int,
-    infer_batch: int,
+    batch_size: int,
     streams: int,
-    cuda_graph: bool,
 ) -> str:
-    return (
-        f"pl{normalize_key_token(plan_label)}_"
-        f"{case_key(plan_batch, infer_batch, streams, cuda_graph)}"
-    )
+    return f"pl{normalize_key_token(plan_label)}_{case_key(batch_size, streams)}"
+
+
+def extract_plot_value(metric_name: str, result: Dict[str, object]) -> Optional[float]:
+    metrics = result.get("metrics", {})
+    if not isinstance(metrics, dict):
+        return None
+    throughput = metrics.get("throughput_qps")
+    if not isinstance(throughput, (int, float)):
+        return None
+
+    if metric_name == "throughput_qps":
+        return float(throughput)
+    if metric_name == "nn_evals_per_sec":
+        batch_size = result.get("batch_size")
+        if not isinstance(batch_size, int):
+            return None
+        return float(throughput) * float(batch_size)
+    raise ValueError(f"Unsupported plot metric: {metric_name}")
+
+
+def plot_metric_label(metric_name: str) -> str:
+    if metric_name == "throughput_qps":
+        return "trtexec qps"
+    if metric_name == "nn_evals_per_sec":
+        return "nnEval/s"
+    return metric_name
+
+
+def draw_plot(
+    state: Dict[str, object],
+    output_png: Path,
+    metric_name: str,
+    include_non_ok: bool,
+) -> bool:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"[warn] Skip plotting: matplotlib unavailable ({e})")
+        return False
+
+    results = state.get("results", {})
+    if not isinstance(results, dict):
+        return False
+
+    stream_series: Dict[int, Dict[int, float]] = {}
+    for result in results.values():
+        if not isinstance(result, dict):
+            continue
+        if not include_non_ok and result.get("status") != "ok":
+            continue
+        stream = result.get("streams")
+        batch_size = result.get("batch_size")
+        if not isinstance(stream, int) or not isinstance(batch_size, int):
+            continue
+        value = extract_plot_value(metric_name, result)
+        if value is None:
+            continue
+        stream_series.setdefault(stream, {})[batch_size] = value
+
+    if not stream_series:
+        print("[warn] Skip plotting: no usable benchmark points")
+        return False
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    color_map = plt.get_cmap("tab10")
+    any_point = False
+    for idx, stream in enumerate(sorted(stream_series.keys())):
+        points = stream_series[stream]
+        xs = sorted(points.keys())
+        ys = [points[x] for x in xs]
+        if not xs:
+            continue
+        any_point = True
+        ax.plot(
+            xs,
+            ys,
+            marker="o",
+            linewidth=2.0,
+            markersize=4.5,
+            color=color_map(idx % 10),
+            label=f"stream={stream}",
+        )
+
+    if not any_point:
+        print("[warn] Skip plotting: no usable benchmark points")
+        plt.close(fig)
+        return False
+
+    ax.set_xlabel("batch size")
+    ax.set_ylabel(plot_metric_label(metric_name))
+    ax.set_title(f"trtexec benchmark ({plot_metric_label(metric_name)})")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_png, dpi=160)
+    plt.close(fig)
+    return True
 
 
 def should_skip_result(existing: Optional[Dict[str, object]], rerun_failed: bool) -> bool:
@@ -321,6 +401,7 @@ def ensure_plan(
     print(f"\n[plan] ensure batch={plan_batch}")
     override_parts = [
         f"nnMaxBatchSize={plan_batch}",
+        "nnMinBatchSize=1",
         "trtMultiProfile=true",
         "numSearchThreads=1",
         "numNNServerThreadsPerModel=1",
@@ -370,7 +451,7 @@ def ensure_plan(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate KataGo TensorRT plans via katago and benchmark with trtexec.",
+        description="Generate static-profile TensorRT plans via katago, benchmark with trtexec, then plot.",
     )
     parser.add_argument(
         "--katago-bin",
@@ -390,18 +471,18 @@ def main() -> int:
     )
     parser.add_argument("--output-json", default="build/trtexec_benchmark.json")
     parser.add_argument("--tensorrt-lib", default="/opt/tensorrt/lib")
-    parser.add_argument("--plan-batch", type=int, default=16)
+    parser.add_argument("--max-batch", type=int, default=16)
+    parser.add_argument("--plan-batch", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--plan-file",
         action="append",
         default=[],
         help="Use existing plan file(s), format: /path/to/plan or label=/path/to/plan. Can be passed multiple times.",
     )
-    parser.add_argument("--infer-batch-min", type=int, default=1)
-    parser.add_argument("--infer-batch-max", type=int, default=None)
+    parser.add_argument("--batch-min", type=int, default=1)
+    parser.add_argument("--batch-max", type=int, default=None)
     parser.add_argument("--stream-min", type=int, default=1)
     parser.add_argument("--stream-max", type=int, default=4)
-    parser.add_argument("--graph-modes", default="off,on", help="Comma separated: off,on")
     parser.add_argument(
         "--shape-template",
         action="append",
@@ -420,33 +501,43 @@ def main() -> int:
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--rerun-failed", action="store_true")
     parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument("--no-plot", action="store_true")
+    parser.add_argument("--plot-png", default="build/trtexec_benchmark.png")
+    parser.add_argument(
+        "--plot-metric",
+        default="nn_evals_per_sec",
+        choices=["nn_evals_per_sec", "throughput_qps"],
+    )
+    parser.add_argument("--plot-include-non-ok", action="store_true")
     parser.add_argument("--smoke", action="store_true", help="Quick smoke mode")
     args = parser.parse_args()
 
+    if args.plan_batch is not None:
+        args.max_batch = args.plan_batch
+
     if args.smoke:
-        args.plan_batch = 1
-        args.infer_batch_min = 1
-        args.infer_batch_max = 1
+        args.max_batch = 1
+        args.batch_min = 1
+        args.batch_max = 1
         args.stream_min = 1
         args.stream_max = 1
-        args.graph_modes = "off,on"
         args.duration_sec = min(args.duration_sec, 1.0)
         args.warmup_ms = 0
         args.iterations = min(args.iterations, 20)
         args.avg_runs = min(args.avg_runs, 10)
 
-    if args.plan_batch <= 0:
-        raise ValueError("plan-batch must be positive")
-    if args.infer_batch_min <= 0:
-        raise ValueError("infer-batch-min must be positive")
+    if args.max_batch <= 0:
+        raise ValueError("max-batch must be positive")
+    if args.batch_min <= 0:
+        raise ValueError("batch-min must be positive")
     if args.stream_min <= 0 or args.stream_max < args.stream_min:
         raise ValueError("Invalid stream range")
-    if args.infer_batch_max is not None and args.infer_batch_max <= 0:
-        raise ValueError("infer-batch-max must be positive")
-    if args.infer_batch_max is not None and args.infer_batch_max < args.infer_batch_min:
-        raise ValueError("infer-batch-max must be >= infer-batch-min")
-    if args.infer_batch_min > args.plan_batch:
-        raise ValueError("infer-batch-min cannot exceed plan-batch")
+    if args.batch_max is not None and args.batch_max <= 0:
+        raise ValueError("batch-max must be positive")
+    if args.batch_max is not None and args.batch_max < args.batch_min:
+        raise ValueError("batch-max must be >= batch-min")
+    if args.batch_min > args.max_batch:
+        raise ValueError("batch-min cannot exceed max-batch")
 
     parsed_plan_files = parse_plan_file_args(args.plan_file)
     use_existing_plan_files = len(parsed_plan_files) > 0
@@ -469,8 +560,11 @@ def main() -> int:
             "input_global:{batch}x19",
         ]
 
-    graph_modes = parse_graph_modes(args.graph_modes)
     stream_values = list(range(args.stream_min, args.stream_max + 1))
+    batch_max = args.max_batch if args.batch_max is None else min(args.max_batch, args.batch_max)
+    if args.batch_min > batch_max:
+        raise ValueError("No batch to benchmark after applying batch range and max-batch")
+    batch_values = list(range(args.batch_min, batch_max + 1))
     env = build_env(args.tensorrt_lib)
     output_path = Path(args.output_json)
 
@@ -481,7 +575,10 @@ def main() -> int:
         "trtexec_bin": str(trtexec_bin.resolve()),
         "config": str(config.resolve()) if config.exists() else str(config),
         "model": str(model.resolve()) if model.exists() else str(model),
-        "plan_batch": args.plan_batch,
+        "max_batch": args.max_batch,
+        "batch_range": [args.batch_min, batch_max],
+        "stream_range": [args.stream_min, args.stream_max],
+        "profile_mode": "all-static-min-eq-max",
         "shape_templates": shape_templates,
         "plan_files": [{"label": label, "path": path} for label, path in parsed_plan_files],
     }
@@ -496,53 +593,44 @@ def main() -> int:
                 {
                     "label": label,
                     "path": plan_path,
-                    "plan_batch": args.plan_batch,
+                    "max_batch": args.max_batch,
                     "source": "cli-plan-file",
                 }
             )
     else:
-        plan_path = ensure_plan(args.plan_batch, args, state, output_path, env)
+        plan_path = ensure_plan(args.max_batch, args, state, output_path, env)
         plan_entries.append(
             {
-                "label": f"pb{args.plan_batch}",
+                "label": f"batch{args.max_batch}",
                 "path": plan_path,
-                "plan_batch": args.plan_batch,
+                "max_batch": args.max_batch,
                 "source": "katago-gtp",
             }
         )
 
-    infer_min = args.infer_batch_min
-    cases: List[Tuple[str, str, int, int, int, bool]] = []
+    cases: List[Tuple[str, str, int, int]] = []
     for plan_entry in plan_entries:
         plan_label = str(plan_entry["label"])
         plan_path = str(plan_entry["path"])
-        plan_batch = int(plan_entry["plan_batch"])
-        infer_max = plan_batch
-        if args.infer_batch_max is not None:
-            infer_max = min(infer_max, args.infer_batch_max)
-        if infer_min > infer_max:
-            raise ValueError(
-                f"No infer batch to run after applying plan-batch and infer-batch range for plan {plan_label}"
-            )
-        for infer_batch in range(infer_min, infer_max + 1):
+        for batch_size in batch_values:
             for streams in stream_values:
-                for graph_mode in graph_modes:
-                    cases.append((plan_label, plan_path, plan_batch, infer_batch, streams, graph_mode))
+                cases.append((plan_label, plan_path, batch_size, streams))
 
     skipped = 0
-    for plan_label, _plan_path, pb, ib, s, g in cases:
-        existing = state["results"].get(case_key_with_plan(plan_label, pb, ib, s, g))
+    for plan_label, _plan_path, batch_size, streams in cases:
+        existing = state["results"].get(case_key_with_plan(plan_label, batch_size, streams))
         if should_skip_result(existing, args.rerun_failed):
             skipped += 1
 
     total = len(cases)
     done = skipped
     render_progress(done, total, f"resume skip={skipped}")
+    plot_path = Path(args.plot_png)
 
     ok_count = 0
     err_count = 0
-    for plan_label, plan_path, plan_batch, infer_batch, streams, graph_mode in cases:
-        key = case_key_with_plan(plan_label, plan_batch, infer_batch, streams, graph_mode)
+    for plan_label, plan_path, batch_size, streams in cases:
+        key = case_key_with_plan(plan_label, batch_size, streams)
         existing = state["results"].get(key)
         if should_skip_result(existing, args.rerun_failed):
             if existing.get("status") == "ok":
@@ -551,7 +639,7 @@ def main() -> int:
                 err_count += 1
             continue
 
-        shapes = ",".join(t.replace("{batch}", str(infer_batch)) for t in shape_templates)
+        shapes = ",".join(t.replace("{batch}", str(batch_size)) for t in shape_templates)
 
         cmd = [
             str(trtexec_bin.resolve()),
@@ -563,11 +651,9 @@ def main() -> int:
             f"--avgRuns={args.avg_runs}",
             f"--infStreams={streams}",
             f"--device={args.device}",
-            f"--useProfile={infer_batch - 1}",
+            f"--useProfile={batch_size - 1}",
             "--threads",
         ]
-        if graph_mode:
-            cmd.append("--useCudaGraph")
         cmd.extend(split_csv(args.trtexec_extra_arg))
 
         started = time.time()
@@ -593,10 +679,9 @@ def main() -> int:
             "status": status,
             "error": error_text,
             "plan_label": plan_label,
-            "plan_batch": plan_batch,
-            "infer_batch": infer_batch,
+            "max_batch": args.max_batch,
+            "batch_size": batch_size,
             "streams": streams,
-            "cuda_graph": graph_mode,
             "plan_path": plan_path,
             "shapes": shapes,
             "command": join_cmd(cmd),
@@ -609,6 +694,17 @@ def main() -> int:
         }
         state["results"][key] = result
         atomic_save_json(output_path, state)
+        if not args.no_plot:
+            plotted = draw_plot(
+                state=state,
+                output_png=plot_path,
+                metric_name=args.plot_metric,
+                include_non_ok=args.plot_include_non_ok,
+            )
+            if plotted:
+                state["meta"]["plot_metric"] = args.plot_metric
+                state["meta"]["plot_png"] = str(plot_path.resolve())
+                atomic_save_json(output_path, state)
 
         done += 1
         if status == "ok":
@@ -620,13 +716,24 @@ def main() -> int:
             total,
             (
                 f"plan={normalize_key_token(plan_label)} "
-                f"pb={plan_batch} ib={infer_batch} s={streams} g={1 if graph_mode else 0} {status}"
+                f"batch={batch_size} s={streams} {status}"
             ),
         )
 
         if status == "error" and args.stop_on_error:
             print("\n[stop] stop-on-error enabled")
             break
+
+    if not args.no_plot and done == skipped:
+        plotted = draw_plot(
+            state=state,
+            output_png=plot_path,
+            metric_name=args.plot_metric,
+            include_non_ok=args.plot_include_non_ok,
+        )
+        state["meta"]["plot_metric"] = args.plot_metric
+        state["meta"]["plot_png"] = str(plot_path.resolve()) if plotted else ""
+        atomic_save_json(output_path, state)
 
     print()
     print(
