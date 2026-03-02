@@ -1592,7 +1592,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d_mp%d_mbs%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1603,9 +1603,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32,
             builderOptimizationLevel,
             avgTimingIterations,
-            maxAuxStreamsRequested,
-            ctx->trtMultiProfile ? 1 : 0,
-            ctx->nnMinBatchSize
+            maxAuxStreamsRequested
           );
         }
         else {
@@ -1624,7 +1622,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d_mp%d_mbs%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1635,9 +1633,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32,
             builderOptimizationLevel,
             avgTimingIterations,
-            maxAuxStreamsRequested,
-            ctx->trtMultiProfile ? 1 : 0,
-            ctx->nnMinBatchSize
+            maxAuxStreamsRequested
           );
         }
       };
@@ -1830,6 +1826,9 @@ struct ComputeHandle {
     if(!engine) {
       throw StringError("TensorRT backend: failed to create cuda engine");
     }
+    int configuredProfileCount = numOptimizationProfiles;
+    rebuildProfileMappingFromEngine(configuredProfileCount);
+
     engineAuxStreamsUsed = engine->getNbAuxStreams();
     if(logger != nullptr) {
       string maxAuxStreamsDesc =
@@ -1943,6 +1942,120 @@ struct ComputeHandle {
   void bindTensorAddresses(IExecutionContext* targetExec) {
     for(const auto& kv : buffers) {
       targetExec->setTensorAddress(kv.first.c_str(), kv.second);
+    }
+  }
+
+  void rebuildProfileMappingFromEngine(int configuredProfileCount) {
+    const int engineProfileCount = engine->getNbOptimizationProfiles();
+    if(engineProfileCount <= 0) {
+      throw StringError("TensorRT backend: engine has no optimization profiles");
+    }
+
+    vector<string> inputTensorNames;
+    inputTensorNames.reserve((size_t)engine->getNbIOTensors());
+    for(int i = 0; i < engine->getNbIOTensors(); i++) {
+      const char* name = engine->getIOTensorName(i);
+      if(engine->getTensorIOMode(name) == TensorIOMode::kINPUT) {
+        inputTensorNames.emplace_back(name);
+      }
+    }
+    if(inputTensorNames.empty()) {
+      throw StringError("TensorRT backend: engine has no input tensors");
+    }
+
+    optimizationProfiles.clear();
+    optimizationProfiles.reserve((size_t)engineProfileCount);
+    int engineMaxBatch = 0;
+
+    for(int profileIndex = 0; profileIndex < engineProfileCount; profileIndex++) {
+      int minBatch = -1;
+      int optBatch = -1;
+      int maxBatch = -1;
+
+      for(const string& inputName : inputTensorNames) {
+        Dims minDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kMIN);
+        Dims optDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kOPT);
+        Dims maxDims = engine->getProfileShape(inputName.c_str(), profileIndex, OptProfileSelector::kMAX);
+        if(minDims.nbDims <= 0 || optDims.nbDims <= 0 || maxDims.nbDims <= 0) {
+          throw StringError(
+            "TensorRT backend: invalid profile dimensions from engine for input " + inputName +
+            " profile " + Global::intToString(profileIndex)
+          );
+        }
+
+        const int tensorMinBatch = minDims.d[0];
+        const int tensorOptBatch = optDims.d[0];
+        const int tensorMaxBatch = maxDims.d[0];
+        if(minBatch < 0) {
+          minBatch = tensorMinBatch;
+          optBatch = tensorOptBatch;
+          maxBatch = tensorMaxBatch;
+        }
+        else if(
+          tensorMinBatch != minBatch ||
+          tensorOptBatch != optBatch ||
+          tensorMaxBatch != maxBatch
+        ) {
+          throw StringError(
+            "TensorRT backend: inconsistent batch profile in engine for input " + inputName +
+            " profile " + Global::intToString(profileIndex)
+          );
+        }
+      }
+
+      if(minBatch <= 0 || optBatch <= 0 || maxBatch <= 0) {
+        throw StringError(
+          "TensorRT backend: invalid non-positive batch profile in engine for profile " +
+          Global::intToString(profileIndex)
+        );
+      }
+      if(minBatch > optBatch || optBatch > maxBatch) {
+        throw StringError(
+          "TensorRT backend: invalid min/opt/max order in engine for profile " +
+          Global::intToString(profileIndex)
+        );
+      }
+
+      engineMaxBatch = std::max(engineMaxBatch, maxBatch);
+      optimizationProfiles.push_back({minBatch, optBatch, maxBatch});
+    }
+
+    profileIndexByBatch.assign((size_t)maxBatchSize + 1, -1);
+    for(int batch = 1; batch <= maxBatchSize; batch++) {
+      int selectedProfile = -1;
+      for(int profileIndex = 0; profileIndex < engineProfileCount; profileIndex++) {
+        const ProfileBatchRange& range = optimizationProfiles[(size_t)profileIndex];
+        if(batch >= range.minBatch && batch <= range.maxBatch) {
+          selectedProfile = profileIndex;
+          break;
+        }
+      }
+      if(selectedProfile < 0) {
+        throw StringError(
+          "TensorRT backend: cached plan does not cover batch size " + Global::intToString(batch)
+        );
+      }
+      profileIndexByBatch[(size_t)batch] = selectedProfile;
+    }
+
+    numOptimizationProfiles = engineProfileCount;
+    runtimeExecStates.clear();
+    runtimeExecStates.resize((size_t)numOptimizationProfiles);
+
+    if(logger != nullptr) {
+      if(engineProfileCount != configuredProfileCount) {
+        logger->write(
+          "TensorRT backend: using optimization profiles from cached plan (engineProfiles=" +
+          Global::intToString(engineProfileCount) +
+          ", configuredProfiles=" + Global::intToString(configuredProfileCount) + ")"
+        );
+      }
+      if(engineMaxBatch > maxBatchSize) {
+        logger->write(
+          "TensorRT backend: cached plan supports maxBatch=" + Global::intToString(engineMaxBatch) +
+          ", requested maxBatch=" + Global::intToString(maxBatchSize)
+        );
+      }
     }
   }
 
