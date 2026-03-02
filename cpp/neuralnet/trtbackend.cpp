@@ -1648,7 +1648,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1656,10 +1656,7 @@ struct ComputeHandle {
             ctx->nnYLen,
             ctx->nnXLen,
             cacheBatchSize,
-            usingFP16 ? 16 : 32,
-            builderOptimizationLevel,
-            avgTimingIterations,
-            maxAuxStreamsRequested
+            usingFP16 ? 16 : 32
           );
         }
         else {
@@ -1678,7 +1675,7 @@ struct ComputeHandle {
             usingFP16 ? 16 : 32
           );
           outParamStr = Global::strprintf(
-            "_%d_%s_%d_%s_%d_%d_%d_%d_bo%d_ati%d_mas%d",
+            "_%d_%s_%d_%s_%d_%d_%d_%d",
             getInferLibVersion(),
             deviceIdent,
             ModelParser::tuneSalt,
@@ -1686,10 +1683,7 @@ struct ComputeHandle {
             ctx->nnYLen,
             ctx->nnXLen,
             cacheBatchSize,
-            usingFP16 ? 16 : 32,
-            builderOptimizationLevel,
-            avgTimingIterations,
-            maxAuxStreamsRequested
+            usingFP16 ? 16 : 32
           );
         }
       };
@@ -2307,6 +2301,12 @@ ComputeHandle* NeuralNet::createComputeHandle(
     gpuIdxForThisThread = 0;
   const string& cudaHostWaitPolicy = context->cudaHostWaitPolicy;
   unsigned int cudaHostWaitFlag = getCudaHostWaitFlag(cudaHostWaitPolicy);
+  if(logger != NULL) {
+    logger->write(
+      "TensorRT backend thread " + Global::intToString(serverThreadIdx) +
+      ": Calling cudaSetDeviceFlags for CUDA host wait policy = " + cudaHostWaitPolicy
+    );
+  }
   cudaError_t setDeviceFlagsStatus = cudaSetDeviceFlags(cudaHostWaitFlag);
   if(setDeviceFlagsStatus == cudaErrorSetOnActiveProcess) {
     // CUDA was already initialized on this thread, so flags are fixed and cannot be changed now.

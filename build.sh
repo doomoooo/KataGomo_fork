@@ -14,6 +14,7 @@ PGO_PROFILE_DIR="${SCRIPT_DIR}/cpp/pgo_profiles"
 KATAGO_BIN="${KATAGO_BIN_PATH}"
 DEPLOY_DIR="$(dirname "${KATAGO_BIN}")"
 NUM_JOBS="${NUM_JOBS:-$(nproc)}"
+ENABLE_PGO=false
 
 BASE_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fomit-frame-pointer"
 PGO_GENERATE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-generate=${PGO_PROFILE_DIR}"
@@ -42,6 +43,34 @@ print_error() {
     exit 1
 }
 
+print_usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--pgo] [--help]
+
+Options:
+  --pgo                Enable PGO build flow (default: disabled)
+  --help               Show this help message
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --pgo)
+                ENABLE_PGO=true
+                shift
+                ;;
+            --help|-h)
+                print_usage
+                exit 0
+                ;;
+            *)
+                print_error "Unknown argument: $1 (use --help for usage)"
+                ;;
+        esac
+    done
+}
+
 ensure_tcmalloc() {
     if ldconfig -p | grep -q "libtcmalloc_minimal.so"; then
         print_info "tcmalloc is already installed"
@@ -65,7 +94,7 @@ configure_and_build() {
     local build_dir="$1"
     local c_flags_release="$2"
     local cxx_flags_release="$3"
-
+    rm -r "${build_dir}"
     print_info "Configuring CMake in ${build_dir}"
     cmake -S "${SCRIPT_DIR}/cpp" -B "${build_dir}" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -111,6 +140,9 @@ run_pgo_training_workload() {
     fi
 }
 
+# Parse CLI args
+parse_args "$@"
+
 # Check if we're in the right directory
 if [ ! -d "${SCRIPT_DIR}/cpp" ]; then
     print_error "This script must be run from the root directory of the KataGomo repository"
@@ -119,22 +151,30 @@ fi
 # Main build process
 main() {
     print_info "Starting KataGomo build process"
+    print_info "PGO enabled: ${ENABLE_PGO}"
     # ensure_tcmalloc
 
-    # Prepare build directories and fresh PGO profile output
-    print_info "Preparing build environment"
-    mkdir -p "${BUILD_DIR}" "${PGO_GEN_BUILD_DIR}"
-    rm -rf "${PGO_PROFILE_DIR}"
-    mkdir -p "${PGO_PROFILE_DIR}"
+    if [ "${ENABLE_PGO}" = "true" ]; then
+        # Prepare build directories and fresh PGO profile output
+        print_info "Preparing build environment"
+        mkdir -p "${BUILD_DIR}" "${PGO_GEN_BUILD_DIR}"
+        rm -rf "${PGO_PROFILE_DIR}"
+        mkdir -p "${PGO_PROFILE_DIR}"
 
-    # Stage 1: build instrumented binary to generate PGO profiles
-    configure_and_build "${PGO_GEN_BUILD_DIR}" "${PGO_GENERATE_FLAGS}" "${PGO_GENERATE_FLAGS}"
+        # Stage 1: build instrumented binary to generate PGO profiles
+        configure_and_build "${PGO_GEN_BUILD_DIR}" "${PGO_GENERATE_FLAGS}" "${PGO_GENERATE_FLAGS}"
 
-    # Stage 2: run representative workload to collect profile data
-    run_pgo_training_workload
+        # Stage 2: run representative workload to collect profile data
+        run_pgo_training_workload
 
-    # Stage 3: rebuild optimized binary using generated profile + LTO + native
-    configure_and_build "${BUILD_DIR}" "${PGO_USE_FLAGS}" "${PGO_USE_FLAGS}"
+        # Stage 3: rebuild optimized binary using generated profile + LTO + native
+        configure_and_build "${BUILD_DIR}" "${PGO_USE_FLAGS}" "${PGO_USE_FLAGS}"
+    else
+        # Non-PGO release build with LTO + native tuning
+        print_info "Preparing build environment (non-PGO)"
+        mkdir -p "${BUILD_DIR}"
+        configure_and_build "${BUILD_DIR}" "${BASE_RELEASE_FLAGS}" "${BASE_RELEASE_FLAGS}"
+    fi
 
     # print_info "Checking tcmalloc linkage"
     # ldd katago | grep -q "libtcmalloc_minimal"

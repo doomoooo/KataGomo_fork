@@ -42,6 +42,9 @@ SUMMARY_RE = {
         r"percentile\(90%\) = ([^,]+), percentile\(95%\) = ([^,]+), percentile\(99%\) = ([^\n,]+)"
     ),
 }
+PROFILE_INPUT_RE = re.compile(
+    r"Model input\s+(.+?)\s+\(profile\s+([0-9]+)\):\s+min=([^,]+),\s*opt=([^,]+),\s*max=([^\n\r]+)"
+)
 
 
 def now_iso() -> str:
@@ -57,6 +60,48 @@ def detect_default_path(candidates: List[str]) -> str:
         if Path(candidate).exists():
             return str(Path(candidate).resolve())
     return candidates[0]
+
+
+def resolve_path_with_base(raw: str, base_dir: Path) -> str:
+    expanded = os.path.expanduser(os.path.expandvars(raw.strip()))
+    path = Path(expanded)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    return str(path)
+
+
+def load_env_sh_defaults(env_sh_path: Path) -> Dict[str, str]:
+    if not env_sh_path.exists():
+        return {}
+
+    keys = [
+        "TENSORRT_ROOT",
+        "KATAGO_BIN_PATH",
+        "KATAGO_MODEL_PATH",
+        "KATAGO_CONFIG_PATH",
+    ]
+    var_expr = " ".join(f'"${{{key}-}}"' for key in keys)
+    shell_cmd = f"source {shlex.quote(str(env_sh_path))} >/dev/null 2>&1 && printf '%s\\n' {var_expr}"
+    proc = subprocess.run(
+        ["bash", "-lc", shell_cmd],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return {}
+
+    lines = (proc.stdout or "").splitlines()
+    out: Dict[str, str] = {}
+    base_dir = env_sh_path.parent
+    for idx, key in enumerate(keys):
+        if idx >= len(lines):
+            break
+        value = lines[idx].strip()
+        if not value:
+            continue
+        out[key] = resolve_path_with_base(value, base_dir)
+    return out
 
 
 def split_csv(values: Optional[List[str]]) -> List[str]:
@@ -128,6 +173,119 @@ def parse_trtexec_metrics(text: str) -> Dict[str, object]:
             "p99": parse_value_with_unit(match.group(7)),
         }
     return metrics
+
+
+def parse_dims_token(raw: str) -> List[int]:
+    token = raw.strip()
+    if token == "" or token.lower() == "scalar":
+        return []
+    dims: List[int] = []
+    for piece in token.split("x"):
+        part = piece.strip()
+        if part == "":
+            raise ValueError(f"Invalid shape token: {raw}")
+        try:
+            dims.append(int(part))
+        except ValueError as e:
+            raise ValueError(f"Invalid shape token: {raw}") from e
+    return dims
+
+
+def dims_to_shape_spec(dims: List[int]) -> str:
+    if not dims:
+        return "scalar"
+    return "x".join(str(v) for v in dims)
+
+
+def probe_plan_input_profiles(
+    trtexec_bin: Path,
+    plan_path: str,
+    env: Dict[str, str],
+    timeout_sec: int,
+) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
+    cmd = [
+        str(trtexec_bin.resolve()),
+        f"--loadEngine={plan_path}",
+        "--dumpOptimizationProfile",
+        "--skipInference",
+    ]
+    rc, text = run_command(cmd, env=env, timeout_sec=timeout_sec)
+    if rc != 0:
+        raise RuntimeError(
+            f"trtexec profile probe failed (exit={rc})\n{join_cmd(cmd)}\n--- output tail ---\n{output_tail(text)}"
+        )
+
+    profiles: Dict[int, Dict[str, Dict[str, List[int]]]] = {}
+    for match in PROFILE_INPUT_RE.finditer(text):
+        tensor_name = match.group(1).strip()
+        profile_idx = int(match.group(2))
+        min_dims = parse_dims_token(match.group(3))
+        opt_dims = parse_dims_token(match.group(4))
+        max_dims = parse_dims_token(match.group(5))
+        profiles.setdefault(profile_idx, {})[tensor_name] = {
+            "min": min_dims,
+            "opt": opt_dims,
+            "max": max_dims,
+        }
+
+    if not profiles:
+        raise RuntimeError(
+            "Failed to parse input profile shapes from trtexec output.\n"
+            f"Command: {join_cmd(cmd)}\n--- output tail ---\n{output_tail(text)}"
+        )
+    return profiles
+
+
+def profile_supports_batch(
+    profile_tensors: Dict[str, Dict[str, List[int]]],
+    batch_size: int,
+) -> bool:
+    saw_batch_dim = False
+    for tensor_spec in profile_tensors.values():
+        min_dims = tensor_spec.get("min", [])
+        max_dims = tensor_spec.get("max", [])
+        if not min_dims or not max_dims:
+            continue
+        saw_batch_dim = True
+        if batch_size < min_dims[0] or batch_size > max_dims[0]:
+            return False
+    return saw_batch_dim
+
+
+def select_profile_for_batch(
+    profile_specs: Dict[int, Dict[str, Dict[str, List[int]]]],
+    batch_size: int,
+) -> int:
+    preferred = batch_size - 1
+    if preferred in profile_specs and profile_supports_batch(profile_specs[preferred], batch_size):
+        return preferred
+
+    for profile_idx in sorted(profile_specs.keys()):
+        if profile_supports_batch(profile_specs[profile_idx], batch_size):
+            return profile_idx
+
+    if preferred in profile_specs:
+        return preferred
+    if len(profile_specs) == 1:
+        return next(iter(profile_specs.keys()))
+    raise RuntimeError(
+        f"No optimization profile covers batch={batch_size}. available_profiles={sorted(profile_specs.keys())}"
+    )
+
+
+def build_shapes_for_batch(
+    profile_tensors: Dict[str, Dict[str, List[int]]],
+    batch_size: int,
+) -> str:
+    specs: List[str] = []
+    for tensor_name, tensor_spec in profile_tensors.items():
+        dims = list(tensor_spec.get("opt", []))
+        if dims:
+            dims[0] = batch_size
+        specs.append(f"{tensor_name}:{dims_to_shape_spec(dims)}")
+    if not specs:
+        raise RuntimeError("Cannot construct --shapes: no input tensors found in selected profile")
+    return ",".join(specs)
 
 
 def output_tail(text: str, lines: int = 100) -> str:
@@ -262,24 +420,11 @@ def draw_plot(
         print(f"[warn] Skip plotting: matplotlib unavailable ({e})")
         return False
 
-    results = state.get("results", {})
-    if not isinstance(results, dict):
-        return False
-
-    stream_series: Dict[int, Dict[int, float]] = {}
-    for result in results.values():
-        if not isinstance(result, dict):
-            continue
-        if not include_non_ok and result.get("status") != "ok":
-            continue
-        stream = result.get("streams")
-        batch_size = result.get("batch_size")
-        if not isinstance(stream, int) or not isinstance(batch_size, int):
-            continue
-        value = extract_plot_value(metric_name, result)
-        if value is None:
-            continue
-        stream_series.setdefault(stream, {})[batch_size] = value
+    stream_series = collect_plot_series(
+        state=state,
+        metric_name=metric_name,
+        include_non_ok=include_non_ok,
+    )
 
     if not stream_series:
         print("[warn] Skip plotting: no usable benchmark points")
@@ -321,6 +466,45 @@ def draw_plot(
     fig.savefig(output_png, dpi=160)
     plt.close(fig)
     return True
+
+
+def collect_plot_series(
+    state: Dict[str, object],
+    metric_name: str,
+    include_non_ok: bool,
+) -> Dict[int, Dict[int, float]]:
+    results = state.get("results", {})
+    if not isinstance(results, dict):
+        return {}
+
+    stream_series: Dict[int, Dict[int, float]] = {}
+    for result in results.values():
+        if not isinstance(result, dict):
+            continue
+        if not include_non_ok and result.get("status") != "ok":
+            continue
+        stream = result.get("streams")
+        batch_size = result.get("batch_size")
+        if not isinstance(stream, int) or not isinstance(batch_size, int):
+            continue
+        value = extract_plot_value(metric_name, result)
+        if value is None:
+            continue
+        stream_series.setdefault(stream, {})[batch_size] = value
+    return stream_series
+
+
+def count_plot_points(
+    state: Dict[str, object],
+    metric_name: str,
+    include_non_ok: bool,
+) -> int:
+    stream_series = collect_plot_series(
+        state=state,
+        metric_name=metric_name,
+        include_non_ok=include_non_ok,
+    )
+    return sum(len(points) for points in stream_series.values())
 
 
 def should_skip_result(existing: Optional[Dict[str, object]], rerun_failed: bool) -> bool:
@@ -450,27 +634,51 @@ def ensure_plan(
 
 
 def main() -> int:
+    script_dir = Path(__file__).resolve().parent
+    env_sh_path = script_dir.parent / "env.sh"
+    env_defaults = load_env_sh_defaults(env_sh_path)
+
+    tensorrt_root_default = env_defaults.get("TENSORRT_ROOT", "/opt/tensorrt")
+    katago_bin_default = env_defaults.get(
+        "KATAGO_BIN_PATH",
+        detect_default_path(["build/katago", "/opt/katago/katago"]),
+    )
+    trtexec_bin_default = detect_default_path(
+        [str(Path(tensorrt_root_default) / "bin" / "trtexec"), "/opt/tensorrt/bin/trtexec"]
+    )
+    config_default = env_defaults.get(
+        "KATAGO_CONFIG_PATH",
+        detect_default_path(
+            ["/opt/katago/config/gtp_example.cfg", "/opt/katago/configs/gtp_example.cfg", "cpp/tests/data/configs/analysis_example.cfg"]
+        ),
+    )
+    model_default = env_defaults.get(
+        "KATAGO_MODEL_PATH",
+        detect_default_path(["/opt/katago/weights/b18tf.onnx", "/opt/katago/weight/b18tf.onnx"]),
+    )
+    tensorrt_lib_default = str(Path(tensorrt_root_default) / "lib")
+
     parser = argparse.ArgumentParser(
         description="Generate static-profile TensorRT plans via katago, benchmark with trtexec, then plot.",
     )
     parser.add_argument(
         "--katago-bin",
-        default=detect_default_path(["build/katago", "/opt/katago/katago"]),
+        default=katago_bin_default,
     )
     parser.add_argument(
         "--trtexec-bin",
-        default="/opt/tensorrt/bin/trtexec",
+        default=trtexec_bin_default,
     )
     parser.add_argument(
         "--config",
-        default=detect_default_path(["/opt/katago/config/gtp_example.cfg", "cpp/tests/data/configs/analysis_example.cfg"]),
+        default=config_default,
     )
     parser.add_argument(
         "--model",
-        default=detect_default_path(["/opt/katago/weight/b18tf.onnx"]),
+        default=model_default,
     )
     parser.add_argument("--output-json", default="build/trtexec_benchmark.json")
-    parser.add_argument("--tensorrt-lib", default="/opt/tensorrt/lib")
+    parser.add_argument("--tensorrt-lib", default=tensorrt_lib_default)
     parser.add_argument("--max-batch", type=int, default=16)
     parser.add_argument("--plan-batch", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument(
@@ -487,7 +695,10 @@ def main() -> int:
         "--shape-template",
         action="append",
         default=None,
-        help="Input shape template with {batch}, e.g. input_spatial:{batch}x22x19x19",
+        help=(
+            "Manual override for input shape template(s) with {batch}, e.g. "
+            "InputSpatial:{batch}x22x19x19. If omitted, probe input names/shapes from plan via trtexec."
+        ),
     )
     parser.add_argument("--duration-sec", type=float, default=3.0)
     parser.add_argument("--warmup-ms", type=int, default=200)
@@ -554,11 +765,6 @@ def main() -> int:
                 raise FileNotFoundError(f"{label} path not found: {path_obj}")
 
     shape_templates = split_csv(args.shape_template)
-    if not shape_templates:
-        shape_templates = [
-            "input_spatial:{batch}x22x19x19",
-            "input_global:{batch}x19",
-        ]
 
     stream_values = list(range(args.stream_min, args.stream_max + 1))
     batch_max = args.max_batch if args.batch_max is None else min(args.max_batch, args.batch_max)
@@ -579,10 +785,13 @@ def main() -> int:
         "batch_range": [args.batch_min, batch_max],
         "stream_range": [args.stream_min, args.stream_max],
         "profile_mode": "all-static-min-eq-max",
+        "shape_mode": "manual-template" if shape_templates else "trtexec-probe",
         "shape_templates": shape_templates,
         "plan_files": [{"label": label, "path": path} for label, path in parsed_plan_files],
     }
     state = load_or_init_state(output_path, resume=(not args.no_resume), meta=meta)
+    state["meta"]["shape_mode"] = "manual-template" if shape_templates else "trtexec-probe"
+    state["meta"]["shape_templates"] = shape_templates
     state["meta"]["last_run_at"] = now_iso()
     atomic_save_json(output_path, state)
 
@@ -608,6 +817,20 @@ def main() -> int:
             }
         )
 
+    probed_plan_profiles: Dict[str, Dict[int, Dict[str, Dict[str, List[int]]]]] = {}
+    if not shape_templates:
+        for plan_entry in plan_entries:
+            plan_path = str(plan_entry["path"])
+            if plan_path in probed_plan_profiles:
+                continue
+            print(f"\n[probe] trtexec inspect inputs: {plan_path}")
+            probed_plan_profiles[plan_path] = probe_plan_input_profiles(
+                trtexec_bin=trtexec_bin,
+                plan_path=plan_path,
+                env=env,
+                timeout_sec=args.trtexec_timeout_sec,
+            )
+
     cases: List[Tuple[str, str, int, int]] = []
     for plan_entry in plan_entries:
         plan_label = str(plan_entry["label"])
@@ -626,6 +849,13 @@ def main() -> int:
     done = skipped
     render_progress(done, total, f"resume skip={skipped}")
     plot_path = Path(args.plot_png)
+    last_plot_point_count = 0
+    if not args.no_plot:
+        last_plot_point_count = count_plot_points(
+            state=state,
+            metric_name=args.plot_metric,
+            include_non_ok=args.plot_include_non_ok,
+        )
 
     ok_count = 0
     err_count = 0
@@ -639,7 +869,15 @@ def main() -> int:
                 err_count += 1
             continue
 
-        shapes = ",".join(t.replace("{batch}", str(batch_size)) for t in shape_templates)
+        if shape_templates:
+            shapes = ",".join(t.replace("{batch}", str(batch_size)) for t in shape_templates)
+            profile_idx = batch_size - 1
+        else:
+            plan_profiles = probed_plan_profiles.get(plan_path)
+            if not plan_profiles:
+                raise RuntimeError(f"Missing probed profile info for plan: {plan_path}")
+            profile_idx = select_profile_for_batch(plan_profiles, batch_size)
+            shapes = build_shapes_for_batch(plan_profiles[profile_idx], batch_size)
 
         cmd = [
             str(trtexec_bin.resolve()),
@@ -651,7 +889,8 @@ def main() -> int:
             f"--avgRuns={args.avg_runs}",
             f"--infStreams={streams}",
             f"--device={args.device}",
-            f"--useProfile={batch_size - 1}",
+            f"--useProfile={profile_idx}",
+            "--useCudaGraph",
             "--threads",
         ]
         cmd.extend(split_csv(args.trtexec_extra_arg))
@@ -682,6 +921,7 @@ def main() -> int:
             "max_batch": args.max_batch,
             "batch_size": batch_size,
             "streams": streams,
+            "profile_index": profile_idx,
             "plan_path": plan_path,
             "shapes": shapes,
             "command": join_cmd(cmd),
@@ -695,16 +935,23 @@ def main() -> int:
         state["results"][key] = result
         atomic_save_json(output_path, state)
         if not args.no_plot:
-            plotted = draw_plot(
+            current_plot_point_count = count_plot_points(
                 state=state,
-                output_png=plot_path,
                 metric_name=args.plot_metric,
                 include_non_ok=args.plot_include_non_ok,
             )
-            if plotted:
-                state["meta"]["plot_metric"] = args.plot_metric
-                state["meta"]["plot_png"] = str(plot_path.resolve())
-                atomic_save_json(output_path, state)
+            if current_plot_point_count > last_plot_point_count:
+                plotted = draw_plot(
+                    state=state,
+                    output_png=plot_path,
+                    metric_name=args.plot_metric,
+                    include_non_ok=args.plot_include_non_ok,
+                )
+                if plotted:
+                    state["meta"]["plot_metric"] = args.plot_metric
+                    state["meta"]["plot_png"] = str(plot_path.resolve())
+                    atomic_save_json(output_path, state)
+                last_plot_point_count = current_plot_point_count
 
         done += 1
         if status == "ok":
@@ -716,7 +963,7 @@ def main() -> int:
             total,
             (
                 f"plan={normalize_key_token(plan_label)} "
-                f"batch={batch_size} s={streams} {status}"
+                f"batch={batch_size} p={profile_idx} s={streams} {status}"
             ),
         )
 

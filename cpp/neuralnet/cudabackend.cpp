@@ -2418,6 +2418,12 @@ ComputeHandle* NeuralNet::createComputeHandle(
 
   const string& cudaHostWaitPolicy = context->cudaHostWaitPolicy;
   unsigned int cudaHostWaitFlag = getCudaHostWaitFlag(cudaHostWaitPolicy);
+  if(logger != NULL) {
+    logger->write(
+      "Cuda backend thread " + Global::intToString(serverThreadIdx) +
+      ": Calling cudaSetDeviceFlags for CUDA host wait policy = " + cudaHostWaitPolicy
+    );
+  }
   cudaError_t setDeviceFlagsStatus = cudaSetDeviceFlags(cudaHostWaitFlag);
   if(setDeviceFlagsStatus == cudaErrorSetOnActiveProcess) {
     // CUDA was already initialized on this thread, so flags are fixed and cannot be changed now.
