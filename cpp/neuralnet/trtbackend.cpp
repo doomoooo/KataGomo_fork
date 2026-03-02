@@ -1550,7 +1550,7 @@ struct ComputeHandle {
     string plan;
     {
       static mutex tuneMutex;
-      tuneMutex.lock();
+      unique_lock<mutex> tuneLock(tuneMutex);
 
       auto cacheDir = HomeData::getHomeDataDir(true, ctx->homeDataDirOverride);
       cacheDir += "/trtcache";
@@ -1565,6 +1565,62 @@ struct ComputeHandle {
         sprintf(deviceIdent + i * 2, "%02x", static_cast<unsigned char>(deviceHash[i]));
       }
       deviceIdent[sizeof(deviceIdent) - 1] = 0;
+
+      const string globalTimingCacheFile = Global::strprintf(
+        "%s/trt-global-timing-%d_gpu-%s",
+        cacheDir.c_str(),
+        getInferLibVersion(),
+        deviceIdent
+      );
+
+      string timingCacheBlob;
+      try {
+        timingCacheBlob = FileUtils::readFileBinary(globalTimingCacheFile);
+      } catch(const StringError& e) {
+        (void)e;
+      };
+      if(logger != nullptr) {
+        if(timingCacheBlob.size() > 0) {
+          logger->write("Using existing global timing cache at " + globalTimingCacheFile);
+        }
+        else {
+          logger->write("Creating new global timing cache at " + globalTimingCacheFile);
+        }
+      }
+
+      auto timingCache =
+        unique_ptr<ITimingCache>(config->createTimingCache(timingCacheBlob.data(), timingCacheBlob.size()));
+      if(!timingCache) {
+        throw StringError("TensorRT backend: failed to create timing cache");
+      }
+      bool invalidTimingCache = !config->setTimingCache(*timingCache, false);
+      if(invalidTimingCache) {
+        if(logger != nullptr) {
+          logger->write("Invalid global timing cache, using new one instead");
+        }
+        timingCache.reset(config->createTimingCache(nullptr, 0));
+        if(!timingCache || !config->setTimingCache(*timingCache, false)) {
+          throw StringError("TensorRT backend: failed to set timing cache");
+        }
+      }
+
+      auto saveGlobalTimingCache = [&]() {
+        const ITimingCache* cache = config->getTimingCache();
+        if(cache == nullptr) {
+          return;
+        }
+        auto serializedTimingCache = unique_ptr<IHostMemory>(cache->serialize());
+        if(!serializedTimingCache) {
+          return;
+        }
+        ofstream ofs;
+        FileUtils::open(ofs, globalTimingCacheFile, ios::out | ios::binary);
+        ofs.write(static_cast<char*>(serializedTimingCache->data()), serializedTimingCache->size());
+        ofs.close();
+        if(logger != nullptr) {
+          logger->write("Saved global timing cache to " + globalTimingCacheFile);
+        }
+      };
 
 #ifdef CACHE_TENSORRT_PLAN
       string modelHashStr;
@@ -1697,6 +1753,7 @@ struct ComputeHandle {
         if(!planBuffer) {
           throw StringError("TensorRT backend: failed to create plan");
         }
+        saveGlobalTimingCache();
         plan.insert(
           plan.end(),
           static_cast<char*>(planBuffer->data()),
@@ -1717,101 +1774,24 @@ struct ComputeHandle {
         ofs.close();
         logger->write("Saved new plan cache to " + planCacheFile);
         plan.erase(plan.size() - 64 - paramStr.size());
-        tuneMutex.unlock();
+        tuneLock.unlock();
       } else {
-        tuneMutex.unlock();
+        tuneLock.unlock();
         logger->write("Using existing plan cache at " + planCacheFile);
       }
 #else
-      string timingCacheFile = "";
-
-      if (ctx->isOnnx) {
-        
-        timingCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d_%d%d%d",
-          cacheDir.c_str(),
-          getInferLibVersion(),
-          deviceIdent,
-          loadedModel->modelDesc.onnxHeader.model_config_sha256.substr(0, 12).c_str(),
-          ModelParser::tuneSalt,
-          (!loadedModel->modelDesc.onnxHeader.has_mask) ? "exact" : "max",
-          ctx->nnYLen,
-          ctx->nnXLen,
-          maxBatchSize,
-          usingFP16 ? 16 : 32,
-          loadedModel->modelDesc.onnxHeader.is_qat ? 1 : 0,
-          loadedModel->modelDesc.onnxHeader.is_simplified ? 1 : 0,
-          loadedModel->modelDesc.onnxHeader.is_int8 ? 1 : 0
-            );
-          
-      } else {
-        
-        // Truncated to 6 bytes
-        char tuneIdent[6 * 2 + 1];
-        for(int i = 0; i < 6; i++) {
-          sprintf(tuneIdent + i * 2, "%02x", static_cast<unsigned char>(model->tuneHash[i]));
-        }
-        tuneIdent[sizeof(tuneIdent) - 1] = 0;
-        timingCacheFile = Global::strprintf(
-          "%s/trt-%d_gpu-%s_tune-%s_%s%dx%d_batch%d_fp%d",
-          cacheDir.c_str(),
-          getInferLibVersion(),
-          deviceIdent,
-          tuneIdent,
-          requireExactNNLen ? "exact" : "max",
-          ctx->nnYLen,
-          ctx->nnXLen,
-          maxBatchSize,
-          usingFP16 ? 16 : 32);
-      }
-
-
-      string timingCacheBlob;
-      try {
-        timingCacheBlob = FileUtils::readFileBinary(timingCacheFile);
-      } catch(const StringError& e) {
-        (void)e;
-      };
-      if(timingCacheBlob.size() > 0)
-        logger->write("Using existing timing cache at " + timingCacheFile);
-      else
-        logger->write("Creating new timing cache (usingFP16=" + Global::boolToString(usingFP16) + " " + Global::intToString(ctx->nnXLen) + "x" + Global::intToString(ctx->nnYLen) + " maxBatchSizeLimit=" + Global::intToString(maxBatchSize) + ")");
-
-      auto timingCache =
-        unique_ptr<ITimingCache>(config->createTimingCache(timingCacheBlob.data(), timingCacheBlob.size()));
-      auto invalidTimingCache = !config->setTimingCache(*timingCache, false);
-      if(invalidTimingCache) {
-        logger->write("Invalid timing cache, using new one instead");
-        timingCache.reset(config->createTimingCache(nullptr, 0));
-        config->setTimingCache(*timingCache, false);
-      }
-
       unique_ptr<IHostMemory> planBuffer;
-      if(invalidTimingCache || !timingCacheBlob.size()) {
-        INetworkDefinition* netPtr = ctx->isOnnx ? network.get() : model->network.get();
-        planBuffer.reset(builder->buildSerializedNetwork(*netPtr, *config));
-        if(!planBuffer) {
-          throw StringError("TensorRT backend: failed to create plan");
-        }
-        auto serializedTimingCache = unique_ptr<IHostMemory>(config->getTimingCache()->serialize());
-        ofstream ofs;
-        FileUtils::open(ofs, timingCacheFile, ios::out | ios::binary);
-        ofs.write(static_cast<char*>(serializedTimingCache->data()), serializedTimingCache->size());
-        ofs.close();
-        logger->write("Saved new timing cache to " + timingCacheFile);
-        tuneMutex.unlock();
-      } else {
-        tuneMutex.unlock();
-        INetworkDefinition* netPtr = ctx->isOnnx ? network.get() : model->network.get();
-        planBuffer.reset(builder->buildSerializedNetwork(*netPtr, *config));
-        if(!planBuffer) {
-          throw StringError("TensorRT backend: failed to create plan");
-        }
+      INetworkDefinition* netPtr = ctx->isOnnx ? network.get() : model->network.get();
+      planBuffer.reset(builder->buildSerializedNetwork(*netPtr, *config));
+      if(!planBuffer) {
+        throw StringError("TensorRT backend: failed to create plan");
       }
+      saveGlobalTimingCache();
       plan.insert(
         plan.end(),
         static_cast<char*>(planBuffer->data()),
         static_cast<char*>(planBuffer->data()) + planBuffer->size());
+      tuneLock.unlock();
 #endif
     }
 
