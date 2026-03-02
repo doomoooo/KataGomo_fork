@@ -9,11 +9,8 @@ CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=-1
 TRT_AVG_TIMING_ITERS=-1
 TRT_MAX_AUX_STREAMS=-1
-TRT_SET_TACTIC_SOURCES=true
-TRT_MULTI_PROFILE=true
 TRT_HOST_WAIT_POLICY=blocking
 NN_MAX_BATCHSIZE=4
-NN_MIN_BATCHSIZE=4
 NUM_SEARCH_THREADS=16
 # Number of NN server threads (CUDA streams) per GPU.
 TRT_CUDA_STREAMS=4
@@ -69,16 +66,6 @@ if ! [[ "${NN_MAX_BATCHSIZE}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-if ! [[ "${NN_MIN_BATCHSIZE}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "NN_MIN_BATCHSIZE must be a positive integer, got: ${NN_MIN_BATCHSIZE}" >&2
-  exit 1
-fi
-
-if (( NN_MIN_BATCHSIZE > NN_MAX_BATCHSIZE )); then
-  echo "NN_MIN_BATCHSIZE (${NN_MIN_BATCHSIZE}) must be <= NN_MAX_BATCHSIZE (${NN_MAX_BATCHSIZE})" >&2
-  exit 1
-fi
-
 NUM_NN_SERVER_THREADS=$(( TRT_CUDA_STREAMS * ${#TRT_DEVICE_ID_LIST[@]} ))
 OVERRIDE_CONFIG="numNNServerThreadsPerModel=${NUM_NN_SERVER_THREADS}"
 for ((thread_idx=0; thread_idx<NUM_NN_SERVER_THREADS; thread_idx++)); do
@@ -94,10 +81,7 @@ OVERRIDE_CONFIG+=",useEvalCache=true"
 OVERRIDE_CONFIG+=",trtBuilderOptimizationLevel=${TRT_BUILDER_OPT_LEVEL}"
 OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
-OVERRIDE_CONFIG+=",trtSetTacticSources=${TRT_SET_TACTIC_SOURCES}"
-OVERRIDE_CONFIG+=",trtMultiProfile=${TRT_MULTI_PROFILE}"
 OVERRIDE_CONFIG+=",trtHostWaitPolicy=${TRT_HOST_WAIT_POLICY}"
-OVERRIDE_CONFIG+=",nnMinBatchSize=${NN_MIN_BATCHSIZE}"
 OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
 OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"
 

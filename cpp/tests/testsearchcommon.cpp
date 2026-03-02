@@ -196,7 +196,6 @@ NNEvaluator* TestSearchCommon::startNNEval(
 ) {
   vector<int> gpuIdxByServerThread = {0};
   int maxBatchSize = 16;
-  int minBatchSize = 1;
   int nnCacheSizePowerOfTwo = 16;
   int nnMutexPoolSizePowerOfTwo = 12;
   //bool debugSkipNeuralNet = false;
@@ -220,7 +219,6 @@ NNEvaluator* TestSearchCommon::startNNEval(
     expectedSha256,
     &logger,
     maxBatchSize,
-    minBatchSize,
     nnXLen,
     nnYLen,
     requireExactNNLen,

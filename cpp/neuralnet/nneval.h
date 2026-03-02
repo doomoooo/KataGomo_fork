@@ -2,6 +2,7 @@
 #define NEURALNET_NNEVAL_H_
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 
 #include "../core/global.h"
@@ -86,7 +87,6 @@ class NNEvaluator {
     const std::string& expectedSha256,
     Logger* logger,
     int maxBatchSize,
-    int minBatchSize,
     int nnXLen,
     int nnYLen,
     bool requireExactNNLen,
@@ -109,9 +109,7 @@ class NNEvaluator {
     const std::string& cudaHostWaitPolicy = "blocking",
     int trtBuilderOptimizationLevel = -1,
     int trtAvgTimingIterations = -1,
-    int trtMaxAuxStreams = -1,
-    bool trtSetTacticSources = true,
-    bool trtMultiProfile = false
+    int trtMaxAuxStreams = -1
   );
   ~NNEvaluator();
 
@@ -220,6 +218,8 @@ class NNEvaluator {
 
   // Record aggregate search-thread timing. This is reported on shutdown alongside batch stats.
   void recordSearchThreadTiming(double waitForGpuSeconds, double workSeconds);
+  // Snapshot how long the evaluator spent with exactly k busy inference server threads.
+  void getBusyServerThreadTimeStats(std::vector<double>& secondsByBusyCount, double& totalSeconds) const;
 
  private:
   const std::string modelName;
@@ -253,7 +253,6 @@ class NNEvaluator {
   std::vector<std::thread*> serverThreads;
 
   const int maxBatchSize;
-  const int minBatchSize;
 
   //Counters for statistics
   std::atomic<uint64_t> m_numRowsProcessed;
@@ -261,6 +260,11 @@ class NNEvaluator {
   std::atomic<int64_t> m_searchThreadWaitForGpuNanos;
   std::atomic<int64_t> m_searchThreadWorkNanos;
   std::atomic<uint64_t> m_searchThreadCount;
+  mutable std::mutex busyServerThreadStatsMutex;
+  std::vector<int64_t> m_busyServerThreadCountNanos;
+  int m_busyServerThreads;
+  std::chrono::steady_clock::time_point m_busyServerThreadStatsLastUpdate;
+  bool m_busyServerThreadStatsInitialized;
 
   mutable std::mutex bufferMutex;
 
@@ -289,6 +293,7 @@ class NNEvaluator {
   //Queued up requests
   ThreadSafeQueue<NNResultBuf*> queryQueue;
   friend class ONNXModelHeader;
+  void recordBusyServerThreadsCountDelta(int delta);
  public:
   //Helper, for internal use only
   void serve(NNServerBuf& buf, Rand& rand, int gpuIdxForThisThread, int serverThreadIdx);

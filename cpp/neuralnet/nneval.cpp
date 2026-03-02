@@ -55,7 +55,6 @@ NNEvaluator::NNEvaluator(
   const string& expectedSha256,
   Logger* lg,
   int maxBatchSz,
-  int minBatchSz,
   int xLen,
   int yLen,
   bool rExactNNLen,
@@ -78,9 +77,7 @@ NNEvaluator::NNEvaluator(
   const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
-  int trtMaxAuxStreams,
-  bool trtSetTacticSources,
-  bool trtMultiProfile
+  int trtMaxAuxStreams
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -108,12 +105,16 @@ NNEvaluator::NNEvaluator(
    numServerThreadsEverSpawned(0),
    serverThreads(),
    maxBatchSize(maxBatchSz),
-   minBatchSize(minBatchSz),
    m_numRowsProcessed(0),
    m_numBatchesProcessed(0),
    m_searchThreadWaitForGpuNanos(0),
    m_searchThreadWorkNanos(0),
    m_searchThreadCount(0),
+   busyServerThreadStatsMutex(),
+   m_busyServerThreadCountNanos((size_t)numThr + 1,0),
+   m_busyServerThreads(0),
+   m_busyServerThreadStatsLastUpdate(std::chrono::steady_clock::now()),
+   m_busyServerThreadStatsInitialized(true),
    bufferMutex(),
    isKilled(false),
    numServerThreadsStartingUp(0),
@@ -134,8 +135,6 @@ NNEvaluator::NNEvaluator(
     throw StringError("Maximum supported nnEval board size is " + Global::intToString(NNPos::MAX_BOARD_LEN));
   if(maxBatchSize <= 0)
     throw StringError("maxBatchSize is negative: " + Global::intToString(maxBatchSize));
-  if(minBatchSize <= 0 || minBatchSize > maxBatchSize)
-    throw StringError("minBatchSize must be in [1,maxBatchSize]");
   if(gpuIdxByServerThread.size() != numThreads)
     throw StringError("gpuIdxByServerThread.size() != numThreads");
 
@@ -171,10 +170,10 @@ NNEvaluator::NNEvaluator(
     numInputMetaChannels = desc.numInputMetaChannels;
     postProcessParams = desc.postProcessParams;
     computeContext = NeuralNet::createComputeContext(
-      gpuIdxs,logger,nnXLen,nnYLen,minBatchSize,
+      gpuIdxs,logger,nnXLen,nnYLen,
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
       usingFP16Mode,usingNHWCMode,useCudaGraph,cudaHostWaitPolicy,
-      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,trtSetTacticSources,trtMultiProfile,
+      trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,
       loadedModel
     );
   }
@@ -368,6 +367,19 @@ void NNEvaluator::clearStats() {
   m_searchThreadWaitForGpuNanos.store(0);
   m_searchThreadWorkNanos.store(0);
   m_searchThreadCount.store(0);
+
+  {
+    lock_guard<std::mutex> lock(busyServerThreadStatsMutex);
+    int clampedBusy = m_busyServerThreads;
+    if(clampedBusy < 0)
+      clampedBusy = 0;
+    if(clampedBusy > numThreads)
+      clampedBusy = numThreads;
+    m_busyServerThreads = clampedBusy;
+    m_busyServerThreadCountNanos.assign((size_t)numThreads + 1, 0);
+    m_busyServerThreadStatsLastUpdate = std::chrono::steady_clock::now();
+    m_busyServerThreadStatsInitialized = true;
+  }
 }
 
 void NNEvaluator::recordSearchThreadTiming(double waitForGpuSeconds, double workSeconds) {
@@ -386,6 +398,64 @@ void NNEvaluator::recordSearchThreadTiming(double waitForGpuSeconds, double work
   m_searchThreadWaitForGpuNanos.fetch_add(waitNanos, std::memory_order_relaxed);
   m_searchThreadWorkNanos.fetch_add(workNanos, std::memory_order_relaxed);
   m_searchThreadCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void NNEvaluator::recordBusyServerThreadsCountDelta(int delta) {
+  lock_guard<std::mutex> lock(busyServerThreadStatsMutex);
+  auto now = std::chrono::steady_clock::now();
+  if(!m_busyServerThreadStatsInitialized) {
+    m_busyServerThreadStatsLastUpdate = now;
+    m_busyServerThreadStatsInitialized = true;
+  }
+  if((int)m_busyServerThreadCountNanos.size() != numThreads + 1)
+    m_busyServerThreadCountNanos.assign((size_t)numThreads + 1, 0);
+
+  int clampedBusy = m_busyServerThreads;
+  if(clampedBusy < 0)
+    clampedBusy = 0;
+  if(clampedBusy > numThreads)
+    clampedBusy = numThreads;
+  int64_t elapsedNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_busyServerThreadStatsLastUpdate).count();
+  if(elapsedNanos > 0)
+    m_busyServerThreadCountNanos[(size_t)clampedBusy] += elapsedNanos;
+  m_busyServerThreadStatsLastUpdate = now;
+
+  int newBusy = clampedBusy + delta;
+  if(newBusy < 0)
+    newBusy = 0;
+  if(newBusy > numThreads)
+    newBusy = numThreads;
+  m_busyServerThreads = newBusy;
+}
+
+void NNEvaluator::getBusyServerThreadTimeStats(std::vector<double>& secondsByBusyCount, double& totalSeconds) const {
+  vector<int64_t> busyCountNanos;
+  {
+    lock_guard<std::mutex> lock(busyServerThreadStatsMutex);
+    busyCountNanos = m_busyServerThreadCountNanos;
+    if((int)busyCountNanos.size() != numThreads + 1)
+      busyCountNanos.resize((size_t)numThreads + 1, 0);
+
+    if(m_busyServerThreadStatsInitialized && !busyCountNanos.empty()) {
+      auto now = std::chrono::steady_clock::now();
+      int clampedBusy = m_busyServerThreads;
+      if(clampedBusy < 0)
+        clampedBusy = 0;
+      if(clampedBusy >= (int)busyCountNanos.size())
+        clampedBusy = (int)busyCountNanos.size() - 1;
+      int64_t elapsedNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_busyServerThreadStatsLastUpdate).count();
+      if(elapsedNanos > 0)
+        busyCountNanos[(size_t)clampedBusy] += elapsedNanos;
+    }
+  }
+
+  secondsByBusyCount.resize(busyCountNanos.size());
+  totalSeconds = 0.0;
+  for(size_t i = 0; i<busyCountNanos.size(); i++) {
+    double seconds = (double)busyCountNanos[i] / 1e9;
+    secondsByBusyCount[i] = seconds;
+    totalSeconds += seconds;
+  }
 }
 
 void NNEvaluator::clearCache() {
@@ -424,6 +494,13 @@ void NNEvaluator::setNumThreads(const vector<int>& gpuIdxByServerThr) {
     throw StringError("NNEvaluator::setNumThreads called when threads were already running!");
   numThreads = (int)gpuIdxByServerThr.size();
   gpuIdxByServerThread = gpuIdxByServerThr;
+  {
+    lock_guard<std::mutex> lock(busyServerThreadStatsMutex);
+    m_busyServerThreads = 0;
+    m_busyServerThreadCountNanos.assign((size_t)numThreads + 1, 0);
+    m_busyServerThreadStatsLastUpdate = std::chrono::steady_clock::now();
+    m_busyServerThreadStatsInitialized = true;
+  }
 }
 
 void NNEvaluator::spawnServerThreads() {
@@ -433,6 +510,13 @@ void NNEvaluator::spawnServerThreads() {
   m_searchThreadWaitForGpuNanos.store(0, std::memory_order_relaxed);
   m_searchThreadWorkNanos.store(0, std::memory_order_relaxed);
   m_searchThreadCount.store(0, std::memory_order_relaxed);
+  {
+    lock_guard<std::mutex> lock(busyServerThreadStatsMutex);
+    m_busyServerThreads = 0;
+    m_busyServerThreadCountNanos.assign((size_t)numThreads + 1, 0);
+    m_busyServerThreadStatsLastUpdate = std::chrono::steady_clock::now();
+    m_busyServerThreadStatsInitialized = true;
+  }
 
   {
     lock_guard<std::mutex> lock(bufferMutex);
@@ -550,12 +634,11 @@ void NNEvaluator::serve(
   while(true) {
     resultBufs.clear();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
-    int desiredMinBatchSize = std::min(minBatchSize, desiredBatchSize);
     auto queueWaitStart = std::chrono::steady_clock::now();
     bool gotAnything = queryQueue.waitPopUpToNWithMin(
       resultBufs,
       (size_t)desiredBatchSize,
-      (size_t)desiredMinBatchSize,
+      (size_t)desiredBatchSize,
       &numOngoingEvalsApprox
     );
     queueWaitSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - queueWaitStart).count();
@@ -665,7 +748,15 @@ void NNEvaluator::serve(
       batchPrepareSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - batchPrepareStart).count();
 
       auto nnCallStart = std::chrono::steady_clock::now();
-      NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
+      recordBusyServerThreadsCountDelta(1);
+      try {
+        NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
+      }
+      catch(...) {
+        recordBusyServerThreadsCountDelta(-1);
+        throw;
+      }
+      recordBusyServerThreadsCountDelta(-1);
       nnCallTotalSecondsThisThread += std::chrono::duration<double>(std::chrono::steady_clock::now() - nnCallStart).count();
 #ifdef USE_TENSORRT_BACKEND
       {

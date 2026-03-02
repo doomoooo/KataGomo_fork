@@ -53,7 +53,6 @@ namespace NeuralNet {
     Logger* logger,
     int nnXLen,
     int nnYLen,
-    int nnMinBatchSize,
     const std::string& openCLTunerFile,
     const std::string& homeDataDirOverride,
     bool openCLReTunePerBoardSize,
@@ -64,8 +63,6 @@ namespace NeuralNet {
     int trtBuilderOptimizationLevel,
     int trtAvgTimingIterations,
     int trtMaxAuxStreams,
-    bool trtSetTacticSources,
-    bool trtMultiProfile,
     const LoadedModel* loadedModel
   );
   //A ComputeContext should NOT be freed until all ComputeHandles created using it have also been freed.

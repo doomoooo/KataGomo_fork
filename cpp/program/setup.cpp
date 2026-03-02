@@ -293,26 +293,6 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("maxAuxStreams"))
       trtMaxAuxStreams = cfg.getInt("maxAuxStreams", -1, 1024);
 
-    bool trtSetTacticSources = true;
-    if(cfg.contains(backendPrefix+"SetTacticSources-"+idxStr))
-      trtSetTacticSources = cfg.getBool(backendPrefix+"SetTacticSources-"+idxStr);
-    else if(cfg.contains("setTacticSources-"+idxStr))
-      trtSetTacticSources = cfg.getBool("setTacticSources-"+idxStr);
-    else if(cfg.contains(backendPrefix+"SetTacticSources"))
-      trtSetTacticSources = cfg.getBool(backendPrefix+"SetTacticSources");
-    else if(cfg.contains("setTacticSources"))
-      trtSetTacticSources = cfg.getBool("setTacticSources");
-
-    bool trtMultiProfile = false;
-    if(cfg.contains(backendPrefix+"MultiProfile-"+idxStr))
-      trtMultiProfile = cfg.getBool(backendPrefix+"MultiProfile-"+idxStr);
-    else if(cfg.contains("multiProfile-"+idxStr))
-      trtMultiProfile = cfg.getBool("multiProfile-"+idxStr);
-    else if(cfg.contains(backendPrefix+"MultiProfile"))
-      trtMultiProfile = cfg.getBool(backendPrefix+"MultiProfile");
-    else if(cfg.contains("multiProfile"))
-      trtMultiProfile = cfg.getBool("multiProfile");
-
     string cudaHostWaitPolicy = "blocking";
     if(cfg.contains(backendPrefix+"HostWaitPolicy-"+idxStr))
       cudaHostWaitPolicy = cfg.getString(backendPrefix+"HostWaitPolicy-"+idxStr);
@@ -357,8 +337,6 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " trtBuilderOptimizationLevel " + Global::intToString(trtBuilderOptimizationLevel)
       + " trtAvgTimingIterations " + Global::intToString(trtAvgTimingIterations)
       + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
-      + " trtSetTacticSources " + Global::boolToString(trtSetTacticSources)
-      + " trtMultiProfile " + Global::boolToString(trtMultiProfile)
       + " cudaHostWaitPolicy " + cudaHostWaitPolicy
     );
 
@@ -412,15 +390,6 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     }
 #endif
 
-    int nnMinBatchSize =
-      cfg.contains("nnMinBatchSize") ? cfg.getInt("nnMinBatchSize", 1, 65536) : 1;
-    if(nnMinBatchSize > nnMaxBatchSize) {
-      throw StringError(
-        "nnMinBatchSize (" + Global::intToString(nnMinBatchSize) +
-        ") cannot exceed nnMaxBatchSize (" + Global::intToString(nnMaxBatchSize) + ")"
-      );
-    }
-
     int defaultSymmetry = forcedSymmetry >= 0 ? forcedSymmetry : 0;
     if(disableFP16)
       useFP16Mode = enabled_t::False;
@@ -439,7 +408,6 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       expectedSha256,
       &logger,
       nnMaxBatchSize,
-      nnMinBatchSize,
       nnXLen,
       nnYLen,
       requireExactNNLen,
@@ -462,9 +430,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       cudaHostWaitPolicy,
       trtBuilderOptimizationLevel,
       trtAvgTimingIterations,
-      trtMaxAuxStreams,
-      trtSetTacticSources,
-      trtMultiProfile
+      trtMaxAuxStreams
     );
 
     nnEval->spawnServerThreads();

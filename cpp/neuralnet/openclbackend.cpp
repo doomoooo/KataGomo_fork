@@ -456,7 +456,6 @@ ComputeContext* NeuralNet::createComputeContext(
   Logger* logger,
   int nnXLen,
   int nnYLen,
-  int nnMinBatchSize,
   const string& openCLTunerFile,
   const string& homeDataDirOverride,
   bool openCLReTunePerBoardSize,
@@ -467,18 +466,13 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
-  bool trtSetTacticSources,
-  bool trtMultiProfile,
   const LoadedModel* loadedModel
 ) {
-  (void)nnMinBatchSize;
   (void)useCudaGraph;
   (void)cudaHostWaitPolicy;
   (void)trtBuilderOptimizationLevel;
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
-  (void)trtSetTacticSources;
-  (void)trtMultiProfile;
 
   if(gpuIdxs.size() <= 0)
     throw StringError("NeuralNet::createComputeContext - specified no gpus to use");
