@@ -13,6 +13,7 @@ export KATAGO_BIN_PATH="/opt/katago/katago"
 export LD_LIBRARY_PATH="${TENSORRT_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # 4) Model location
+#export KATAGO_MODEL_PATH="/opt/katago/weights/b18tf.onnx"
 export KATAGO_MODEL_PATH="/opt/katago/weights/b18tf.onnx"
 
 # 5) Config location

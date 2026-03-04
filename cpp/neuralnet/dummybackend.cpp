@@ -28,6 +28,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
+  bool trtRebuildPlanCache,
   const LoadedModel* loadedModel
 ) {
   (void)gpuIdxs;
@@ -44,6 +45,7 @@ ComputeContext* NeuralNet::createComputeContext(
   (void)trtBuilderOptimizationLevel;
   (void)trtAvgTimingIterations;
   (void)trtMaxAuxStreams;
+  (void)trtRebuildPlanCache;
   (void)loadedModel;
   throw StringError("Dummy neural net backend: NeuralNet::createComputeContext unimplemented");
 }

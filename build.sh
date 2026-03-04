@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 # Build script for KataGomo with TensorRT backend (Gomoku version)
 # This script handles compilation and deployment to /opt/katago
@@ -20,8 +21,9 @@ BASE_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fomit-frame-pointe
 PGO_GENERATE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-generate=${PGO_PROFILE_DIR}"
 PGO_USE_FLAGS="${BASE_RELEASE_FLAGS} -fprofile-use=${PGO_PROFILE_DIR} -fprofile-correction -Wno-error=coverage-mismatch"
 
-# PGO benchmark workload knobs (override via env if needed)
-PGO_BENCH_VISITS=1000
+# PGO benchmark workload knobs (override via CLI args)
+PGO_BENCH_VISITS=2000
+PGO_CUDA_STREAMS=4
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,12 +47,21 @@ print_error() {
 
 print_usage() {
     cat <<EOF
-Usage: $(basename "$0") [--pgo] [--help]
+Usage: $(basename "$0") [--pgo] [--pgo-bench-visits N] [--help]
 
 Options:
   --pgo                Enable PGO build flow (default: disabled)
+  --pgo-bench-visits N Visits passed to benchmark workload (default: ${PGO_BENCH_VISITS})
   --help               Show this help message
 EOF
+}
+
+require_arg_value() {
+    local opt_name="$1"
+    local opt_value="${2:-}"
+    if [ -z "${opt_value}" ]; then
+        print_error "Missing value for ${opt_name}"
+    fi
 }
 
 parse_args() {
@@ -59,6 +70,11 @@ parse_args() {
             --pgo)
                 ENABLE_PGO=true
                 shift
+                ;;
+            --pgo-bench-visits)
+                require_arg_value "$1" "${2:-}"
+                PGO_BENCH_VISITS="$2"
+                shift 2
                 ;;
             --help|-h)
                 print_usage
@@ -69,6 +85,12 @@ parse_args() {
                 ;;
         esac
     done
+}
+
+validate_args() {
+    if ! [[ "${PGO_BENCH_VISITS}" =~ ^[1-9][0-9]*$ ]]; then
+        print_error "--pgo-bench-visits must be a positive integer, got: ${PGO_BENCH_VISITS}"
+    fi
 }
 
 ensure_tcmalloc() {
@@ -94,7 +116,8 @@ configure_and_build() {
     local build_dir="$1"
     local c_flags_release="$2"
     local cxx_flags_release="$3"
-    rm -r "${build_dir}"
+    rm -rf "${build_dir}"
+    mkdir -p "${build_dir}"
     print_info "Configuring CMake in ${build_dir}"
     cmake -S "${SCRIPT_DIR}/cpp" -B "${build_dir}" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -127,21 +150,22 @@ run_pgo_training_workload() {
         print_error "benchmark.sh not found or not executable: ${benchmark_script}"
     fi
 
-    print_info "Running PGO training workload via benchmark.sh"
-    PGO_KATAGO_BIN_PATH_OVERRIDE="${pgo_bin}" \
-    PGO_BENCH_VISITS="${PGO_BENCH_VISITS}" \
-    "${benchmark_script}"
-    if [ $? -ne 0 ]; then
-        print_error "PGO training workload failed"
-    fi
+    # Keep cudaGraph enabled and reuse existing TensorRT plan cache by default.
+    print_info "Running PGO training workload via benchmark.sh (cudaGraph enabled)"
+    "${benchmark_script}" \
+        --katago-bin "${pgo_bin}" \
+        --visits "${PGO_BENCH_VISITS}" \
+        --cuda-streams "${PGO_CUDA_STREAMS}"
 
-    if ! find "${PGO_PROFILE_DIR}" -type f -name "*.gcda" | grep -q .; then
+    # Use -print -quit to avoid pipefail false negatives from find receiving SIGPIPE when grep -q exits early.
+    if ! find "${PGO_PROFILE_DIR}" -type f -name "*.gcda" -print -quit | grep -q .; then
         print_error "No PGO profile data (*.gcda) was generated in ${PGO_PROFILE_DIR}"
     fi
 }
 
 # Parse CLI args
 parse_args "$@"
+validate_args
 
 # Check if we're in the right directory
 if [ ! -d "${SCRIPT_DIR}/cpp" ]; then

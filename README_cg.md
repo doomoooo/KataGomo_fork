@@ -110,6 +110,21 @@ Example:
   - `-fixed-batch-size "${NN_MAX_BATCHSIZE}"`
   - `numNNServerThreadsPerModel=${TRT_CUDA_STREAMS}`
   - TensorRT tuning overrides listed above.
+- Supports CLI args (instead of `PGO_*` env overrides), for example:
+
+```bash
+./benchmark.sh --visits 2000 --cuda-streams 4 --batch-size 16
+./benchmark.sh --katago-bin ./cpp/build_pgo_gen/katago --visits 1000
+```
+
+### `build.sh --pgo` (PGO build entrypoint)
+
+- Use `build.sh` directly for PGO builds.
+- Example:
+
+```bash
+./build.sh --pgo --pgo-bench-visits 2000
+```
 
 ### `python/benchmark.py` (trtexec runner)
 

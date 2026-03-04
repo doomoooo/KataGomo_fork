@@ -36,6 +36,7 @@ cpp/build
 cpp/out
 /build*
 !/build.sh
+!/build_pgo.sh
 
 export_model_cuda.sh
 mixmodels.sh

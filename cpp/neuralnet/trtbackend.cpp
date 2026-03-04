@@ -91,6 +91,7 @@ struct ComputeContext {
   int trtBuilderOptimizationLevel;
   int trtAvgTimingIterations;
   int trtMaxAuxStreams;
+  bool trtRebuildPlanCachePending;
   string cudaHostWaitPolicy;
   string homeDataDirOverride;
   string onnxModelPath;
@@ -147,6 +148,7 @@ ComputeContext* NeuralNet::createComputeContext(
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
   int trtMaxAuxStreams,
+  bool trtRebuildPlanCache,
   const LoadedModel* loadedModel) {
   (void)gpuIdxs;
   (void)logger;
@@ -174,6 +176,7 @@ ComputeContext* NeuralNet::createComputeContext(
   context->trtBuilderOptimizationLevel = trtBuilderOptimizationLevel;
   context->trtAvgTimingIterations = trtAvgTimingIterations;
   context->trtMaxAuxStreams = trtMaxAuxStreams;
+  context->trtRebuildPlanCachePending = trtRebuildPlanCache;
   context->cudaHostWaitPolicy = Global::toLower(Global::trim(cudaHostWaitPolicy));
   if(context->cudaHostWaitPolicy == "blocking_sync" || context->cudaHostWaitPolicy == "blocking-sync" || context->cudaHostWaitPolicy == "blockingsync")
     context->cudaHostWaitPolicy = "blocking";
@@ -1228,6 +1231,7 @@ struct ComputeHandle {
   };
   RuntimeExecState runtimeExecState;
   bool useCudaGraph;
+  bool execContextUsesUserManagedDeviceMemory;
   void* sharedExecDeviceMemory;
   int64_t sharedExecDeviceMemoryBytes;
   bool hasInputMetaTensor;
@@ -1266,6 +1270,10 @@ struct ComputeHandle {
     maxAuxStreamsRequested = -1;
     engineAuxStreamsUsed = 0;
     useCudaGraph = context->useCudaGraph;
+    execContextUsesUserManagedDeviceMemory = false;
+#if NV_TENSORRT_MAJOR < 10
+    execContextUsesUserManagedDeviceMemory = true;
+#endif
     sharedExecDeviceMemory = nullptr;
     sharedExecDeviceMemoryBytes = 0;
     hasInputMetaTensor = false;
@@ -1650,7 +1658,17 @@ struct ComputeHandle {
       string paramStr;
       buildPlanCacheFileAndParam(maxBatchSize, planCacheFile, paramStr);
 
-      tryLoadValidatedPlan(planCacheFile, paramStr, true, plan);
+      bool forceRebuildPlanCache = false;
+      if(ctx->trtRebuildPlanCachePending) {
+        forceRebuildPlanCache = true;
+        ctx->trtRebuildPlanCachePending = false;
+        if(logger != nullptr) {
+          logger->write("Forcing plan cache rebuild for current key at " + planCacheFile);
+        }
+      }
+      if(!forceRebuildPlanCache) {
+        tryLoadValidatedPlan(planCacheFile, paramStr, true, plan);
+      }
 
       if(plan.size() <= 0) {
         logger->write("Creating new plan cache");
@@ -1736,7 +1754,7 @@ struct ComputeHandle {
       }
     }
 
-    if(useCudaGraph) {
+    if(useCudaGraph && execContextUsesUserManagedDeviceMemory) {
       sharedExecDeviceMemoryBytes = engine->getDeviceMemorySizeV2();
       if(sharedExecDeviceMemoryBytes < 0) {
         throw StringError("TensorRT backend: invalid device memory size from engine");
@@ -1851,15 +1869,23 @@ struct ComputeHandle {
     if(runtimeState.exec == nullptr) {
       if(useCudaGraph) {
 #if NV_TENSORRT_MAJOR >= 10
-        runtimeState.exec.reset(engine->createExecutionContext(ExecutionContextAllocationStrategy::kUSER_MANAGED));
+        const ExecutionContextAllocationStrategy allocStrategy =
+          execContextUsesUserManagedDeviceMemory ? ExecutionContextAllocationStrategy::kUSER_MANAGED
+                                                 : ExecutionContextAllocationStrategy::kSTATIC;
+        runtimeState.exec.reset(engine->createExecutionContext(allocStrategy));
+        if(logger != nullptr) {
+          logger->write(
+            string("TensorRT backend: execution context allocation strategy=") +
+            (execContextUsesUserManagedDeviceMemory ? "kUSER_MANAGED" : "kSTATIC"));
+        }
 #else
         runtimeState.exec.reset(engine->createExecutionContextWithoutDeviceMemory());
 #endif
         if(!runtimeState.exec) {
           throw StringError("TensorRT backend: failed to create execution context for profile");
         }
-        if(sharedExecDeviceMemoryBytes > 0) {
-        runtimeState.exec->setDeviceMemoryV2(sharedExecDeviceMemory, sharedExecDeviceMemoryBytes);
+        if(execContextUsesUserManagedDeviceMemory && sharedExecDeviceMemoryBytes > 0) {
+          runtimeState.exec->setDeviceMemoryV2(sharedExecDeviceMemory, sharedExecDeviceMemoryBytes);
         }
       }
       else {

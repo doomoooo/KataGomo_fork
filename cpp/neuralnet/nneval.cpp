@@ -77,7 +77,8 @@ NNEvaluator::NNEvaluator(
   const string& cudaHostWaitPolicy,
   int trtBuilderOptimizationLevel,
   int trtAvgTimingIterations,
-  int trtMaxAuxStreams
+  int trtMaxAuxStreams,
+  bool trtRebuildPlanCache
 )
   :modelName(mName),
    modelFileName(mFileName),
@@ -174,6 +175,7 @@ NNEvaluator::NNEvaluator(
       openCLTunerFile,homeDataDirOverride,openCLReTunePerBoardSize,
       usingFP16Mode,usingNHWCMode,useCudaGraph,cudaHostWaitPolicy,
       trtBuilderOptimizationLevel,trtAvgTimingIterations,trtMaxAuxStreams,
+      trtRebuildPlanCache,
       loadedModel
     );
   }

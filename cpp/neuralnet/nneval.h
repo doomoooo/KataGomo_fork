@@ -109,7 +109,8 @@ class NNEvaluator {
     const std::string& cudaHostWaitPolicy = "blocking",
     int trtBuilderOptimizationLevel = -1,
     int trtAvgTimingIterations = -1,
-    int trtMaxAuxStreams = -1
+    int trtMaxAuxStreams = -1,
+    bool trtRebuildPlanCache = false
   );
   ~NNEvaluator();
 

@@ -43,6 +43,23 @@ struct SearchNodeTable;
 struct SearchNodeChildrenReference;
 struct ConstSearchNodeChildrenReference;
 
+struct SearchThreadRawStatsRow {
+  uint64_t searchId;
+  int32_t rootTurn;
+  int32_t threadIdx;
+  uint64_t attemptIdx;
+  int64_t rootVisitsStart;
+  int64_t rootVisitsEnd;
+  double upperBoundVisitsLeft;
+  int32_t maxDepth;
+  uint8_t shouldCountPlayout;
+  uint8_t descendReturned;
+  uint8_t outcomeCode;
+  uint8_t isPondering;
+  uint64_t totalTimeNs;
+  uint64_t gpuWaitTimeNs;
+};
+
 //Per-thread state
 struct SearchThread {
   int threadIdx;
@@ -78,6 +95,16 @@ struct SearchThread {
   //Per-thread timing for profiling waiting on GPU versus search work.
   std::chrono::steady_clock::time_point startTime;
   double waitForGpuTimeSum;
+
+  bool recordRawStats;
+  bool isPondering;
+  int64_t rawStatsMaxRows;
+  uint64_t rawStatsDroppedRows;
+  uint64_t playoutAttemptCounter;
+  int currentPlayoutDepth;
+  int currentPlayoutMaxDepth;
+  uint8_t currentPlayoutOutcomeCode;
+  std::vector<SearchThreadRawStatsRow> rawStatsRows;
 
   SearchThread(int threadIdx, const Search& search);
   ~SearchThread();
@@ -184,6 +211,9 @@ struct Search {
   //very lazily only when a new search begins or the search is cleared.
   std::mutex oldNNOutputsToCleanUpMutex;
   std::vector<std::shared_ptr<NNOutput>*> oldNNOutputsToCleanUp;
+  std::mutex rawStatsRowsMutex;
+  std::vector<SearchThreadRawStatsRow> rawStatsRows;
+  uint64_t rawStatsDroppedRows;
 
   //================================================================================================================
   // Constructors and Destructors
@@ -663,6 +693,9 @@ private:
   SearchNode* allocateOrFindNode(SearchThread& thread, Player nextPla, Loc bestChildMoveLoc, bool forceNonTerminal, Hash128 graphHash);
   void clearOldNNOutputs();
   void transferOldNNOutputs(SearchThread& thread);
+  void clearRawStatsRows();
+  void transferRawStatsRows(SearchThread& thread);
+  void maybeFlushRawStatsRowsToFile();
   void removeSubtreeValueBias(SearchNode* node);
   void deleteAllOldOrAllNewTableNodesAndSubtreeValueBiasMulithreaded(bool old);
   void deleteAllTableNodesMulithreaded();

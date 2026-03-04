@@ -137,10 +137,13 @@ namespace PlayUtils {
     int64_t numNNEvals = 0;
     int64_t numNNBatches = 0;
     double avgBatchSize = 0;
+    std::vector<double> busyNNEvalThreadsSeconds;
+    double busyNNEvalThreadsWallSeconds = 0;
 
     std::string toStringNotDone() const;
     std::string toString() const;
     std::string toStringWithElo(const BenchmarkResults* baseline, double secondsPerGameMove) const;
+    std::string busyNNEvalThreadsSummary() const;
 
     double computeEloEffect(double secondsPerGameMove) const;
 

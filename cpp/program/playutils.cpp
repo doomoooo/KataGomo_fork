@@ -857,6 +857,28 @@ string PlayUtils::BenchmarkResults::toStringWithElo(const BenchmarkResults* base
   return out.str();
 }
 
+string PlayUtils::BenchmarkResults::busyNNEvalThreadsSummary() const {
+  if(busyNNEvalThreadsSeconds.empty() || busyNNEvalThreadsWallSeconds <= 0.0)
+    return "";
+
+  const int maxBusy = (int)busyNNEvalThreadsSeconds.size() - 1;
+  ostringstream out;
+  out << "busy inference-thread/cudaStream wall-time ratio"
+      << " (streams=" << maxBusy
+      << ", wall=" << Global::strprintf("%.3fs",busyNNEvalThreadsWallSeconds) << "):";
+  for(int busy = 0; busy <= maxBusy; busy++) {
+    double seconds = busyNNEvalThreadsSeconds[(size_t)busy];
+    if(seconds <= 0.0 && busy != 0 && busy != maxBusy)
+      continue;
+    double pct = 100.0 * seconds / busyNNEvalThreadsWallSeconds;
+    if(seconds >= 1.0)
+      out << " " << busy << "=" << Global::strprintf("%.1f%%(%.3fs)",pct,seconds);
+    else
+      out << " " << busy << "=" << Global::strprintf("%.1f%%(%.1fms)",pct,seconds * 1000.0);
+  }
+  return out.str();
+}
+
 //From some test matches by lightvector using g170
 static constexpr double eloGainPerDoubling = 250;
 
@@ -992,11 +1014,15 @@ PlayUtils::BenchmarkResults PlayUtils::benchmarkSearchOnPositionsAndPrint(
   results.numNNEvals = nnEval->numRowsProcessed();
   results.numNNBatches = nnEval->numBatchesProcessed();
   results.avgBatchSize = nnEval->averageProcessedBatchSize();
+  nnEval->getBusyServerThreadTimeStats(results.busyNNEvalThreadsSeconds, results.busyNNEvalThreadsWallSeconds);
 
   if(printElo)
     cout << "\r" << results.toStringWithElo(baseline,secondsPerGameMove) << std::endl;
   else
     cout << "\r" << results.toString() << std::endl;
+  string busySummary = results.busyNNEvalThreadsSummary();
+  if(!busySummary.empty())
+    cout << "  " << busySummary << std::endl;
 
   delete bot;
 

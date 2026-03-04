@@ -6,6 +6,8 @@
 #include "../search/search.h"
 
 #include <algorithm>
+#include <fstream>
+#include <iomanip>
 #include <numeric>
 
 #include "../core/fancymath.h"
@@ -20,6 +22,63 @@
 using namespace std;
 
 //-----------------------------------------------------------------------------------------
+
+enum SearchPlayoutOutcomeCode : uint8_t {
+  OUTCOME_UNKNOWN = 0,
+  OUTCOME_TERMINAL_NO_RESULT = 1,
+  OUTCOME_TERMINAL_RESULT = 2,
+  OUTCOME_INIT_NODE_NN_FAIL = 3,
+  OUTCOME_NODE_STATE_RACE = 4,
+  OUTCOME_NODE_ALREADY_EVALUATING = 5,
+  OUTCOME_NEW_NODE_EVALUATED = 6,
+  OUTCOME_ILLEGAL_MOVE_REGEN = 7,
+  OUTCOME_NO_CHILD_AVAILABLE = 8,
+  OUTCOME_NEW_CHILD_RACE = 9,
+  OUTCOME_EDGE_CATCHUP_NEW_CHILD = 10,
+  OUTCOME_EDGE_CATCHUP_EXISTING_CHILD = 11,
+  OUTCOME_GRAPH_CYCLE_COUNT_EDGE = 12,
+  OUTCOME_GRAPH_CYCLE_SKIP_EDGE = 13,
+  OUTCOME_RECURSIVE_DESCENT = 14,
+};
+
+static void setPlayoutOutcomeIfUnset(SearchThread& thread, uint8_t outcomeCode) {
+  if(thread.currentPlayoutOutcomeCode == OUTCOME_UNKNOWN)
+    thread.currentPlayoutOutcomeCode = outcomeCode;
+}
+
+struct ScopedPlayoutDepth {
+  SearchThread& thread;
+  explicit ScopedPlayoutDepth(SearchThread& thread_)
+    :thread(thread_)
+  {
+    thread.currentPlayoutDepth += 1;
+    if(thread.currentPlayoutDepth > thread.currentPlayoutMaxDepth)
+      thread.currentPlayoutMaxDepth = thread.currentPlayoutDepth;
+  }
+  ~ScopedPlayoutDepth() {
+    thread.currentPlayoutDepth -= 1;
+  }
+};
+
+static const char* outcomeCodeToString(uint8_t code) {
+  switch(code) {
+  case OUTCOME_TERMINAL_NO_RESULT: return "terminal_no_result";
+  case OUTCOME_TERMINAL_RESULT: return "terminal_result";
+  case OUTCOME_INIT_NODE_NN_FAIL: return "init_node_nn_fail";
+  case OUTCOME_NODE_STATE_RACE: return "node_state_race";
+  case OUTCOME_NODE_ALREADY_EVALUATING: return "node_already_evaluating";
+  case OUTCOME_NEW_NODE_EVALUATED: return "new_node_evaluated";
+  case OUTCOME_ILLEGAL_MOVE_REGEN: return "illegal_move_regen";
+  case OUTCOME_NO_CHILD_AVAILABLE: return "no_child_available";
+  case OUTCOME_NEW_CHILD_RACE: return "new_child_race";
+  case OUTCOME_EDGE_CATCHUP_NEW_CHILD: return "edge_catchup_new_child";
+  case OUTCOME_EDGE_CATCHUP_EXISTING_CHILD: return "edge_catchup_existing_child";
+  case OUTCOME_GRAPH_CYCLE_COUNT_EDGE: return "graph_cycle_count_edge";
+  case OUTCOME_GRAPH_CYCLE_SKIP_EDGE: return "graph_cycle_skip_edge";
+  case OUTCOME_RECURSIVE_DESCENT: return "recursive_descent";
+  default: return "unknown";
+  }
+}
 
 static string makeSeed(const Search& search, int threadIdx) {
   stringstream ss;
@@ -51,13 +110,28 @@ SearchThread::SearchThread(int tIdx, const Search& search)
    oldNNOutputsToCleanUp(),
    illegalMoveHashes(),
    startTime(std::chrono::steady_clock::now()),
-   waitForGpuTimeSum(0.0)
+   waitForGpuTimeSum(0.0),
+   recordRawStats(!search.searchParams.searchThreadRawStatsFile.empty()),
+   isPondering(false),
+   rawStatsMaxRows(search.searchParams.searchThreadRawStatsMaxRowsPerThread),
+   rawStatsDroppedRows(0),
+   playoutAttemptCounter(0),
+   currentPlayoutDepth(0),
+   currentPlayoutMaxDepth(0),
+   currentPlayoutOutcomeCode(OUTCOME_UNKNOWN),
+   rawStatsRows()
 {
   statsBuf.resize(NNPos::MAX_NN_POLICY_SIZE);
   graphPath.reserve(256);
 
   //Reserving even this many is almost certainly overkill but should guarantee that we never have hit allocation here.
   oldNNOutputsToCleanUp.reserve(8);
+  if(recordRawStats) {
+    size_t reserveCount = 4096;
+    if(rawStatsMaxRows > 0)
+      reserveCount = (size_t)std::min<int64_t>(rawStatsMaxRows, 65536);
+    rawStatsRows.reserve(reserveCount);
+  }
 }
 SearchThread::~SearchThread() {
   for(size_t i = 0; i<oldNNOutputsToCleanUp.size(); i++)
@@ -115,7 +189,10 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
    threadTasks(NULL),
    threadTasksRemaining(NULL),
    oldNNOutputsToCleanUpMutex(),
-   oldNNOutputsToCleanUp()
+   oldNNOutputsToCleanUp(),
+   rawStatsRowsMutex(),
+   rawStatsRows(),
+   rawStatsDroppedRows(0)
 {
   assert(logger != NULL);
   nnXLen = nnEval->getNNXLen();
@@ -499,6 +576,7 @@ void Search::runWholeSearch(
 
   //Do this first, just in case this causes us to clear things and have 0 effective time carried over
   beginSearch(pondering);
+  clearRawStatsRows();
   if(searchBegun != NULL)
     (*searchBegun)();
   const int64_t numNonPlayoutVisits = getRootVisits();
@@ -556,6 +634,7 @@ void Search::runWholeSearch(
     &shouldStopNow,&shouldStopEarly,maxVisits,maxPlayouts,maxTime,pondering,searchFactor
   ](int threadIdx) {
     SearchThread* stbuf = new SearchThread(threadIdx,*this);
+    stbuf->isPondering = pondering;
     auto reportThreadTiming = [&]() {
       if(nnEvaluator == NULL)
         return;
@@ -633,12 +712,14 @@ void Search::runWholeSearch(
     catch(...) {
       reportThreadTiming();
       transferOldNNOutputs(*stbuf);
+      transferRawStatsRows(*stbuf);
       delete stbuf;
       throw;
     }
 
     reportThreadTiming();
     transferOldNNOutputs(*stbuf);
+    transferRawStatsRows(*stbuf);
     delete stbuf;
   };
 
@@ -661,6 +742,8 @@ void Search::runWholeSearch(
   if(searchParams.useEvalCache && searchParams.useGraphSearch && evalCache != nullptr && rootNode != NULL && mirroringPla == C_EMPTY) {
     recursivelyRecordEvalCache(*rootNode);
   }
+
+  maybeFlushRawStatsRowsToFile();
 
   //Relaxed load is fine since numPlayoutsShared should be synchronized already due to the joins
   lastSearchNumPlayouts = numPlayoutsShared.load(std::memory_order_relaxed);
@@ -957,6 +1040,92 @@ void Search::transferOldNNOutputs(SearchThread& thread) {
   thread.oldNNOutputsToCleanUp.resize(0);
 }
 
+void Search::clearRawStatsRows() {
+  std::lock_guard<std::mutex> lock(rawStatsRowsMutex);
+  rawStatsRows.clear();
+  rawStatsDroppedRows = 0;
+}
+
+void Search::transferRawStatsRows(SearchThread& thread) {
+  if(!thread.recordRawStats)
+    return;
+
+  std::lock_guard<std::mutex> lock(rawStatsRowsMutex);
+  rawStatsDroppedRows += thread.rawStatsDroppedRows;
+  if(!thread.rawStatsRows.empty())
+    rawStatsRows.insert(rawStatsRows.end(), thread.rawStatsRows.begin(), thread.rawStatsRows.end());
+  thread.rawStatsRows.clear();
+  thread.rawStatsDroppedRows = 0;
+}
+
+void Search::maybeFlushRawStatsRowsToFile() {
+  if(searchParams.searchThreadRawStatsFile.empty()) {
+    clearRawStatsRows();
+    return;
+  }
+
+  std::vector<SearchThreadRawStatsRow> rows;
+  uint64_t droppedRows = 0;
+  {
+    std::lock_guard<std::mutex> lock(rawStatsRowsMutex);
+    if(rawStatsRows.empty() && rawStatsDroppedRows == 0)
+      return;
+    rows.swap(rawStatsRows);
+    droppedRows = rawStatsDroppedRows;
+    rawStatsDroppedRows = 0;
+  }
+
+  bool shouldWriteHeader = true;
+  {
+    std::ifstream in(searchParams.searchThreadRawStatsFile, std::ios::binary | std::ios::ate);
+    if(in.good() && in.tellg() > 0)
+      shouldWriteHeader = false;
+  }
+
+  std::ofstream out(searchParams.searchThreadRawStatsFile, std::ios::out | std::ios::app);
+  if(!out) {
+    logger->write("WARNING: Could not open searchThreadRawStatsFile for append: " + searchParams.searchThreadRawStatsFile);
+    return;
+  }
+
+  if(shouldWriteHeader) {
+    out << "search_id\troot_turn\tthread_idx\tattempt_idx\troot_visits_start\troot_visits_end\tupper_bound_visits_left\tmax_depth\tshould_count_playout\tdescend_returned\toutcome_code\toutcome\tis_pondering\ttotal_time_ns\tgpu_wait_time_ns\n";
+  }
+
+  out << std::setprecision(17);
+  for(const SearchThreadRawStatsRow& row : rows) {
+    out
+      << row.searchId << '\t'
+      << row.rootTurn << '\t'
+      << row.threadIdx << '\t'
+      << row.attemptIdx << '\t'
+      << row.rootVisitsStart << '\t'
+      << row.rootVisitsEnd << '\t'
+      << row.upperBoundVisitsLeft << '\t'
+      << row.maxDepth << '\t'
+      << (int)row.shouldCountPlayout << '\t'
+      << (int)row.descendReturned << '\t'
+      << (int)row.outcomeCode << '\t'
+      << outcomeCodeToString(row.outcomeCode) << '\t'
+      << (int)row.isPondering << '\t'
+      << row.totalTimeNs << '\t'
+      << row.gpuWaitTimeNs << '\n';
+  }
+  out.close();
+
+  if(!out) {
+    logger->write("WARNING: Error while writing searchThreadRawStatsFile: " + searchParams.searchThreadRawStatsFile);
+    return;
+  }
+
+  if(droppedRows > 0) {
+    logger->write(
+      "WARNING: Dropped " + Global::uint64ToString(droppedRows) +
+      " raw search thread rows due to searchThreadRawStatsMaxRowsPerThread cap"
+    );
+  }
+}
+
 void Search::removeSubtreeValueBias(SearchNode* node) {
   if(node->subtreeValueBiasTableEntry != nullptr) {
     double deltaUtilitySumToSubtract = node->lastSubtreeValueBiasDeltaSum * searchParams.subtreeValueBiasFreeProp;
@@ -1182,9 +1351,25 @@ bool Search::runSinglePlayout(SearchThread& thread, double upperBoundVisitsLeft)
 
   //Prep this value, playoutDescend will set it to false if the playout shouldn't count
   thread.shouldCountPlayout = true;
+  thread.currentPlayoutDepth = 0;
+  thread.currentPlayoutMaxDepth = 0;
+  thread.currentPlayoutOutcomeCode = OUTCOME_UNKNOWN;
+
+  const bool recordRawStats = thread.recordRawStats;
+  const uint64_t attemptIdx = thread.playoutAttemptCounter + 1;
+  int64_t rootVisitsStart = 0;
+  int64_t rootVisitsEnd = 0;
+  double waitForGpuTimeStart = 0.0;
+  auto playoutStartTime = std::chrono::steady_clock::now();
+  if(recordRawStats) {
+    thread.playoutAttemptCounter = attemptIdx;
+    rootVisitsStart = getRootVisits();
+    waitForGpuTimeStart = thread.waitForGpuTimeSum;
+  }
 
   bool finishedPlayout = playoutDescend(thread,*rootNode,true);
-  (void)finishedPlayout;
+  if(thread.currentPlayoutOutcomeCode == OUTCOME_UNKNOWN)
+    thread.currentPlayoutOutcomeCode = OUTCOME_RECURSIVE_DESCENT;
 
   //Restore thread state back to the root state
   thread.pla = rootPla;
@@ -1193,6 +1378,43 @@ bool Search::runSinglePlayout(SearchThread& thread, double upperBoundVisitsLeft)
   thread.graphHash = rootGraphHash;
   thread.graphPath.clear();
 
+  if(recordRawStats) {
+    rootVisitsEnd = getRootVisits();
+
+    uint64_t totalTimeNs = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - playoutStartTime
+    ).count();
+
+    double gpuWaitSeconds = thread.waitForGpuTimeSum - waitForGpuTimeStart;
+    if(gpuWaitSeconds < 0.0)
+      gpuWaitSeconds = 0.0;
+    uint64_t gpuWaitTimeNs = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(gpuWaitSeconds)
+    ).count();
+
+    if(thread.rawStatsMaxRows <= 0 || (int64_t)thread.rawStatsRows.size() < thread.rawStatsMaxRows) {
+      SearchThreadRawStatsRow row;
+      row.searchId = (uint64_t)numSearchesBegun;
+      row.rootTurn = (int32_t)rootHistory.moveHistory.size();
+      row.threadIdx = thread.threadIdx;
+      row.attemptIdx = attemptIdx;
+      row.rootVisitsStart = rootVisitsStart;
+      row.rootVisitsEnd = rootVisitsEnd;
+      row.upperBoundVisitsLeft = upperBoundVisitsLeft;
+      row.maxDepth = thread.currentPlayoutMaxDepth;
+      row.shouldCountPlayout = thread.shouldCountPlayout ? 1 : 0;
+      row.descendReturned = finishedPlayout ? 1 : 0;
+      row.outcomeCode = thread.currentPlayoutOutcomeCode;
+      row.isPondering = thread.isPondering ? 1 : 0;
+      row.totalTimeNs = totalTimeNs;
+      row.gpuWaitTimeNs = gpuWaitTimeNs;
+      thread.rawStatsRows.push_back(row);
+    }
+    else {
+      thread.rawStatsDroppedRows += 1;
+    }
+  }
+
   return thread.shouldCountPlayout;
 }
 
@@ -1200,6 +1422,8 @@ bool Search::playoutDescend(
   SearchThread& thread, SearchNode& node,
   bool isRoot
 ) {
+  ScopedPlayoutDepth scopedPlayoutDepth(thread);
+
   //Hit terminal node, finish
   //forceNonTerminal marks special nodes where we cannot end the game, and is set IF they would normally be finished.
   //This includes the root if the root would be game-ended, since if we are searching a position
@@ -1221,6 +1445,7 @@ bool Search::playoutDescend(
       double lead = 0.0;
       double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
       addLeafValue(node, winLossValue, noResultValue, scoreMean, scoreMeanSq, lead, weight, true, false);
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_TERMINAL_NO_RESULT);
       return true;
     }
     else {
@@ -1231,6 +1456,7 @@ bool Search::playoutDescend(
       double lead = scoreMean;
       double weight = (searchParams.useUncertainty && nnEvaluator->supportsShorttermError()) ? searchParams.uncertaintyMaxWeight : 1.0;
       addLeafValue(node, winLossValue, noResultValue, scoreMean, scoreMeanSq, lead, weight, true, false);
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_TERMINAL_RESULT);
       return true;
     }
   }
@@ -1244,6 +1470,7 @@ bool Search::playoutDescend(
       //gets to update the state, to avoid races where we update the state while the node stats aren't updated yet.
       if(!suc) {
         thread.shouldCountPlayout = false;
+        setPlayoutOutcomeIfUnset(thread, OUTCOME_INIT_NODE_NN_FAIL);
         return false;
       }
     }
@@ -1253,18 +1480,21 @@ bool Search::playoutDescend(
       //Presumably someone else got there first.
       //Just give up on this playout and try again from the start.
       thread.shouldCountPlayout = false;
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_NODE_STATE_RACE);
       return false;
     }
     else {
       //Perform the nn evaluation and finish!
       node.initializeChildren();
       node.state.store(SearchNode::STATE_EXPANDED0, std::memory_order_seq_cst);
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_NEW_NODE_EVALUATED);
       return true;
     }
   }
   else if(nodeState == SearchNode::STATE_EVALUATING) {
     //Just give up on this playout and try again from the start.
     thread.shouldCountPlayout = false;
+    setPlayoutOutcomeIfUnset(thread, OUTCOME_NODE_ALREADY_EVALUATING);
     return false;
   }
 
@@ -1327,6 +1557,7 @@ bool Search::playoutDescend(
       //Return TRUE though, so that the parent path we traversed increments its edge visits.
       //We want the search to continue as best it can, so we increment visits so search will still make progress
       //even if this keeps happening in some really bad transposition or something.
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_ILLEGAL_MOVE_REGEN);
       return true;
     }
 
@@ -1334,6 +1565,7 @@ bool Search::playoutDescend(
       //This might happen if all moves have been forbidden. The node will just get stuck counting visits without expanding
       //and we won't do any search.
       addCurrentNNOutputAsLeafValue(node,false);
+      setPlayoutOutcomeIfUnset(thread, OUTCOME_NO_CHILD_AVAILABLE);
       return true;
     }
 
@@ -1393,6 +1625,7 @@ bool Search::playoutDescend(
           //Clean up virtual losses in case the node is a transposition and is being used.
           child->virtualLosses.fetch_add(-1,std::memory_order_release);
           thread.shouldCountPlayout = false;
+          setPlayoutOutcomeIfUnset(thread, OUTCOME_NEW_CHILD_RACE);
           return false;
         }
       }
@@ -1403,6 +1636,7 @@ bool Search::playoutDescend(
       if(countEdgeVisit && maybeCatchUpEdgeVisits(thread, node, child, nodeState, bestChildIdx)) {
         updateStatsAfterPlayout(node,thread,isRoot);
         child->virtualLosses.fetch_add(-1,std::memory_order_release);
+        setPlayoutOutcomeIfUnset(thread, OUTCOME_EDGE_CATCHUP_NEW_CHILD);
         return true;
       }
     }
@@ -1420,6 +1654,7 @@ bool Search::playoutDescend(
       if(countEdgeVisit && maybeCatchUpEdgeVisits(thread, node, child, nodeState, bestChildIdx)) {
         updateStatsAfterPlayout(node,thread,isRoot);
         child->virtualLosses.fetch_add(-1,std::memory_order_release);
+        setPlayoutOutcomeIfUnset(thread, OUTCOME_EDGE_CATCHUP_EXISTING_CHILD);
         return true;
       }
 
@@ -1454,6 +1689,10 @@ bool Search::playoutDescend(
 
       child->virtualLosses.fetch_add(-1,std::memory_order_release);
       // If we didn't count an edge visit, none of the parents need to update either.
+      if(countEdgeVisit)
+        setPlayoutOutcomeIfUnset(thread, OUTCOME_GRAPH_CYCLE_COUNT_EDGE);
+      else
+        setPlayoutOutcomeIfUnset(thread, OUTCOME_GRAPH_CYCLE_SKIP_EDGE);
       return countEdgeVisit;
     }
   }
@@ -1471,6 +1710,7 @@ bool Search::playoutDescend(
   }
   child->virtualLosses.fetch_add(-1,std::memory_order_release);
 
+  setPlayoutOutcomeIfUnset(thread, OUTCOME_RECURSIVE_DESCENT);
   return shouldUpdateChildAncestors;
 }
 

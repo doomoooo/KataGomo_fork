@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./env.sh
 source "${SCRIPT_DIR}/env.sh"
 
-CLEAR_TRT_CACHE=0
 TRT_BUILDER_OPT_LEVEL=-1
 TRT_AVG_TIMING_ITERS=-1
 TRT_MAX_AUX_STREAMS=-1
 TRT_HOST_WAIT_POLICY=blocking
+TRT_REBUILD_PLAN_CACHE=false
 NN_MAX_BATCHSIZE=4
 NUM_SEARCH_THREADS=16
 # Number of NN server threads (CUDA streams) per GPU.
@@ -18,13 +18,6 @@ TRT_DEVICE_ID=0
 # Optional multi-GPU mapping. Example: "0,1,2".
 # If non-empty, this overrides TRT_DEVICE_ID and each listed device gets TRT_CUDA_STREAMS threads.
 TRT_DEVICE_IDS=""
-
-# Default to rebuilding TensorRT engine/tactics for the current tuning knobs.
-# Set CLEAR_TRT_CACHE=0 to reuse existing cache.
-if [[ "${CLEAR_TRT_CACHE}" == "1" ]]; then
-  rm -rf "${HOME}/.katago/trtcache"
-  mkdir -p "${HOME}/.katago/trtcache"
-fi
 
 if ! [[ "${TRT_CUDA_STREAMS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "numNNServerThreadsPerModel must be a positive integer, got: ${TRT_CUDA_STREAMS}" >&2
@@ -82,8 +75,12 @@ OVERRIDE_CONFIG+=",trtBuilderOptimizationLevel=${TRT_BUILDER_OPT_LEVEL}"
 OVERRIDE_CONFIG+=",trtAvgTimingIterations=${TRT_AVG_TIMING_ITERS}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"
 OVERRIDE_CONFIG+=",trtHostWaitPolicy=${TRT_HOST_WAIT_POLICY}"
+OVERRIDE_CONFIG+=",trtRebuildPlanCache=${TRT_REBUILD_PLAN_CACHE}"
 OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
 OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"
+# Explicitly disable raw search-thread stats logging for normal runs.
+OVERRIDE_CONFIG+=",searchThreadRawStatsFile="
+OVERRIDE_CONFIG+=",searchThreadRawStatsMaxRowsPerThread="
 
 "${KATAGO_BIN_PATH}" gtp \
   -model "${KATAGO_MODEL_PATH}" \

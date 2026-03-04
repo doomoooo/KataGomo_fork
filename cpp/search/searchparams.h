@@ -122,6 +122,8 @@ struct SearchParams {
   //Asyncbot
   int numThreads; //Number of threads
   int backendNumThreads; //Number of threads for the backend, only used for ONNX-cpu backend
+  std::string searchThreadRawStatsFile; //If non-empty, append per-attempt raw search thread rows to this TSV file.
+  int64_t searchThreadRawStatsMaxRowsPerThread; //Cap rows per thread per search, 0 means no cap.
   double minPlayoutsPerThread; //If the number of playouts to perform per thread is smaller than this, cap the number of threads used.
   int64_t maxVisits; //Max number of playouts from the root to think for, counting earlier playouts from tree reuse
   int64_t maxPlayouts; //Max number of playouts from the root to think for, not counting earlier playouts from tree reuse

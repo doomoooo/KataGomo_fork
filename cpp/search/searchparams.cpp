@@ -87,6 +87,8 @@ SearchParams::SearchParams()
    numVirtualLossesPerThread(3.0),
    numThreads(1),
    backendNumThreads(1),
+   searchThreadRawStatsFile(),
+   searchThreadRawStatsMaxRowsPerThread(0),
    minPlayoutsPerThread(0.0),
    maxVisits(((int64_t)1) << 50),
    maxPlayouts(((int64_t)1) << 50),
@@ -224,6 +226,8 @@ bool SearchParams::operator==(const SearchParams& other) const {
 
     numThreads == other.numThreads &&
     backendNumThreads == other.backendNumThreads &&
+    searchThreadRawStatsFile == other.searchThreadRawStatsFile &&
+    searchThreadRawStatsMaxRowsPerThread == other.searchThreadRawStatsMaxRowsPerThread &&
     minPlayoutsPerThread == other.minPlayoutsPerThread &&
     maxVisits == other.maxVisits &&
     maxPlayouts == other.maxPlayouts &&
@@ -483,6 +487,8 @@ json SearchParams::changeableParametersToJson() const {
 
   ret["numSearchThreads"] = numThreads; // NOTE: different name since that's how setup.cpp loads it
   ret["backendNumThreads"] = backendNumThreads; // NOTE: different name since that's how setup.cpp loads it
+  ret["searchThreadRawStatsFile"] = searchThreadRawStatsFile;
+  ret["searchThreadRawStatsMaxRowsPerThread"] = searchThreadRawStatsMaxRowsPerThread;
   ret["minPlayoutsPerThread"] = minPlayoutsPerThread;
   ret["maxVisits"] = maxVisits;
   ret["maxPlayouts"] = maxPlayouts;
@@ -634,6 +640,8 @@ void SearchParams::printParams(std::ostream& out) const {
 
   PRINTPARAM(numThreads);
   PRINTPARAM(backendNumThreads);
+  PRINTPARAM(searchThreadRawStatsFile);
+  PRINTPARAM(searchThreadRawStatsMaxRowsPerThread);
   PRINTPARAM(minPlayoutsPerThread);
   PRINTPARAM(maxVisits);
   PRINTPARAM(maxPlayouts);

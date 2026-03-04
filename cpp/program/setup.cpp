@@ -293,6 +293,16 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     else if(cfg.contains("maxAuxStreams"))
       trtMaxAuxStreams = cfg.getInt("maxAuxStreams", -1, 1024);
 
+    bool trtRebuildPlanCache = false;
+    if(cfg.contains(backendPrefix+"RebuildPlanCache-"+idxStr))
+      trtRebuildPlanCache = cfg.getBool(backendPrefix+"RebuildPlanCache-"+idxStr);
+    else if(cfg.contains("rebuildPlanCache-"+idxStr))
+      trtRebuildPlanCache = cfg.getBool("rebuildPlanCache-"+idxStr);
+    else if(cfg.contains(backendPrefix+"RebuildPlanCache"))
+      trtRebuildPlanCache = cfg.getBool(backendPrefix+"RebuildPlanCache");
+    else if(cfg.contains("rebuildPlanCache"))
+      trtRebuildPlanCache = cfg.getBool("rebuildPlanCache");
+
     string cudaHostWaitPolicy = "blocking";
     if(cfg.contains(backendPrefix+"HostWaitPolicy-"+idxStr))
       cudaHostWaitPolicy = cfg.getString(backendPrefix+"HostWaitPolicy-"+idxStr);
@@ -337,6 +347,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " trtBuilderOptimizationLevel " + Global::intToString(trtBuilderOptimizationLevel)
       + " trtAvgTimingIterations " + Global::intToString(trtAvgTimingIterations)
       + " trtMaxAuxStreams " + Global::intToString(trtMaxAuxStreams)
+      + " trtRebuildPlanCache " + Global::boolToString(trtRebuildPlanCache)
       + " cudaHostWaitPolicy " + cudaHostWaitPolicy
     );
 
@@ -430,7 +441,8 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       cudaHostWaitPolicy,
       trtBuilderOptimizationLevel,
       trtAvgTimingIterations,
-      trtMaxAuxStreams
+      trtMaxAuxStreams,
+      trtRebuildPlanCache
     );
 
     nnEval->spawnServerThreads();
@@ -561,6 +573,14 @@ vector<SearchParams> Setup::loadParams(
     if(cfg.contains("numSearchThreads"+idxStr)) params.numThreads = cfg.getInt("numSearchThreads"+idxStr, 1, 4096);
     else                                        params.numThreads = cfg.getInt("numSearchThreads",        1, 4096);
 #endif
+    if(cfg.contains("searchThreadRawStatsFile"+idxStr)) params.searchThreadRawStatsFile = Global::trim(cfg.getString("searchThreadRawStatsFile"+idxStr));
+    else if(cfg.contains("searchThreadRawStatsFile"))   params.searchThreadRawStatsFile = Global::trim(cfg.getString("searchThreadRawStatsFile"));
+    else                                                 params.searchThreadRawStatsFile = "";
+
+    if(cfg.contains("searchThreadRawStatsMaxRowsPerThread"+idxStr)) params.searchThreadRawStatsMaxRowsPerThread = cfg.getInt64("searchThreadRawStatsMaxRowsPerThread"+idxStr, (int64_t)0, (int64_t)1000000000);
+    else if(cfg.contains("searchThreadRawStatsMaxRowsPerThread"))   params.searchThreadRawStatsMaxRowsPerThread = cfg.getInt64("searchThreadRawStatsMaxRowsPerThread", (int64_t)0, (int64_t)1000000000);
+    else                                                            params.searchThreadRawStatsMaxRowsPerThread = 250000;
+
     if(cfg.contains("minPlayoutsPerThread"+idxStr)) params.minPlayoutsPerThread = cfg.getDouble("minPlayoutsPerThread"+idxStr, 0.0, 1.0e20);
     else if(cfg.contains("minPlayoutsPerThread"))   params.minPlayoutsPerThread = cfg.getDouble("minPlayoutsPerThread",        0.0, 1.0e20);
     else                                            params.minPlayoutsPerThread = (setupFor == SETUP_FOR_ANALYSIS || setupFor == SETUP_FOR_GTP) ? 8.0 : 0.0;
@@ -832,9 +852,6 @@ vector<SearchParams> Setup::loadParams(
     if(cfg.contains("numVirtualLossesPerThread"+idxStr)) params.numVirtualLossesPerThread = cfg.getDouble("numVirtualLossesPerThread"+idxStr, 0.01, 1000.0);
     else if(cfg.contains("numVirtualLossesPerThread"))   params.numVirtualLossesPerThread = cfg.getDouble("numVirtualLossesPerThread",        0.01, 1000.0);
     else                                                 params.numVirtualLossesPerThread = 1.0;
-
-    // Deprecated sampling option - accepted for config compatibility but intentionally ignored.
-    cfg.markAllKeysUsedWithPrefix("sampleSearchThreadStates");
 
     if(cfg.contains("treeReuseCarryOverTimeFactor"+idxStr)) params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor"+idxStr,0.0,1.0);
     else if(cfg.contains("treeReuseCarryOverTimeFactor"))   params.treeReuseCarryOverTimeFactor = cfg.getDouble("treeReuseCarryOverTimeFactor",0.0,1.0);
