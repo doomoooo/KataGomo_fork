@@ -208,7 +208,7 @@ OVERRIDE_CONFIG+=",trtUseCudaGraph=${TRT_USE_CUDA_GRAPH}"
 
 if [[ "${MODE}" == "benchmark" ]]; then
   OVERRIDE_CONFIG+=",useGraphSearch=true"
-  OVERRIDE_CONFIG+=",useEvalCache=true"
+  OVERRIDE_CONFIG+=",globalPerfProfile=true"
 
   "${KATAGO_BIN}" benchmark \
     -model "${KATAGO_MODEL}" \
