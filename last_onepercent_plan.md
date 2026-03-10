@@ -59,3 +59,102 @@ Primary sources:
   https://docs.nvidia.com/cuda/archive/13.0.1/pdf/CUDA_Runtime_API.pdf
 - CUDA Programming Guide 13.1, Runtime Initialization:
   https://docs.nvidia.com/cuda/cuda-programming-guide/pdf/cuda-programming-guide.pdf
+
+### 2026-03-10: 本机同步基线（用于判断“多一个线程 handoff 值不值”）
+
+测试环境：
+
+- OS: Ubuntu 24.04, Linux 6.14
+- CPU: AMD Ryzen 9 9900X
+- GPU: GeForce RTX 5080
+- CUDA toolchain: nvcc 13.1
+- Driver/runtime: 580.126.09 / CUDA 13.0
+
+#### A. `pthread_cond` + mutex 的线程 handoff 开销
+
+方法：
+
+- 两个线程固定到指定 CPU。
+- 使用单个 `pthread_mutex_t` + `pthread_cond_t` 做 ping-pong。
+- 主线程 signal 对端并等待对端 signal 回来。
+- 记录单次 round-trip 时间，one-way handoff 近似取 round-trip / 2。
+- 这是空闲机器上的“低负载下限量级”，不是生产最坏值。
+
+结果：
+
+- CPU0 <-> CPU1:
+  - round-trip mean `2.71 us`
+  - one-way mean `1.36 us`
+  - one-way p50 `1.23 us`
+  - one-way p95 `1.84 us`
+  - one-way p99 `2.22 us`
+- CPU0 <-> CPU2:
+  - one-way mean `1.85 us`
+  - one-way p50 `1.66 us`
+  - one-way p95 `2.90 us`
+  - one-way p99 `3.09 us`
+- CPU0 <-> CPU12 (SMT sibling):
+  - one-way mean `1.81 us`
+  - one-way p50 `1.83 us`
+  - one-way p95 `2.47 us`
+  - one-way p99 `2.94 us`
+
+保守结论：
+
+- 在这台机器上，“一次条件变量唤醒 + 锁交接”的典型代价是 `~1.3-1.9 us`，p95 常见在 `~1.8-2.9 us`。
+- 极端尾延迟会跳到几十微秒甚至毫秒级，这是调度器/中断/系统噪声，不适合作为 steady-state 设计点，但必须在 tail-latency 预算里留余地。
+- 如果一个热路径为了 overlap 需要额外引入 2 次线程 handoff，那么光同步本身通常就会吃掉 `~2.5-4 us`，这已经不是可以忽略的量级。
+
+#### B. `cudaGraphLaunch` 的 CPU 侧重复 launch 开销
+
+方法：
+
+- 图先 instantiate，再显式 `cudaGraphUpload()`，避免把首次上传成本混进重复 launch。
+- 每次测量只统计 host 线程待在 `cudaGraphLaunch()` 调用里的时间。
+- launch 完后再 `cudaStreamSynchronize()`，仅用于保证下一次 launch 看到空 stream；同步时间不计入结果。
+- 额外测了普通空 kernel launch，作为对照。
+
+结果：
+
+- 普通空 kernel launch:
+  - mean `1.68 us`
+  - p50 `1.60 us`
+  - p95 `2.08 us`
+- `cudaGraphLaunch`, 1-node 直线图:
+  - mean `0.98 us`
+  - p50 `0.97 us`
+  - p95 `1.04 us`
+- `cudaGraphLaunch`, 8-node 直线图:
+  - mean `1.05 us`
+  - p50 `1.01 us`
+  - p95 `1.25 us`
+- `cudaGraphLaunch`, 32-node 直线图:
+  - mean `1.08 us`
+  - p50 `1.02 us`
+  - p95 `1.29 us`
+- `cudaGraphLaunch`, 128-node 直线图:
+  - mean `1.06 us`
+  - p50 `1.02 us`
+  - p95 `1.29 us`
+
+与 NVIDIA 官方资料的关系：
+
+- NVIDIA 2024 年关于 CUDA Graphs 的文章给出的 Ampere + CUDA 12.6 repeat launch CPU overhead 量级是“约 `2.5 us + ~1 ns/node`（直线图，10 node 以上）”。
+- 这台 Blackwell + 更新栈上的本机结果更快，且在 1 到 128 node 内几乎常数，可视作“当前开发机上重复 graph launch 大约 `1 us`”。
+- 这里测的是 repeat launch，不包括 instantiate、首次 launch/upload、graph update 等一次性或非稳态成本。
+
+保守结论：
+
+- 在这台机器上，一个“已经 upload 的 graph 的重复 launch”大约只要 `~1 us` CPU 时间，和一次 `pthread_cond` one-way handoff 是同一个量级，通常还更便宜。
+- 如果 overlap 方案需要“多一个协调线程 + 条件变量唤醒”，那它节省下来的 CPU launch 预算必须至少覆盖 `~1-3 us` 级别的额外同步，才有讨论价值。
+- 这进一步支持一个偏保守的方向：优先在“同一拥有线程内减少 launch 开销、拉直提交路径、用 event 做可观测性”，谨慎引入跨线程 handoff。
+
+可复现性说明：
+
+- 这组 benchmark 代码当前只临时放在 `/tmp/condvar_bench.cpp` 和 `/tmp/cudagraph_launch_bench.cu`，尚未入仓库。
+- 如果这些数字会反复用来做决策，后续应把 benchmark 整理成仓库内的可复现工具，并把“空闲 / 轻载 / 压测中”三种状态都测一遍。
+
+Primary sources:
+
+- NVIDIA Technical Blog, Constant Time Launch for Straight-Line CUDA Graphs and Other Performance Enhancements:
+  https://developer.nvidia.com/blog/constant-time-launch-for-straight-line-cuda-graphs-and-other-performance-enhancements/
