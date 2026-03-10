@@ -911,3 +911,282 @@ marker slot 选择：
 - pre/post 线程池
 - 搜索线程接手部分 pre/post
 - 更统一的 backend 抽象
+
+### 2026-03-11: 状态机草案 v0
+
+为了避免第一版实现时状态散落在各处，先把 3 个核心对象的状态统一列出来：
+
+- `DeviceState`
+- `SlotState`
+- `OpenBatchState`
+
+#### A. `DeviceState`
+
+每张卡维护：
+
+- `deviceIdx`
+- `slotIndices`
+- `nextRrSlot`
+- `activeInferCount`
+- `lastWorkUpdateTime`
+- `baseMsByBatchSize[1..b]`
+- `recentGraphMsByBatchSize[1..b]`
+
+派生量：
+
+- `isIdle := (activeInferCount == 0)`
+
+职责：
+
+- 提供 round-robin slot 选择起点。
+- 提供 ETA/work accounting 的卡级推进。
+- 提供该卡上当前的 `markerSlot` 查询。
+
+#### B. `SlotState`
+
+每个 slot 维护：
+
+- `slotId`
+- `deviceIdx`
+- `rrIndexWithinDevice`
+- `computeHandle`
+- `inferStream`
+- `h2dStream`
+- `d2hStream`
+- `host/device input/output buffers`
+- `graphExecByBatchSize[1..b]`
+- `postDone`
+- `hasLaunchQueued`
+- `hasRunningGraph`
+- `hasD2HQueued`
+- `currentBatchSize`
+- `remainingWorkMs`
+- `graphLaunchTime`
+- `graphDoneEvent`
+- `d2hDoneEvent`
+- `inflightRequests`
+
+第一版建议把 slot 状态压成下面这几个互斥阶段：
+
+- `Idle`
+  - 条件：`postDone=true`，无已排队 graph，无运行中 graph，无待处理 D2H
+- `LaunchQueued`
+  - graph 已经排到 infer stream，但 `graphDoneEvent` 还没完成
+- `D2HQueued`
+  - graph 已完成，D2H 已排到 d2h stream，但 `d2hDoneEvent` 还没完成
+- `PostPending`
+  - D2H 已完成，但 host 侧 postprocess 还没做完
+
+映射关系：
+
+- `Idle`
+  - `postDone=true`
+  - `hasLaunchQueued=false`
+  - `hasRunningGraph=false`
+  - `hasD2HQueued=false`
+- `LaunchQueued`
+  - `postDone=false`
+  - `hasLaunchQueued=true`
+  - `hasRunningGraph=true`
+- `D2HQueued`
+  - `postDone=false`
+  - `hasRunningGraph=false`
+  - `hasD2HQueued=true`
+- `PostPending`
+  - `postDone=false`
+  - `hasRunningGraph=false`
+  - `hasD2HQueued=false`
+
+实际代码里未必要真的做成 enum，但文档层面按这个互斥模型思考会清晰很多。
+
+#### C. `OpenBatchState`
+
+全局最多一个：
+
+- `exists`
+- `targetDevice`
+- `targetSlot`
+- `markerSlot`
+- `size`
+- `lastH2DEvent`
+- `requestRefs`
+
+第一版可以只有两种逻辑状态：
+
+- `Absent`
+- `Open`
+
+其中 `Open` 时再用下面条件区分行为：
+
+- `launchReadyBecauseFull`
+- `launchReadyBecauseDeviceIdle`
+
+注意：
+
+- 第一版不需要再额外引入 `sealed` 状态。
+- 因为一旦满足 launch 条件并真正排完 graph / D2H，这个 open batch 就会立刻被消费并清空。
+- 从实现角度讲，“ready but not yet submitted”最多只应停留在当前调度循环的一个很短窗口里。
+
+### 2026-03-11: 调度主循环伪代码 v0
+
+下面是单 scheduler thread 的第一版目标逻辑，不追求接口漂亮，只追求行为正确。
+
+```cpp
+while (!isKilled) {
+  now = clock.now();
+  update_all_device_work_accounting(now);
+
+  bool madeProgress = false;
+
+  // 1. 先处理 graphDone
+  for (slot in all_slots_round_robin) {
+    if (slot.state == LaunchQueued && cudaEventQuery(slot.graphDoneEvent) == cudaSuccess) {
+      handle_graph_done(slot, now);
+      madeProgress = true;
+    }
+  }
+
+  // 2. 再处理 d2hDone
+  for (slot in all_slots_round_robin) {
+    if (slot.state == D2HQueued && cudaEventQuery(slot.d2hDoneEvent) == cudaSuccess) {
+      handle_d2h_done_and_postprocess(slot);
+      madeProgress = true;
+    }
+  }
+
+  // 3. 如果当前 open batch 因“卡已空闲”而已经满足 partial launch 条件，优先发它
+  if (open_batch.exists && should_launch_open_batch_now(open_batch)) {
+    launch_open_batch(open_batch, now);
+    madeProgress = true;
+  }
+
+  // 4. 最多只吸收 1 个新请求，避免 preprocess/postprocess 把关键路径挡太久
+  NNResultBuf* req = nullptr;
+  if (queryQueue.tryPop(req)) {
+    if (!open_batch.exists) {
+      create_open_batch_and_bind_slot(req, now);
+    }
+    append_request_to_open_batch(req, now);
+
+    if (should_launch_open_batch_now(open_batch)) {
+      launch_open_batch(open_batch, now);
+    }
+    madeProgress = true;
+  }
+
+  if (!madeProgress) {
+    cpu_spin_pause();
+  }
+}
+```
+
+关键 helper 的语义：
+
+- `update_all_device_work_accounting(now)`
+  - 用 `dt / activeInferCount` 推进每张卡上所有 running graph 的 `remainingWorkMs`
+- `handle_graph_done(slot, now)`
+  - 记录真实 graph 耗时
+  - 更新 `baseMsByBatchSize`
+  - `activeInferCount -= 1`
+  - 在 `slot.d2hStream` 上排 D2H
+  - record `d2hDoneEvent`
+  - slot 转入 `D2HQueued`
+- `handle_d2h_done_and_postprocess(slot)`
+  - 做 host 侧 postprocess
+  - 填回每个 `NNResultBuf`
+  - `notify_all()`
+  - `postDone = true`
+  - slot 转回 `Idle`
+- `create_open_batch_and_bind_slot(req, now)`
+  - 选目标卡
+  - 选目标 slot
+  - 若卡非空，则确定 `markerSlot`
+  - 建立全局唯一 `OpenBatchState`
+- `append_request_to_open_batch(req, now)`
+  - 在目标 slot 的 pinned input buffer 中追加一条请求
+  - 在目标 slot 的 H2D stream 上发这条请求对应的 H2D
+  - 更新 `lastH2DEvent`
+  - `size += 1`
+- `should_launch_open_batch_now(open_batch)`
+  - true 当且仅当：
+    - `size == maxBatchSize`
+    - 或 `targetDevice.isIdle`
+- `launch_open_batch(open_batch, now)`
+  - host 侧先确认 `targetSlot.postDone == true`
+  - infer stream wait:
+    - `lastH2DEvent`
+    - 若存在 `markerSlot`，再 wait `markerSlot.graphDoneEvent`
+  - 发 `cudaGraphLaunch(graphExec[size])`
+  - record `graphDoneEvent`
+  - 设置：
+    - `remainingWorkMs = baseMsByBatchSize[size]`
+    - `postDone = false`
+    - `activeInferCount += 1`
+  - 清空 global open batch
+
+### 2026-03-11: 第一版实现时故意简化的地方
+
+- `round robin` 只负责 slot 选择，不负责 ETA 最优化。
+- `markerSlot` 才使用 ETA/work accounting。
+- 不追求同时吞多个新请求。
+- 不追求把 postprocess 再拆给线程池。
+- 不追求把搜索线程卷进来一起做 pre/post。
+
+也就是说，第一版的重点不是“把 CPU 侧一切工作都并行掉”，而是：
+
+- 先验证 graph / H2D / D2H 的跨 stream 调度语义
+- 先验证 `s+1` slot 能否真的把 `s` 条 infer stream 稳住
+- 先验证调度线程单核是否已经足够轻
+
+### 2026-03-11: 现有 profiling / 统计结构的兼容性提醒
+
+当前 realtime profiling 仍然带着“每个 inference slot 就是一条推理线程”的假设。
+
+证据：
+
+- [globalperf.h:31](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.h#L31)
+  `configureInferenceSlots(const std::vector<int>& gpuIdxByServerThread)`
+- [globalperf.h:49](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.h#L49)
+  `changeInferenceThreadActiveCount(int inferenceThreadIdx, ...)`
+- [globalperf.h:58](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.h#L58)
+  `recordRealtimeInferenceBatch(int inferenceThreadIdx, ...)`
+- [nneval.cpp:411](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L411)
+  当前直接用 `gpuIdxByServerThread` 去配置 inference slots
+- [nneval.cpp:415](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L415)
+  `serverThreadsIsUsingFP16` 也按真实 server thread 数开
+
+这意味着：
+
+- 一旦改成“单 scheduler thread 管多个 TRT slot”，现有这些指标名义上还叫 thread，但语义已经不再是 thread。
+- 如果不提前调整，realtime 页面里：
+  - `inference_thread_time_share`
+  - `recordRealtimeInferenceBatch`
+  - `changeGpuStreamActiveCount`
+  这些统计会发生概念漂移。
+
+第一版建议：
+
+- 先保留现有接口形状，但把它们重新解释为“inference slot index”，而不是“真实 OS thread index”。
+- 也就是说：
+  - `inferenceThreadIdx` 在 single-scheduler 方案下，实际上变成 `slotId`
+  - `configureInferenceSlots()` 也应改成基于逻辑 slot 列表，而不是基于真实 server thread 列表
+- 这样现有 realtime profile 不至于彻底失效，同时改动面相对可控。
+
+需要一起迁移的还有：
+
+- [nneval.h:126](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.h#L126)
+  `getNumServerThreads()`
+- [nneval.cpp:290](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L290)
+  当前直接返回 `gpuIdxByServerThread.size()`
+- [nneval.cpp:373](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L373)
+  统计 FP16 使用情况也还是按 server thread 聚合
+
+第一版不要试图在这一步把命名全部改优雅。
+
+更现实的做法是：
+
+- 文档和注释里明确说明：
+  - single-scheduler 之后，这些“thread”指标实际上表示逻辑 slot
+- 等工作流跑通后，再考虑是否做更系统的重命名：
+  - `server thread` -> `inference slot`
+  - `gpuIdxByServerThread` -> `gpuIdxByLogicalSlot`
