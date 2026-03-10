@@ -496,3 +496,81 @@ Primary sources:
   当前真正的 TRT submit 点。
 - [trtbackend.cpp:2318](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2318)
   当前最强的同步边界，也是以后如果要做 H2D/infer/D2H overlap，最可能需要松动的点。
+
+### 2026-03-11: 用 event 把 IO stream 上的 H2D 串到 compute stream 上的 `cudaGraphLaunch`
+
+目标场景：
+
+- H2D 拷贝发在一个 IO 专用 stream `ioStream` 上。
+- 推理 graph replay 发在另一个 compute stream `computeStream` 上。
+- 希望 graph 在 H2D 完成后立刻开始。
+- 不希望 H2D 完成时还要唤醒 CPU 再显式做一次“交还控制权”。
+
+官方语义结论：
+
+- 可以，推荐做法就是：
+  - 在 `ioStream` 上 `cudaMemcpyAsync(...)`
+  - 随后在 `ioStream` 上 `cudaEventRecord(doneEvent, ioStream)`
+  - 在 `computeStream` 上 `cudaStreamWaitEvent(computeStream, doneEvent, 0)`
+  - 然后直接把 `cudaGraphLaunch(graphExec, computeStream)` 排到 `computeStream`
+- 这样依赖是由 GPU/driver 按 stream 顺序和 event 依赖来维护的，不需要等 event 完成后再由 CPU 补一个提交动作。
+- `cudaGraphLaunch()` 本身就是提交到 `computeStream` 的一项 CUDA work，因此它会排在这个 stream 里前面的 `cudaStreamWaitEvent()` 之后执行。
+
+推荐模式：
+
+```cpp
+cudaEvent_t h2dDone;
+cudaEventCreateWithFlags(&h2dDone, cudaEventDisableTiming);
+
+cudaMemcpyAsync(dInput, hInput, bytes, cudaMemcpyHostToDevice, ioStream);
+cudaEventRecord(h2dDone, ioStream);
+
+cudaStreamWaitEvent(computeStream, h2dDone, 0);
+cudaGraphLaunch(graphExec, computeStream);
+```
+
+关键边界：
+
+- `cudaStreamWaitEvent()` 等的是“该 event 最近一次被 `cudaEventRecord()` 记录到的那批先前工作”。
+- 因此顺序必须是：
+  - 先在 `ioStream` 上把 H2D 和 `cudaEventRecord()` 排进去
+  - 再在 `computeStream` 上调用 `cudaStreamWaitEvent()`
+  - 最后再 `cudaGraphLaunch()`
+- 不能指望“先 wait，后 record”去自动等未来的一次 record。
+
+官方意义上的最佳实践：
+
+- 如果只是想表达 stream 之间的先后依赖，优先用 `cudaStreamWaitEvent()`，不要在热路径里用：
+  - `cudaEventSynchronize()`
+  - `cudaStreamSynchronize()`
+  - host callback
+- 如果 event 不用于测时，只用于排序，创建时加 `cudaEventDisableTiming`。
+- H2D 要和 compute 真正 overlap，host buffer 需要是 pinned memory。
+- 尽量使用非 default stream；不要把这种依赖链建在 legacy default stream 语义上。
+- 如果 memcpy 的地址、大小、拓扑都稳定，后续可以考虑把 memcpy 也直接并入同一个 CUDA graph；否则“外部 H2D + event + `cudaStreamWaitEvent` + `cudaGraphLaunch`”通常更灵活。
+
+对当前项目的直接含义：
+
+- 如果后续要把 H2D 从 [trtbackend.cpp:2173](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2173) 的主提交流程里拆出去，最自然的低侵入方案不是引入 CPU 线程 handoff，而是：
+  - IO stream 做 `cudaMemcpyAsync`
+  - record 一个 completion event
+  - compute stream 先 `cudaStreamWaitEvent`
+  - 再 `cudaGraphLaunch`
+- 这样仍然只需要一次 host 侧顺序提交，不需要“等拷贝完成以后再回到 CPU 再发 graph”。
+- 真正需要改的地方更像是：
+  - 把当前固定的 `cudaStreamPerThread` 拆成至少两个 stream
+  - 把 `getOutput()` 里串死的 H2D / launch / D2H 边界拆开
+  - 把 `cudaStreamSynchronize()` 从中间热路径里挪出
+
+Primary sources:
+
+- CUDA Runtime API, `cudaStreamWaitEvent`:
+  https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html
+- CUDA Runtime API, `cudaEventRecord`:
+  https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html
+- CUDA Runtime API, `cudaGraphLaunch` and graph event wait/record nodes:
+  https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__GRAPH.html
+- CUDA C Best Practices Guide, overlap transfer/compute requires pinned memory and non-default streams:
+  https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html
+- CUDA C Programming Guide, stream/event synchronization model:
+  https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-host-programming.html
