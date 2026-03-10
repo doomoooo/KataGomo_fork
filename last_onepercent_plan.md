@@ -1190,3 +1190,72 @@ while (!isKilled) {
 - 等工作流跑通后，再考虑是否做更系统的重命名：
   - `server thread` -> `inference slot`
   - `gpuIdxByServerThread` -> `gpuIdxByLogicalSlot`
+
+### 2026-03-11: 已确认的两个硬 blocker
+
+这两点如果不先处理，前面的单 scheduler 设计无法真正落地。
+
+#### blocker 1: 当前 TRT backend 完全绑定 `cudaStreamPerThread`
+
+证据：
+
+- [trtbackend.cpp:1635](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1635)
+  `setOptimizationProfileAsync(0, cudaStreamPerThread)`
+- [trtbackend.cpp:1804](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1804)
+  `cudaStreamBeginCapture(cudaStreamPerThread, ...)`
+- [trtbackend.cpp:1811](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1811)
+  `enqueueV3(cudaStreamPerThread)`
+- [trtbackend.cpp:1859](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1859)
+  `cudaStreamSynchronize(cudaStreamPerThread)`
+- [trtbackend.cpp:1881](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1881)
+  `cudaGraphLaunch(state.graphExec, cudaStreamPerThread)`
+- [trtbackend.cpp:2194](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2194)
+  `cudaStream_t stream = cudaStreamPerThread`
+
+结论：
+
+- 现有实现默认“一个 host 线程只拥有一条 TRT 工作流”。
+- 一旦改成“一个 scheduler thread 管理同卡多个 slot”，继续用 `cudaStreamPerThread` 就会让所有 slot 意外共享同一条 stream。
+- 这会直接破坏：
+  - 多 slot 并发
+  - H2D / infer / D2H 分流
+  - slot 级 event 依赖
+
+因此第一步必须把 TRT backend 改成显式 stream：
+
+- 每个 slot 自己持有：
+  - `inferStream`
+  - `h2dStream`
+  - `d2hStream`
+- 所有 `cudaStreamPerThread` 使用点都要改成显式传入 slot 对应 stream。
+
+#### blocker 2: 单 scheduler 管多卡后，device 选择不能再靠“线程初始化时 set 一次”
+
+证据：
+
+- [trtbackend.cpp:1905](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1905)
+  `createComputeHandle()` 创建时只做一次 `cudaSetDevice(gpuIdxForThisThread)`
+- 后续大量 runtime 操作都默认当前线程已经处在正确 device 上：
+  - stream/event 操作
+  - `cudaMemcpyAsync`
+  - `cudaGraphLaunch`
+  - `cudaEventQuery`
+
+结论：
+
+- 现有模型里“一个 server thread 对应一张固定 GPU”，所以这没问题。
+- 但单 scheduler thread 轮流管理多卡时，这个前提失效。
+- 因此以后凡是 touching 某个 slot/device 的 CUDA runtime 调用之前，都必须显式确保：
+  - `cudaSetDevice(slot.deviceIdx)`
+
+实践上应当统一封装：
+
+- 不要把 `cudaSetDevice()` 零散撒在高层调度代码里。
+- 更稳妥的做法是给所有 slot-level TRT helper 统一加一层：
+  - `withDevice(slot.deviceIdx) { ... }`
+  - 或者每个 helper 开头显式 `cudaSetDevice(deviceIdx)`
+
+这里的工程含义：
+
+- 单 scheduler 方案并不是只改 `nneval.cpp` 就够了。
+- `trtbackend.cpp` 内部也必须从“线程拥有 device + per-thread default stream”的模型，迁移到“slot 显式拥有 device + stream”的模型。
