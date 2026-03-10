@@ -351,3 +351,148 @@ Primary sources:
 - 样本只有 `100` 次，这足够回答“量级是不是 `~1 us`”，但不足以做严肃尾延迟分析。
 - 这组数不包含 graph capture、instantiate、upload，也不包含首次 launch 的任何冷路径成本。
 - 这组数只回答“launch 会不会阻塞关键路径到很夸张的程度”；不回答真实端到端推理 latency。
+
+### 2026-03-11: `trtbackend.cpp` 结构备查
+
+目的：
+
+- 把当前 TensorRT backend 的职责边界和关键路径落成文字，避免后面做 overlap 设计时反复翻整文件。
+- 文件：
+  [cpp/neuralnet/trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp)
+- 当前长度：
+  `2602` 行。
+
+按顺序的结构拆分：
+
+- [trtbackend.cpp:1](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1) 到 [trtbackend.cpp:89](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L89)
+  - TensorRT/CUDA 头文件、基础工具函数、`CudaSyncMode` 和 `TrtTilingOptimizationLevel` 映射。
+  - 还定义了按 GPU 记录 launch interval 的全局状态，服务于性能 profiling，而不是推理功能本身。
+
+- [trtbackend.cpp:98](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L98) 到 [trtbackend.cpp:198](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L198)
+  - `globalInitialize/globalCleanup` 对 TRT backend 基本是空实现。
+  - `ComputeContext` 只保存配置，不持有 GPU runtime 对象。
+  - `LoadedModel` 负责读模型描述：
+    - ONNX 走 `ModelDesc::loadFromONNX`
+    - 非 ONNX 走老的模型描述加载，并做 `applyScale8ToReduceActivations()`
+
+- [trtbackend.cpp:206](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L206) 到 [trtbackend.cpp:1074](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1074)
+  - 这是 `TRTModel` + `ModelParser`，也是整文件最重的一段。
+  - 它不是 runtime，而是在“手工把 KataGo 模型翻译成 TensorRT network definition”。
+  - 关键子段：
+    - [trtbackend.cpp:250](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L250)
+      `ModelParser::build()` 总入口，依次调用 `initInputs()`、`initMaskProcLayers()`、`buildTrunk()`、`buildPolicyHead()`、`buildValueHead()`。
+    - [trtbackend.cpp:338](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L338)
+      `initInputs()` 定义输入 tensor 和 optimization profile。
+    - [trtbackend.cpp:415](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L415)
+      `initMaskProcLayers()` 把棋盘 mask 处理成 `maskSum`、`maskScale`、`maskQuad` 等后续 gpool/value head 依赖的特征。
+    - [trtbackend.cpp:490](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L490)
+      `buildTrunk()` 构建初始 conv/global/meta 分支、block stack、trunk tip。
+    - [trtbackend.cpp:548](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L548)
+      `buildResidualBlockStack()` 只是 dispatcher，按 block 类型分发到不同 block builder。
+    - [trtbackend.cpp:575](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L575)
+      `buildPolicyHead()` 产出 `OutputPolicyPass` 和 `OutputPolicy`。
+    - [trtbackend.cpp:640](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L640)
+      `buildValueHead()` 产出 `OutputValue`、`OutputScoreValue`、`OutputOwnership`。
+    - [trtbackend.cpp:697](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L697) 到 [trtbackend.cpp:1073](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1073)
+      是各种 layer translator/helper：
+      - metadata encoder
+      - 普通残差块
+      - global-pooling 残差块
+      - nested bottleneck 残差块
+      - matmul/bias/conv/batchnorm/activation
+      - `applyGPoolLayer()`
+      - `applyMaskLayer()`
+      - `applyCastLayer()`
+
+- [trtbackend.cpp:1076](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1076) 到 [trtbackend.cpp:1174](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1174)
+  - `TRTLogger` 和 `TRTErrorRecorder`。
+  - 作用不只是打印日志，也负责把部分已知致命错误直接升级为 `fatalError`。
+
+- [trtbackend.cpp:1177](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1177) 到 [trtbackend.cpp:1883](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1883)
+  - 这是 `ComputeHandle`，也就是每个 GPU/线程实际持有的 TensorRT runtime 对象。
+  - 成员里有：
+    - `runtime`
+    - `engine`
+    - `exec`
+    - 所有 device buffer
+    - `batchGraphStates`
+    - 性能 profiling event
+  - 构造函数内部大致分几段：
+    - [trtbackend.cpp:1248](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1248) 到 [trtbackend.cpp:1280](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1280)
+      builder/config 创建，FP16/INT8 flag 选择。
+    - [trtbackend.cpp:1292](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1292) 到 [trtbackend.cpp:1337](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1337)
+      ONNX 路径直接 parse；非 ONNX 路径走 `ModelParser`。
+    - [trtbackend.cpp:1339](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1339) 到 [trtbackend.cpp:1369](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1369)
+      tactic source、builder optimization level、aux streams、timing iterations、tiling level、workspace、profile stream。
+    - [trtbackend.cpp:1372](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1372) 到 [trtbackend.cpp:1606](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1606)
+      plan cache / timing cache 读写。
+      这里很重要的一点是：
+      当前 cache 文件不是纯 plan，保存时会把 `modelHashStr` 和 `paramStr` 追加到 plan 尾部，读取时再剥掉。
+    - [trtbackend.cpp:1609](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1609) 到 [trtbackend.cpp:1637](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1637)
+      runtime/engine/context 创建，给每个 IO tensor 分配 device buffer，并 `setTensorAddress()`。
+    - [trtbackend.cpp:1639](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1639) 到 [trtbackend.cpp:1641](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1641)
+      如果启用 `trtUseCudaGraph`，在初始化阶段直接预捕获所有 batch size 的 graph。
+  - `ComputeHandle` 里和 overlap 直接相关的 helper：
+    - [trtbackend.cpp:1663](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1663)
+      `maybeRecordLaunchInterval()`，纯 profiling。
+    - [trtbackend.cpp:1769](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1769)
+      `setInputShapesForBatch()`，按 batch 设置动态输入 shape。
+    - [trtbackend.cpp:1800](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1800)
+      `captureBatchGraph()`，对某个 batch size 做 `enqueueV3` capture + instantiate。
+    - [trtbackend.cpp:1845](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1845)
+      `preCaptureAllBatchGraphs()`，把 `1..maxBatchSize` 的 graph 都预先做好。
+    - [trtbackend.cpp:1864](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1864)
+      `enqueueWithOptionalCudaGraph()`，热路径最终在这里二选一：
+      - `exec->enqueueV3(cudaStreamPerThread)`
+      - `cudaGraphLaunch(state.graphExec, cudaStreamPerThread)`
+
+- [trtbackend.cpp:1885](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1885) 到 [trtbackend.cpp:1962](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1962)
+  - 对外的 handle 工厂和辅助函数。
+  - `createComputeHandle()` 里先：
+    - `cudaSetDevice(gpuIdxForThisThread)`
+    - `cudaSetDeviceFlags(...)`
+    - `cudaGetDeviceProperties(...)`
+  - 然后才真正构造 `ComputeHandle`。
+  - 也就是说，当前设计里“哪个线程拥有哪个 GPU 的 TRT context”是在这里固定下来的。
+
+- [trtbackend.cpp:1964](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1964) 到 [trtbackend.cpp:2163](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2163)
+  - `InputBuffers`，负责 host 侧 pinned buffer。
+  - 同时兼容两套路径：
+    - 非 ONNX 的原生 TRT 输出布局
+    - ONNX 的 `out_policy/out_value/out_miscvalue/out_moremiscvalue/out_ownership` 输出布局
+  - 这里一次性算好每种张量的元素数和字节数，并分配所有 pinned host buffer。
+
+- [trtbackend.cpp:2173](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2173) 到 [trtbackend.cpp:2513](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2513)
+  - `getOutput()`，这是当前最接近端到端关键路径的一段。
+  - 可以再拆成 5 段：
+    - [trtbackend.cpp:2219](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2219) 到 [trtbackend.cpp:2242](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2242)
+      CPU 侧预处理：把 `NNResultBuf` 拷到 pinned host buffer，做 symmetry 展开，并从 spatial 输入里复制 mask。
+    - [trtbackend.cpp:2255](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2255) 到 [trtbackend.cpp:2293](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2293)
+      H2D + `setInputShape()`。
+    - [trtbackend.cpp:2297](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2297) 到 [trtbackend.cpp:2300](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2300)
+      launch 点：先记 launch interval，再调 `enqueueWithOptionalCudaGraph(batchSize)`。
+    - [trtbackend.cpp:2302](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2302) 到 [trtbackend.cpp:2318](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2318)
+      D2H，然后立刻 `cudaStreamSynchronize(cudaStreamPerThread)`。
+    - [trtbackend.cpp:2337](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2337) 到 [trtbackend.cpp:2488](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2488)
+      host 侧后处理：把 policy/value/ownership/score 等输出解包进 `NNOutput`。
+  - 对 overlap 最关键的现状结论：
+    - 整个推理提交路径当前固定使用 `cudaStreamPerThread`。
+    - H2D、launch、D2H 都在同一个函数里串起来。
+    - `getOutput()` 末尾直接 `cudaStreamSynchronize()`，所以当前 API 边界是同步边界，不向上层暴露“已发出但未完成”的状态。
+
+- [trtbackend.cpp:2515](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2515) 到文件末尾
+  - 几个 `testEvaluate*` stub，当前基本都是空实现返回 `false`。
+  - 不是主推理路径。
+
+对 overlap 设计最值得盯住的切口：
+
+- [trtbackend.cpp:1905](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1905)
+  当前 GPU owning thread 的确定点。
+- [trtbackend.cpp:1639](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1639) 和 [trtbackend.cpp:1845](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1845)
+  当前 graph 生命周期入口，说明 graph 是“每个 batch size 预捕获一份”。
+- [trtbackend.cpp:2194](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2194)
+  当前 stream 选择被硬编码为 `cudaStreamPerThread`。
+- [trtbackend.cpp:2298](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2298)
+  当前真正的 TRT submit 点。
+- [trtbackend.cpp:2318](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2318)
+  当前最强的同步边界，也是以后如果要做 H2D/infer/D2H overlap，最可能需要松动的点。
