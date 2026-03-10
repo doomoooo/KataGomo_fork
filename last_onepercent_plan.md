@@ -158,3 +158,67 @@ Primary sources:
 
 - NVIDIA Technical Blog, Constant Time Launch for Straight-Line CUDA Graphs and Other Performance Enhancements:
   https://developer.nvidia.com/blog/constant-time-launch-for-straight-line-cuda-graphs-and-other-performance-enhancements/
+
+### 2026-03-10: 同一 host thread 向不同 device 提交 `cudaGraph` 的 overhead 估算
+
+问题定义：
+
+- 场景是“一个 host thread 轮流向 device 0、device 1、... 的各自 stream 提交已经 instantiate 好的 `cudaGraphExec_t`”。
+- 这里讨论的是 steady-state repeat launch，不包括每张卡第一次触达时的 runtime/context 初始化。
+- 这里讨论的是“每张卡各有自己的 graph exec + stream”，不是“一个大 graph 跨多个 device 一次 launch”。
+
+已知项：
+
+1. 官方明确说明 `cudaSetDevice()` 不会同步前一个或新 device。
+2. 官方明确说明 kernel launch 必须发到当前 device 关联的 stream；因此保守做法仍然是先 `cudaSetDevice(d)`，再 `cudaGraphLaunch(exec_d, stream_d)`。
+3. 本机实测“已 upload 的 graph 的 repeat `cudaGraphLaunch()` CPU 侧 API 时间”大约是 `~1.0-1.1 us`。
+4. 本机实测“hot `cudaSetDevice(0)` 重复调用”大约是 `~31 ns`/call；第一次触达 device 的冷启动约 `98 ms`。这个 `31 ns` 只是“同 device no-op set”的下界，不等于“在多个已初始化 device 之间切换”的真实开销。
+
+缺失项：
+
+- 我目前没有找到 NVIDIA 官方给出的“多个已初始化 device 之间来回 `cudaSetDevice()` 的 steady-state 定量 overhead”。
+- 我也没有多卡本机实测来直接测“thread 在 device 0 / 1 间轮流 graph launch”的真实值。
+
+因此可用的估算公式是：
+
+`T_submit(N devices) ~= N * T_graph_launch + (N - 1) * T_device_switch_hot`
+
+其中：
+
+- `T_graph_launch`：
+  - 本机 Blackwell + CUDA 13 栈：约 `1.0 us`
+  - NVIDIA 2024 博文中的 Ampere + CUDA 12.6 量级：约 `2.5 us + ~1 ns/node`
+- `T_device_switch_hot`：
+  - 已知它不包含设备同步。
+  - 已知它在“同 device 热路径 no-op”时低到 `~31 ns`。
+  - 真实“device A <-> B 切换”会比 `31 ns` 高，但从语义上看它更像“host thread current context/current device 的切换”，不应接近毫秒级冷启动。
+
+保守规划数值：
+
+- 如果只是做架构决策，在没有多卡实测前，可以先把 `T_device_switch_hot` 预算成 `0.2-1.0 us`。
+- 则单线程轮流向不同卡提交 graph 的 steady-state host 开销可以先估成：
+  - 2 张卡：`~2.2-3.0 us`
+  - 4 张卡：`~4.6-7.0 us`
+  - 8 张卡：`~9.4-15.0 us`
+- 如果你想更保守，直接按“每张卡一次提交约 `2-4 us` host 时间”做上界预算也可以。
+
+对决策的含义：
+
+- 只要所有 device 都已经完成预热，这件事大概率不是“会不会因为 `cudaSetDevice()` 爆炸”的问题，而是“一个 thread 顺序提交这么多 graph，host 提交带宽够不够”的问题。
+- 如果目标只是轮流给 2 张或 4 张卡喂已经 upload 的 graph，那么单线程提交在 steady-state 下看起来仍然是可行的，host 侧预算大致是个位数微秒。
+- 真正不能忽视的是每张卡第一次触达时的冷启动，必须提前做在非热路径。
+- 如果 later pipeline 为了这件事引入额外线程 handoff，那么线程 handoff 自身的 `~1-3 us` 量级，很可能并不比“多 device 顺序 graph launch”更便宜。
+
+推荐的工程预算：
+
+- 2 卡：先按 `3 us` 总 host submit 开销估。
+- 4 卡：先按 `7 us` 总 host submit 开销估。
+- 8 卡：先按 `15 us` 总 host submit 开销估。
+- 这些数值适合拿来做“值不值得再拆线程”的第一轮决策，不适合替代最终微基准。
+
+后续最需要补的实测：
+
+- 双卡机器上直接测：
+  - `set(0) -> launch(g0) -> set(1) -> launch(g1)` 的循环成本
+  - 对比“两线程各守一张卡”的成本
+  - 对比“graph 已 upload”和“未 upload 首次 launch”
