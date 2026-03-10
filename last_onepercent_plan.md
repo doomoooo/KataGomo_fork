@@ -303,3 +303,51 @@ Primary sources:
 - 这些结果只覆盖 steady-state repeat launch，不含首次 context 初始化、首次 graph upload、graph update。
 - 这些结果只证明了 2 张 4090 D、当前驱动和内核组合下的行为，不能直接外推到所有多卡机器。
 - benchmark 只测 CPU submit 路径；如果真实系统的瓶颈在 pinned-memory copy、allocator、queue contention、postprocess，那么这里的结果不会替代那些测量。
+
+### 2026-03-11: 真实 TRT plan 的单-context `cudaGraphLaunch()` 开销
+
+目标：
+
+- 只测一个 TensorRT execution context 上，steady-state `cudaGraphLaunch()` 的 CPU submit overhead。
+- 不测多 context。
+- 不测 capture / instantiate / upload。
+
+测试对象：
+
+- plan cache:
+  `~/.katago/trtcache/trt-onnx-101501_olv-def_gpu-426b8a57_net-4179b6b29c90_9_exact19x19_batch7_fp16`
+
+方法：
+
+- 写了一个最小测试 `/tmp/trt_graph_launch_min.cpp`。
+- 实现上尽量贴近 [trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp)：
+  - 从 cache 文件中读取 plan，并按当前 cache 格式剥掉尾部附加的 64-byte model hash。
+  - 使用 `cudaStreamPerThread`。
+  - `setOptimizationProfileAsync(0, cudaStreamPerThread)`。
+  - 对动态输入先取 profile 0 的 `kOPT` shape 做 `setInputShape()`。
+  - 为所有 IO tensor 绑定 device buffer。
+  - 先 `enqueueV3()` 一次并同步，再 capture。
+  - `cudaStreamBeginCapture` -> `enqueueV3` -> `cudaStreamEndCapture` -> `cudaGraphInstantiate` -> `cudaGraphUpload`。
+  - 之后只测 steady-state `cudaGraphLaunch()` 调用本身的 host 时间；每轮后 `cudaStreamSynchronize()`，仅用于清空 stream。
+- 参数：
+  - warmup `20`
+  - iterations `100`
+
+结果：
+
+- `graph_launch_repeat_mean_us = 1.219`
+- `graph_launch_repeat_p50_us = 1.152`
+- `graph_launch_repeat_p95_us = 1.473`
+- `graph_launch_repeat_p99_us = 1.793`
+
+直接结论：
+
+- 对这份真实 TRT plan，在当前本机环境上，单个 context 的 steady-state `cudaGraphLaunch()` CPU submit overhead 可以先按 `~1.2 us` 估。
+- p95 大约 `~1.5 us`，p99 大约 `~1.8 us`。
+- 这个量级和前面空 graph / 小 graph benchmark 的 `~1 us` 是一致的，说明“换成真实 TRT plan 后 launch 本身没有突然膨胀到几微秒以上”。
+
+边界与注意：
+
+- 样本只有 `100` 次，这足够回答“量级是不是 `~1 us`”，但不足以做严肃尾延迟分析。
+- 这组数不包含 graph capture、instantiate、upload，也不包含首次 launch 的任何冷路径成本。
+- 这组数只回答“launch 会不会阻塞关键路径到很夸张的程度”；不回答真实端到端推理 latency。
