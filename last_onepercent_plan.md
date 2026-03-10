@@ -730,3 +730,184 @@ open batch 的最小状态：
 
 - 单调度线程在 steady-state 下，预处理/后处理是否会明显推迟关键 launch 节点。
 - `s+1` 个 slot 是否真的能把稳态维持在“始终约有 `s` 个 infer stream 在跑 graph，而额外一个 slot 吃掉 IO 和 host 开销”。
+
+### 2026-03-11: ETA / work accounting 模型 v0
+
+需要解决的问题：
+
+- 一张卡上多个 infer stream 并发时，不能把每个 graph 当成“固定结束时刻”的独立任务。
+- 新 graph 插入后，已有 graph 的预期结束时间也会变化。
+- 因此 ETA 不能只按“发射时刻 + 固定时长”维护。
+
+采用的近似模型：
+
+- 用“单流等效工作量”来记账，而不是直接记“预计结束时间”。
+- 先在初始化阶段测出：
+  - `base_ms[device][batchSize]`
+- 这里的 `base_ms` 定义为：
+  - 在该卡上、单个活跃 infer stream 条件下，对该 `batchSize` 的典型 graph 执行时间。
+
+每个已发射 graph 维护：
+
+- `remaining_work_ms`
+- `batchSize`
+- `launchTimestamp`
+- `slot`
+- `device`
+
+初始值：
+
+- graph 发射时：
+  - `remaining_work_ms = base_ms[device][batchSize]`
+
+推进规则：
+
+- 对每张卡维护：
+  - `activeInferCount`
+  - `lastWorkUpdateTime`
+- 调度线程每次主循环开始时，先做一次 work accounting 推进：
+  - `dt = now - lastWorkUpdateTime`
+  - 若该卡当前 `activeInferCount = k > 0`
+  - 则该卡上所有 running graph 都执行：
+    - `remaining_work_ms -= dt / k`
+- 然后把 `lastWorkUpdateTime = now`
+
+这个模型的直观含义：
+
+- 当一张卡上只有 1 个 infer graph 在跑时，它按全速消耗自己的 `remaining_work_ms`。
+- 当第 2 个 infer graph 插入后，之后这段时间里两者都按 `1/2` 速度消耗剩余工作量。
+- 当并发数变成 `k` 时，每个 graph 之后都按 `1/k` 速度往前推进。
+- 这正对应“stream 平分工作量；插入新工作后，已有工作也会变慢”的近似理解。
+
+为什么先用这个模型：
+
+- 它不要求在每次并发数变化时重算所有 slot 的绝对结束时刻。
+- 只需要：
+  - 记 `remaining_work_ms`
+  - 记当前 `activeInferCount`
+  - 在每次调度循环前推进一次
+- 对单调度线程来说实现非常直接，而且足够表达当前决策里真正关心的“谁最早结束”。
+
+marker slot 选择：
+
+- `markerSlot` 直接选当前卡上 `remaining_work_ms` 最小的 running infer slot。
+- 不再做更复杂的“空闲流定义”和二次筛选。
+- slot 选择本身按 round robin。
+- ETA 只负责：
+  - 判断卡是否整体空闲
+  - 如果非空，选哪个 `markerSlot`
+
+在线修正：
+
+- 实际 `graphDoneEvent` 触发后，记录真实 graph 耗时。
+- 对每张卡、每个 `batchSize` 维护最近 `10` 次滚动平均：
+  - `base_ms[device][batchSize]`
+- 因此 ETA 表是按：
+  - `device + batchSize`
+  维护的，而不是只按卡维护。
+
+边界与注意：
+
+- 这不是精确物理模型，只是可维护的调度近似。
+- 默认假设同卡多个 infer graph 对算力的竞争是“近似平均分配”的。
+- 如果后续 profiling 发现 `remaining_work_ms` 的误差会显著影响决策，再考虑更细的修正项。
+- 但第一版先不要把 ETA 模型做得比调度本身还复杂。
+
+### 2026-03-11: 映射到当前代码的最小改造顺序
+
+目标：
+
+- 先把现有“每 server thread 自己 `getOutput()` 一把梭”改成“单 scheduler 持有多个 TRT slot，并按阶段提交”。
+- 尽量不扩大改动边界到搜索线程。
+
+需要先动的文件：
+
+- [cpp/neuralnet/nneval.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp)
+- [cpp/neuralnet/nneval.h](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.h)
+- [cpp/neuralnet/nninterface.h](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nninterface.h)
+- [cpp/neuralnet/trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp)
+- [cpp/program/setup.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/program/setup.cpp)
+
+第 1 步：先改 `setup.cpp` 的解释层，不改配置格式
+
+- 当前 [setup.cpp:251](/home/wangyize/.katago/KataGomo_fork/cpp/program/setup.cpp#L251) 会把 `trtDeviceToUseThread*` 读成真正的 server-thread 到 GPU 映射。
+- 新逻辑里仍然继续读取这批配置，但把它解释为：
+  - “逻辑 slot 列表”
+  - 同一张卡出现几次，就代表这张卡历史上等价于几个推理 slot
+- 也就是说：
+  - 保留旧配置写法
+  - 改写其 runtime 语义
+
+第 2 步：把 `NNEvaluator` 从“多 server thread”改成“单 scheduler thread”
+
+- 当前 [nneval.cpp:406](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L406) 的 `spawnServerThreads()` 会真地起多个 server thread。
+- 第一版应改成：
+  - 只起 1 个 scheduler thread
+  - 由这个 thread 内部管理所有 device/slot state
+- 但外部接口尽量不动：
+  - [nneval.cpp:833](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L833) 的 `evaluate()` 仍然：
+    - 填 `NNResultBuf`
+    - `queryQueue.forcePush(&buf)`
+    - 阻塞等 `buf.hasResult`
+- 这样搜索线程侧改动面最小。
+
+第 3 步：把 `NNServerBuf` / `InputBuffers` 从“每线程一套”改成“每 slot 一套”
+
+- 当前 [nneval.h:71](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.h#L71) 的 `NNServerBuf` 只有一套 `InputBuffers*`，语义是“每 server thread 一个”。
+- 新逻辑里需要把这层提升成：
+  - 每个 TRT slot 自己持有一套 host pinned input/output buffers
+- 因为按请求 H2D 时，open batch 从一开始就要写进目标 slot 的 buffer。
+
+第 4 步：把 TRT backend 从同步 `getOutput()` 改成分阶段 API
+
+- 当前 [nninterface.h:146](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nninterface.h#L146) 只有一个同步的 `getOutput()`。
+- 当前 [trtbackend.cpp:2173](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2173) 里把：
+  - preprocess
+  - H2D
+  - graph launch
+  - D2H
+  - `cudaStreamSynchronize`
+  - postprocess
+  全部串在一起。
+- 要支持新调度，最终至少要拆成这些能力：
+  - 把一条请求追加写入某个 slot 的 host input buffer
+  - 在某个 slot 的 H2D stream 上发单请求 H2D
+  - 对某个 slot / batchSize 排 graph launch
+  - 对某个 slot 排 D2H
+  - 查询 `graphDoneEvent` / `d2hDoneEvent`
+  - 做 host 侧 postprocess，把结果写回 `NNResultBuf`
+
+第 5 步：先只服务 TRT backend，不强迫所有 backend 一起升级
+
+- 当前 `nninterface.h` 的统一接口让所有 backend 都共用一套签名。
+- 但这次调度模型是 TRT 特化的。
+- 第一版更现实的做法应是：
+  - 保持旧的 `getOutput()` 接口不删，避免其他 backend 立即爆炸
+  - 同时给 TRT backend 新增一组更细的 slot-oriented helper
+  - `NNEvaluator` 在 TRT 路径下走新 helper，在其他 backend 下继续走旧路径
+
+第 6 步：先把“阶段边界”跑通，再追求更漂亮的接口
+
+- 第一版最重要的是验证：
+  - `global open batch`
+  - 请求级 H2D
+  - event-gated graph launch
+  - `postDone` 约束
+  能否跑通并稳定提升 overlap
+- 因此接口层允许先有一点 TRT 特化味道。
+- 等工作流被验证正确后，再看是否值得把抽象收敛回统一 backend interface。
+
+当前认为最值得先实现的最小闭环：
+
+1. 单 scheduler thread 能替代现有多个 server thread。
+2. TRT slot 资源能在初始化时一次性建好。
+3. 能把单请求 append + H2D 提前发到目标 slot。
+4. 能按 `lastH2DEvent + markerSlot.graphDoneEvent` 触发 `cudaGraphLaunch`。
+5. D2H 和 postprocess 能异步完成，并正确唤醒原有 `NNResultBuf` 等待方。
+
+如果以上 5 点能先跑通，后续再做：
+
+- ETA 精度修正
+- pre/post 线程池
+- 搜索线程接手部分 pre/post
+- 更统一的 backend 抽象
