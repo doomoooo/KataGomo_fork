@@ -222,3 +222,84 @@ Primary sources:
   - `set(0) -> launch(g0) -> set(1) -> launch(g1)` 的循环成本
   - 对比“两线程各守一张卡”的成本
   - 对比“graph 已 upload”和“未 upload 首次 launch”
+
+### 2026-03-10: 远端双卡服务器实测，同一线程交替向两张卡提交 `cudaGraph`
+
+测试环境：
+
+- Host: `10.101.3.169` (`BulletTime-6GPU`)
+- OS: Ubuntu 24.04, Linux 6.17
+- CPU: AMD Ryzen Threadripper PRO 7985WX
+- GPU: 6 x GeForce RTX 4090 D
+- 本次仅使用物理卡 2 和 3：通过 `CUDA_VISIBLE_DEVICES=2,3` 限定，程序内把它们视为 visible device 0 和 1
+- CUDA toolkit: `/usr/local/cuda-12.6`
+
+方法：
+
+- benchmark 源文件与二进制都只放在远端 `/tmp`。
+- 单个 host thread 固定到一个 CPU core。
+- 每张卡各自创建 2 个 non-blocking stream，并各自 instantiate + upload 两个 graph exec。
+- graph 是直线 kernel-node graph；分别测了 `1 node` 和 `32 nodes`。
+- 每次计时只覆盖 submit 路径：
+  - 单卡基线：`cudaGraphLaunch(g0)`
+  - 同卡双提交：`set(0) -> launch(g0a) -> set(0) -> launch(g0b)`
+  - 双卡交替提交：`set(0) -> launch(g0) -> set(1) -> launch(g1)`
+  - 纯切卡：`set(0) -> set(1)`
+- 每轮计时后才做 `cudaStreamSynchronize()` 清空 stream，因此结果代表 CPU 侧 submit overhead，而不是 GPU 执行时间。
+
+结果：1-node graph
+
+- 单卡 `cudaGraphLaunch`:
+  - card 2: `1.104 us`
+  - card 3: `1.097 us`
+- 同卡双提交:
+  - `2.287 us` total
+  - `1.144 us` per launch
+- 双卡交替提交:
+  - `2.287 us` total
+  - `1.144 us` per launch
+- 纯热路径 `cudaSetDevice(0) -> cudaSetDevice(1)`:
+  - `0.087 us` per pair
+  - `0.044 us` per set
+- 交替双卡相对同卡双提交的增量：
+  - `~0.000 us` per pair
+  - 在测量噪声内可视为 0
+
+结果：32-node graph
+
+- 单卡 `cudaGraphLaunch`:
+  - card 2: `1.261 us`
+  - card 3: `1.272 us`
+- 同卡双提交:
+  - `2.600 us` total
+  - `1.300 us` per launch
+- 双卡交替提交:
+  - `2.619 us` total
+  - `1.310 us` per launch
+- 纯热路径 `cudaSetDevice(0) -> cudaSetDevice(1)`:
+  - 仍为 `0.087 us` per pair
+  - `0.044 us` per set
+- 交替双卡相对同卡双提交的增量：
+  - `0.019 us` per pair
+  - `0.010 us` per launch
+
+直接结论：
+
+- 在这台 4090 + CUDA 12.6 服务器上，如果 graph 已经 instantiate + upload，单线程在两张卡之间交替提交 graph 的 CPU 开销，与“在同一张卡上连续提交两个 graph”几乎没有可测差别。
+- 这里真正占主导的是 `cudaGraphLaunch()` 自身的 `~1.1-1.3 us`；热路径 `cudaSetDevice(0<->1)` 只有 `~44 ns`/call，低到基本可以忽略。
+- 对 2 卡场景，steady-state host submit 可以直接按“每次 graph launch 约 `1.1-1.3 us`，跨卡切换税约 `0.0-0.05 us`”做预算。
+
+对架构决策的含义：
+
+- 如果只是“同一线程轮流喂两张卡”，在这台机器上没有证据表明 `cudaSetDevice()` 会成为瓶颈。
+- 这意味着“为了避免切卡而额外拆线程”的收益门槛更高，因为线程 handoff 本身通常比这里测到的切卡税贵一个数量级。
+- 至少对 2 卡而言，更应优先关注：
+  - graph 是否能稳定复用
+  - H2D / D2H / 后处理是否挡住了 overlap
+  - 现有 owning thread 是否已经足够顺滑地持续提交
+
+边界与注意：
+
+- 这些结果只覆盖 steady-state repeat launch，不含首次 context 初始化、首次 graph upload、graph update。
+- 这些结果只证明了 2 张 4090 D、当前驱动和内核组合下的行为，不能直接外推到所有多卡机器。
+- benchmark 只测 CPU submit 路径；如果真实系统的瓶颈在 pinned-memory copy、allocator、queue contention、postprocess，那么这里的结果不会替代那些测量。
