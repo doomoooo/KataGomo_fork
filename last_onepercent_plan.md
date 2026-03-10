@@ -574,3 +574,159 @@ Primary sources:
   https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html
 - CUDA C Programming Guide, stream/event synchronization model:
   https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-host-programming.html
+
+### 2026-03-11: 单调度线程 + `global open batch` 工作流草案 v0
+
+这节记录当前已经对齐的设计约束，避免后续讨论时再次把“global open batch”和“每请求 H2D”说乱。
+
+背景约束：
+
+- 当前实测历史见 [优化历史.md](/home/wangyize/.katago/KataGomo_fork/优化历史.md)：
+  - 空 GPU 时允许 partial batch 发射是有收益的。
+  - 非空 GPU 时，强行只发满 batch，能够把稳态 `gpu_batch_time_share` 收敛到 `b7=100%`。
+- 因此这版设计明确保留：
+  - 空卡立刻发 partial batch
+  - 非空卡只发满 batch
+  - 不引入 timeout
+
+核心模型：
+
+- 整个推理侧由单个 spin-wait 调度线程管理。
+- 配置文件里仍保留 `trtDeviceToUseThread0=0` 这类表达，但只作为前向兼容输入，不再意味着真的有对应的推理线程。
+- 假设共有：
+  - `n` 张卡
+  - 每张卡历史上等价于 `s` 个原推理线程
+  - `maxBatchSize = b`
+- 每张卡初始化：
+  - `s+1` 个推理 stream
+  - `s+1` 个 H2D stream
+  - `s+1` 个 D2H stream
+  - 每个推理 slot 一套自己的 execution context / device buffers / pinned host buffers
+  - 每个推理 slot 为 `1..b` 预初始化一套 `cudaGraphExec`
+
+这版最关键的调度约束：
+
+- 全局只有一个 open batch，不是每卡一个 open batch。
+- open batch 一旦创建，就必须立刻绑定：
+  - `targetDevice`
+  - `targetSlot`
+  - 必要时还要绑定一个 `markerSlot`
+- 原因是本设计坚持“以请求为单位做预处理和 H2D”，所以每个请求一进 open batch，就必须立刻知道预处理写到哪块 pinned input buffer、H2D 拷到哪个 device input buffer。
+- 这等价于接受一个 tradeoff：
+  - open batch 形成后基本不可迁移
+  - 但换来预处理和 H2D 在 batch 形成期间被平滑摊开，而不是在 batch seal 时集中爆发
+
+为什么坚持按请求而不是按 batch 做 H2D：
+
+- 如果按 batch 做 H2D，那么 batch seal 时会出现一坨连续的预处理 + copy，形成明显的 CPU 突刺。
+- 当前更想避免的是“猝发的密集预处理请求”，而不是那几个微秒的 H2D 本身。
+- 因此更合理的目标是把：
+  - 预处理
+  - H2D
+  都均匀摊到 open batch 的形成过程里。
+
+slot 复用规则：
+
+- slot 只有在 `postDone = true` 时才能复用。
+- 这是 host 侧资源复用约束，不是 CUDA event 约束。
+- 单调度线程下这里不需要锁竞争，只需要普通状态位维护。
+
+open batch 的最小状态：
+
+- `targetDevice`
+- `targetSlot`
+- `markerSlot`
+- `size`
+- `sealed`
+- `launched`
+- `lastH2DEvent`
+
+关于 `lastH2DEvent` 的关键简化：
+
+- 如果同一个 open batch 的所有请求 H2D 都发到同一条 H2D stream 上，那么 launch 时不需要等待“一组 H2D event”。
+- 只需要等待最后一个 `lastH2DEvent` 即可。
+- 原因是同一条 stream 上，最后一次 `cudaEventRecord()` 已经天然覆盖了之前排进去的所有 H2D。
+- 这能把依赖管理从“event 列表”压缩成“每个 open batch 一个尾事件”。
+
+卡空/卡不空决策：
+
+- 这版明确保留现有策略，不改成 timeout，也不改成“每卡一个 filling batch”。
+- 规则是：
+  - 如果目标卡当前整体空闲，则允许立刻发 partial batch。
+  - 如果目标卡当前非空，则只允许发满 batch。
+  - 但一旦那张卡后来整体变空，当前全局 open batch 也应立刻以 partial batch 发出。
+- 这本质上就是当前已有“空 GPU 允许 partial，否则等 exact batch”策略的延伸，而不是新的调度哲学。
+
+对“标记流 / marker slot”的理解：
+
+- 当选择的目标卡当前非空时，open batch 创建时还要记录“预计最早完成”的那条推理流，记为 `markerSlot`。
+- 这个 slot 的 `graphDoneEvent` 是 launch 依赖之一。
+- 由于新的 graph 一定在 `markerSlot` 结束之后才开始执行，因此 `markerSlot` 会在逻辑上把“最早空出来的窗口”让给这个 future launch。
+
+一次请求进入系统时的工作流：
+
+1. 调度线程非阻塞轮询：
+   - 输入队列
+   - 所有 `graphDoneEvent`
+   - 所有 `d2hDoneEvent`
+2. 如果输入队列非空：
+   - 如果当前不存在 open batch，则立即做 slot 选择，并创建新的 global open batch。
+   - 如果当前已经有 open batch，则直接把请求追加到当前 open batch。
+3. 预处理立刻执行，写入 open batch 对应 slot 的 pinned input buffer。
+4. 同时在 open batch 对应的 H2D stream 上发起这一个请求对应的异步 H2D。
+5. 记录新的 `lastH2DEvent`。
+6. 如果满足 launch 条件：
+   - 目标卡当前为空；或者
+   - open batch 已经满 batch
+   则排 graph launch 和 D2H。
+
+一次 launch 的依赖：
+
+- graph launch 必须同时等待：
+  - 当前 slot 的 `postDone = true`
+  - open batch 的 `lastH2DEvent`
+  - 如果有 `markerSlot`，则还要等 `markerSlot.graphDoneEvent`
+- 其中 CUDA 侧依赖应尽量用：
+  - `cudaStreamWaitEvent(inferStream, lastH2DEvent, 0)`
+  - `cudaStreamWaitEvent(inferStream, markerGraphDoneEvent, 0)`
+- 而 `postDone` 是 host 侧 slot 可复用条件，不能偷换成 CUDA event。
+
+一次 launch 之后立即安排的工作：
+
+- 在 infer stream 上发 `cudaGraphLaunch(graphExec[batchSize], inferStream)`。
+- 在对应 D2H stream 上等待 `graphDoneEvent`，然后发异步 D2H。
+- 更新该 slot 的：
+  - `estimatedDoneTime`
+  - `postDone = false`
+- 清空当前 global open batch。
+
+完成事件处理：
+
+- 若某个 `graphDoneEvent` 已完成：
+  - 更新该卡最近 `10` 次推理时长滚动平均。
+  - 这主要用于在线修正 ETA。
+  - 只有在“当前卡整体变空”且恰好存在一个已经选中当前卡/slot 的 open batch 时，才需要立即补一次 launch 决策。
+- 若某个 `d2hDoneEvent` 已完成：
+  - 立刻做后处理。
+  - 标记 `postDone = true`。
+  - 唤醒外部等待请求结果的线程。
+
+调度线程防碰撞规则：
+
+- 第一版即使不上预处理/后处理线程池，也不能让调度线程一次性吞很多个新请求。
+- 建议规则：
+  - 每次主循环最多只处理 `1` 个新请求
+  - 然后立刻重新轮询 `graphDoneEvent` 和 `d2hDoneEvent`
+- 这样可以把“调度线程因为连续 preprocess/postprocess 而错过 launch 时机”的风险压低到单个请求量级，而不是一口气积成一个 batch 的 CPU 突刺。
+
+当前已接受的风险与暂不做的优化：
+
+- 暂不引入 pre/post 线程池。
+- 暂不改成 batch 级 H2D。
+- 暂不引入 timeout flush。
+- 暂不改变“空卡 partial、非空卡 exact batch”的核心策略。
+
+后续真正需要验证的，不是这套语义是否自洽，而是两件事：
+
+- 单调度线程在 steady-state 下，预处理/后处理是否会明显推迟关键 launch 节点。
+- `s+1` 个 slot 是否真的能把稳态维持在“始终约有 `s` 个 infer stream 在跑 graph，而额外一个 slot 吃掉 IO 和 host 开销”。
