@@ -283,8 +283,11 @@ void NeuralNet::getOutput(
   InputBuffers* inputBuffers,
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
-  vector<NNOutput*>& outputs
+  vector<NNOutput*>& outputs,
+  NNPerfInfo* perfInfo
 ) {
+  if(perfInfo != NULL)
+    *perfInfo = NNPerfInfo();
   int batchSize = numBatchEltsFilled;
   int nnXLen = handle->ctx->nnXLen;
   int nnYLen = handle->ctx->nnYLen;
@@ -443,4 +446,3 @@ bool NeuralNet::testEvaluateConv(const ConvLayerDesc* desc, int batchSize, int n
 bool NeuralNet::testEvaluateBatchNorm(const BatchNormLayerDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
 bool NeuralNet::testEvaluateResidualBlock(const ResidualBlockDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
 bool NeuralNet::testEvaluateGlobalPoolingResidualBlock(const GlobalPoolingResidualBlockDesc* desc, int batchSize, int nnXLen, int nnYLen, bool useFP16, bool useNHWC, const std::vector<float>& inputBuffer, const std::vector<float>& maskBuffer, std::vector<float>& outputBuffer) { return false; }
-

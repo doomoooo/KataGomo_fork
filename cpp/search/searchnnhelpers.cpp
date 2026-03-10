@@ -19,6 +19,7 @@ void Search::computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwner
   Board board = rootBoard;
   const BoardHistory& hist = rootHistory;
   Player pla = rootPla;
+  nnResultBuf.submittedToNNServer = false;
   bool skipCache = false;
   bool isRoot = true;
   MiscNNInputParams nnInputParams;
@@ -62,6 +63,7 @@ bool Search::initNodeNNOutput(
   SearchThread& thread, SearchNode& node,
   bool isRoot, bool skipCache, bool isReInit
 ) {
+  thread.nnResultBuf.submittedToNNServer = false;
   bool includeOwnerMap = isRoot || alwaysIncludeOwnerMap;
   bool antiMirrorDifficult = false;
   if(searchParams.antiMirror && mirroringPla != C_EMPTY && mirrorAdvantage >= -0.5 &&
@@ -187,6 +189,9 @@ bool Search::initNodeNNOutput(
     result = noisedResult;
     delete tmp;
   }
+
+  thread.submittedNNEvalThisPlayout =
+    thread.submittedNNEvalThisPlayout || thread.nnResultBuf.submittedToNNServer;
 
   node.nodeAge.store(searchNodeAge,std::memory_order_release);
   //If this is a re-initialization of the nnOutput, we don't want to add any visits or anything.

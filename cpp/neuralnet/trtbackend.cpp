@@ -1177,6 +1177,7 @@ struct TRTErrorRecorder : IErrorRecorder {
 struct ComputeHandle {
   ComputeContext* ctx;
   int gpuIdxForHandle;
+  int serverThreadIdxForHandle;
   std::shared_ptr<LaunchIntervalGpuState> launchIntervalGpuState;
 
   bool usingFP16;
@@ -1210,9 +1211,11 @@ struct ComputeHandle {
     const LoadedModel* loadedModel,
     int maxBatchSz,
     bool requireExactNNLen,
-    int gpuIdx) {
+    int gpuIdx,
+    int serverThreadIdx) {
     ctx = context;
     gpuIdxForHandle = gpuIdx;
+    serverThreadIdxForHandle = serverThreadIdx;
     launchIntervalGpuState = nullptr;
 
     maxBatchSize = maxBatchSz;
@@ -1916,7 +1919,16 @@ ComputeHandle* NeuralNet::createComputeHandle(
       "TensorRT backend thread " + Global::intToString(serverThreadIdx) + ": Initializing (may take a long time)");
   }
 
-  auto handle = new ComputeHandle(logger, &prop, context, loadedModel, maxBatchSize, requireExactNNLen, gpuIdxForThisThread);
+  auto handle = new ComputeHandle(
+    logger,
+    &prop,
+    context,
+    loadedModel,
+    maxBatchSize,
+    requireExactNNLen,
+    gpuIdxForThisThread,
+    serverThreadIdx
+  );
 
   if(logger != NULL) {
     logger->write(
@@ -2163,9 +2175,12 @@ void NeuralNet::getOutput(
   InputBuffers* inputBuffers,
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
-  vector<NNOutput*>& outputs) {
+  vector<NNOutput*>& outputs,
+  NNPerfInfo* perfInfo) {
   assert(numBatchEltsFilled <= inputBuffers->maxBatchSize);
   assert(numBatchEltsFilled > 0);
+  if(perfInfo != NULL)
+    *perfInfo = NNPerfInfo();
 
   const int batchSize = numBatchEltsFilled;
   const int nnXLen = gpuHandle->ctx->nnXLen;
@@ -2183,6 +2198,21 @@ void NeuralNet::getOutput(
   float h2dMs = 0.0f;
   float waitGpuMs = 0.0f;
   auto preprocessStart = std::chrono::steady_clock::now();
+  struct StreamActivityGuard {
+    bool enabled;
+    int threadIdx;
+    int gpuIdx;
+    StreamActivityGuard(bool enabled_, int threadIdx_, int gpuIdx_)
+      : enabled(enabled_), threadIdx(threadIdx_), gpuIdx(gpuIdx_)
+    {
+      if(enabled)
+        GlobalPerfProfile::changeGpuStreamActiveCount(threadIdx, gpuIdx, 1);
+    }
+    ~StreamActivityGuard() {
+      if(enabled)
+        GlobalPerfProfile::changeGpuStreamActiveCount(threadIdx, gpuIdx, -1);
+    }
+  };
   assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
   assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
 
@@ -2215,76 +2245,84 @@ void NeuralNet::getOutput(
     CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DStartEvent, stream));
   }
 
-  // Set inputs
-  if (isOnnx) {
-      assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("input_spatial"));
-      assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("input_global"));
-      
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      
-      auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
-      auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
-      gpuHandle->exec->setInputShape("input_spatial", spatialInputDims);
-      gpuHandle->exec->setInputShape("input_global", globalInputDims);
-  } else {
-      assert(inputBuffers->singleMaskElts == gpuHandle->getBufferRowElts("InputMask"));
-      assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("InputSpatial"));
-      assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("InputGlobal"));
-      if(numMetaFeatures > 0)
-        assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
+  {
+    StreamActivityGuard streamActivityGuard(
+      perfEnabled,
+      gpuHandle->serverThreadIdxForHandle,
+      gpuHandle->gpuIdxForHandle
+    );
 
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      if(numMetaFeatures > 0) {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      }
+    // Set inputs
+    if (isOnnx) {
+        assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("input_spatial"));
+        assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("input_global"));
 
-      auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
-      auto spatialInputDims = gpuHandle->getBufferDynamicShape("InputSpatial", batchSize);
-      auto globalInputDims = gpuHandle->getBufferDynamicShape("InputGlobal", batchSize);
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
 
-      gpuHandle->exec->setInputShape("InputMask", maskInputDims);
-      gpuHandle->exec->setInputShape("InputSpatial", spatialInputDims);
-      gpuHandle->exec->setInputShape("InputGlobal", globalInputDims);
+        auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
+        auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
+        gpuHandle->exec->setInputShape("input_spatial", spatialInputDims);
+        gpuHandle->exec->setInputShape("input_global", globalInputDims);
+    } else {
+        assert(inputBuffers->singleMaskElts == gpuHandle->getBufferRowElts("InputMask"));
+        assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("InputSpatial"));
+        assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("InputGlobal"));
+        if(numMetaFeatures > 0)
+          assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
 
-      if(numMetaFeatures > 0) {
-        auto metaInputDims = gpuHandle->getBufferDynamicShape("InputMeta", batchSize);
-        gpuHandle->exec->setInputShape("InputMeta", metaInputDims);
-      }
-  }
-  if(perfEnabled)
-    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DEndEvent, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        if(numMetaFeatures > 0) {
+          CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        }
 
-  gpuHandle->maybeRecordLaunchInterval();
-  gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
-  if(perfEnabled)
-    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfInferenceDoneEvent, stream));
+        auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
+        auto spatialInputDims = gpuHandle->getBufferDynamicShape("InputSpatial", batchSize);
+        auto globalInputDims = gpuHandle->getBufferDynamicShape("InputGlobal", batchSize);
 
-  // Get outputs
-  if (isOnnx) {
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-  } else {
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-  }
-  if(perfEnabled)
-    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfD2HEndEvent, stream));
-  CUDA_ERR("getOutput", cudaStreamSynchronize(stream));
-  if(perfEnabled) {
-    float d2hMsF = 0.0f;
-    CUDA_ERR("getOutput", cudaEventElapsedTime(&h2dMs, gpuHandle->perfH2DStartEvent, gpuHandle->perfH2DEndEvent));
-    CUDA_ERR("getOutput", cudaEventElapsedTime(&waitGpuMs, gpuHandle->perfH2DEndEvent, gpuHandle->perfInferenceDoneEvent));
-    CUDA_ERR("getOutput", cudaEventElapsedTime(&d2hMsF, gpuHandle->perfInferenceDoneEvent, gpuHandle->perfD2HEndEvent));
-    d2hMs = (double)d2hMsF;
+        gpuHandle->exec->setInputShape("InputMask", maskInputDims);
+        gpuHandle->exec->setInputShape("InputSpatial", spatialInputDims);
+        gpuHandle->exec->setInputShape("InputGlobal", globalInputDims);
+
+        if(numMetaFeatures > 0) {
+          auto metaInputDims = gpuHandle->getBufferDynamicShape("InputMeta", batchSize);
+          gpuHandle->exec->setInputShape("InputMeta", metaInputDims);
+        }
+    }
+    if(perfEnabled)
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DEndEvent, stream));
+
+    gpuHandle->maybeRecordLaunchInterval();
+    gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
+    if(perfEnabled)
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfInferenceDoneEvent, stream));
+
+    // Get outputs
+    if (isOnnx) {
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+    } else {
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+    }
+    if(perfEnabled)
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfD2HEndEvent, stream));
+    CUDA_ERR("getOutput", cudaStreamSynchronize(stream));
+    if(perfEnabled) {
+      float d2hMsF = 0.0f;
+      CUDA_ERR("getOutput", cudaEventElapsedTime(&h2dMs, gpuHandle->perfH2DStartEvent, gpuHandle->perfH2DEndEvent));
+      CUDA_ERR("getOutput", cudaEventElapsedTime(&waitGpuMs, gpuHandle->perfH2DEndEvent, gpuHandle->perfInferenceDoneEvent));
+      CUDA_ERR("getOutput", cudaEventElapsedTime(&d2hMsF, gpuHandle->perfInferenceDoneEvent, gpuHandle->perfD2HEndEvent));
+      d2hMs = (double)d2hMsF;
+    }
   }
 
   gpuHandle->printDebugOutput(batchSize);
@@ -2459,6 +2497,18 @@ void NeuralNet::getOutput(
       postprocessMs,
       batchSize
     );
+    if(perfInfo != NULL) {
+      perfInfo->hasStageTimings = true;
+      perfInfo->gpuIdx = gpuHandle->gpuIdxForHandle;
+      perfInfo->preprocessMs = preprocessMs;
+      perfInfo->h2dMs = (double)h2dMs;
+      perfInfo->inferMs = (double)waitGpuMs;
+      perfInfo->d2hMs = d2hMs;
+      perfInfo->postprocessMs = postprocessMs;
+    }
+  }
+  else if(perfInfo != NULL) {
+    perfInfo->gpuIdx = gpuHandle->gpuIdxForHandle;
   }
 }
 

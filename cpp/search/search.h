@@ -62,6 +62,8 @@ struct SearchThread {
 
   double upperBoundVisitsLeft;
   double waitNNEvalTimeThisPlayoutMs;
+  int lastPlayoutDepth;
+  bool submittedNNEvalThisPlayout;
 
   //Occasionally we may need to swap out an NNOutput from a node mid-search.
   //However, to prevent access-after-delete races, the thread that swaps one out stores

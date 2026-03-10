@@ -16,6 +16,7 @@ DEFAULT_TRT_BUILDER_OPTIMIZATION_LEVEL=-1
 DEFAULT_TRT_MAX_AUX_STREAMS=-1
 DEFAULT_TRT_AVG_TIMING_ITERATIONS=-1
 DEFAULT_TRT_TILING_OPTIMIZATION_LEVEL=none
+DEFAULT_MONITOR_INTERVAL_MS=1000
 # Benchmark params defaults
 DEFAULT_BENCH_VISITS=10000
 
@@ -41,6 +42,9 @@ TRT_BUILDER_OPTIMIZATION_LEVEL="${DEFAULT_TRT_BUILDER_OPTIMIZATION_LEVEL}"
 TRT_MAX_AUX_STREAMS="${DEFAULT_TRT_MAX_AUX_STREAMS}"
 TRT_AVG_TIMING_ITERATIONS="${DEFAULT_TRT_AVG_TIMING_ITERATIONS}"
 TRT_TILING_OPTIMIZATION_LEVEL="${DEFAULT_TRT_TILING_OPTIMIZATION_LEVEL}"
+GLOBAL_PERF_PROFILE_ENABLED="${KATAGO_GLOBAL_PERF_PROFILE:-false}"
+MONITOR_SOCKET_PATH="${KATAGO_MONITOR_SOCKET_PATH:-/tmp/katago_perf_monitor.sock}"
+MONITOR_INTERVAL_MS="${KATAGO_MONITOR_INTERVAL_MS:-${DEFAULT_MONITOR_INTERVAL_MS}}"
 
 TRT_DEVICE_ID_RAW="${TRT_DEVICE_ID:-${DEFAULT_TRT_DEVICE_ID}}"
 KATAGO_BIN="${KATAGO_BIN_PATH}"
@@ -79,6 +83,10 @@ Options:
 Device assignment:
   Read from --trt-device-id (or fallback to built-in default).
   Supported forms: "0" or "0,1".
+
+Realtime monitor:
+  In gtp mode, set KATAGO_GLOBAL_PERF_PROFILE=true in env.sh to enable the
+  local monitor socket sender. python/monitor_page.py reads the same env.sh.
 EOF
 }
 
@@ -238,6 +246,16 @@ if [[ "${TRT_USE_CUDA_GRAPH}" != "true" && "${TRT_USE_CUDA_GRAPH}" != "false" ]]
   exit 1
 fi
 
+if [[ "${GLOBAL_PERF_PROFILE_ENABLED}" != "true" && "${GLOBAL_PERF_PROFILE_ENABLED}" != "false" ]]; then
+  echo "KATAGO_GLOBAL_PERF_PROFILE must be true/false, got: ${GLOBAL_PERF_PROFILE_ENABLED}" >&2
+  exit 1
+fi
+
+if ! [[ "${MONITOR_INTERVAL_MS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "KATAGO_MONITOR_INTERVAL_MS must be a positive integer, got: ${MONITOR_INTERVAL_MS}" >&2
+  exit 1
+fi
+
 case "${TRT_CUDA_SYNC_MODE}" in
   spin|blocking|yield|auto)
     ;;
@@ -302,6 +320,15 @@ else
   OVERRIDE_CONFIG+=",analysisPVLen=99"
   OVERRIDE_CONFIG+=",useEvalCache=true"
   OVERRIDE_CONFIG+=",nnMaxBatchSize=${NN_MAX_BATCHSIZE}"
+  if [[ "${GLOBAL_PERF_PROFILE_ENABLED}" == "true" ]]; then
+    if [[ -z "${MONITOR_SOCKET_PATH}" ]]; then
+      echo "KATAGO_MONITOR_SOCKET_PATH must be non-empty when KATAGO_GLOBAL_PERF_PROFILE=true" >&2
+      exit 1
+    fi
+    OVERRIDE_CONFIG+=",globalPerfProfile=true"
+    OVERRIDE_CONFIG+=",globalPerfProfileSocketPath=${MONITOR_SOCKET_PATH}"
+    OVERRIDE_CONFIG+=",globalPerfProfileIntervalMs=${MONITOR_INTERVAL_MS}"
+  fi
 
   "${KATAGO_BIN}" gtp \
     -model "${KATAGO_MODEL}" \

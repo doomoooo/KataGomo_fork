@@ -114,13 +114,16 @@ void NeuralNet::getOutput(
   InputBuffers* inputBuffers,
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
-  vector<NNOutput*>& outputs
+  vector<NNOutput*>& outputs,
+  NNPerfInfo* perfInfo
 ) {
   (void)gpuHandle;
   (void)inputBuffers;
   (void)numBatchEltsFilled;
   (void)inputBufs;
   (void)outputs;
+  if(perfInfo != NULL)
+    *perfInfo = NNPerfInfo();
   throw StringError("Dummy neural net backend: NeuralNet::getOutput unimplemented");
 }
 

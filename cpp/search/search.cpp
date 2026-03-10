@@ -55,6 +55,8 @@ SearchThread::SearchThread(int tIdx, const Search& search)
    statsBuf(),
    upperBoundVisitsLeft(1e30),
    waitNNEvalTimeThisPlayoutMs(0.0),
+   lastPlayoutDepth(0),
+   submittedNNEvalThisPlayout(false),
    oldNNOutputsToCleanUp(),
    illegalMoveHashes()
 {
@@ -126,6 +128,8 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
   assert(nnXLen > 0 && nnXLen <= NNPos::MAX_BOARD_LEN);
   assert(nnYLen > 0 && nnYLen <= NNPos::MAX_BOARD_LEN);
   policySize = NNPos::getPolicySize(nnXLen,nnYLen);
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 
   if(humanEvaluator != NULL) {
     if(humanEvaluator->getNNXLen() != nnXLen || humanEvaluator->getNNYLen() != nnYLen)
@@ -264,10 +268,14 @@ void Search::setRootSymmetryPruningOnly(const std::vector<int>& v) {
 void Search::setParams(SearchParams params) {
   clearSearch();
   searchParams = params;
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 }
 
 void Search::setParamsNoClearing(SearchParams params) {
   searchParams = params;
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 }
 
 void Search::setExternalPatternBonusTable(std::unique_ptr<PatternBonusTable>&& table) {
@@ -463,6 +471,11 @@ void Search::runWholeSearch(
   const TimeControls& tc,
   double searchFactor
 ) {
+  GlobalPerfProfile::SearchThreadScope mainSearchThreadScope(0);
+  struct SearchSessionGuard {
+    SearchSessionGuard() { GlobalPerfProfile::searchSessionStarted(); }
+    ~SearchSessionGuard() { GlobalPerfProfile::searchSessionEnded(); }
+  } searchSessionGuard;
 
   ClockTimer timer;
   atomic<int64_t> numPlayoutsShared(0);
@@ -532,6 +545,7 @@ void Search::runWholeSearch(
     &hasMaxTime,&hasTc,
     &shouldStopNow,&shouldStopEarly,maxVisits,maxPlayouts,maxTime,pondering,searchFactor
   ](int threadIdx) {
+    GlobalPerfProfile::SearchThreadScope searchThreadScope(threadIdx);
     SearchThread* stbuf = new SearchThread(threadIdx,*this);
     const bool perfEnabled = GlobalPerfProfile::isEnabled();
 
@@ -593,7 +607,15 @@ void Search::runWholeSearch(
         if(perfEnabled) {
           double totalMs = elapsedMilliseconds(playoutStart);
           double waitMs = stbuf->waitNNEvalTimeThisPlayoutMs;
-          GlobalPerfProfile::recordSearchLoop(std::max(0.0, totalMs - waitMs), waitMs);
+          GlobalPerfProfile::recordSearchLoop(
+            threadIdx,
+            totalMs,
+            std::max(0.0, totalMs - waitMs),
+            waitMs,
+            stbuf->lastPlayoutDepth,
+            finishedPlayout ? 1 : 0,
+            stbuf->submittedNNEvalThisPlayout
+          );
         }
         if(finishedPlayout) {
           numPlayouts = numPlayoutsShared.fetch_add((int64_t)1, std::memory_order_relaxed);
@@ -1152,12 +1174,18 @@ bool Search::runSinglePlayout(SearchThread& thread, double upperBoundVisitsLeft)
   //Store this value, used for futile-visit pruning this thread's root children selections.
   thread.upperBoundVisitsLeft = upperBoundVisitsLeft;
   thread.waitNNEvalTimeThisPlayoutMs = 0.0;
+  thread.lastPlayoutDepth = 0;
+  thread.submittedNNEvalThisPlayout = false;
 
   //Prep this value, playoutDescend will set it to false if the playout shouldn't count
   thread.shouldCountPlayout = true;
 
   bool finishedPlayout = playoutDescend(thread,*rootNode,true);
   (void)finishedPlayout;
+  thread.lastPlayoutDepth = std::max(
+    0,
+    (int)thread.history.moveHistory.size() - (int)rootHistory.moveHistory.size()
+  );
 
   //Restore thread state back to the root state
   thread.pla = rootPla;

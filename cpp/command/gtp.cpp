@@ -2,6 +2,7 @@
 #include "../core/commandloop.h"
 #include "../core/config_parser.h"
 #include "../core/fileutils.h"
+#include "../core/globalperf.h"
 #include "../core/timer.h"
 #include "../core/datetime.h"
 #include "../core/makedir.h"
@@ -1993,6 +1994,14 @@ int MainCmds::gtp(const vector<string>& args) {
   const double resignMinMovesPerBoardArea = cfg.contains("resignMinMovesPerBoardArea") ? cfg.getDouble("resignMinMovesPerBoardArea",0.0,1.0) : 0.0;
 
   Setup::initializeSession(cfg);
+  if(GlobalPerfProfile::isEnabled()) {
+    const string socketPath =
+      cfg.contains("globalPerfProfileSocketPath") ? cfg.getString("globalPerfProfileSocketPath") : string();
+    const int intervalMs =
+      cfg.contains("globalPerfProfileIntervalMs") ? cfg.getInt("globalPerfProfileIntervalMs",100,60000) : 1000;
+    if(!socketPath.empty())
+      GlobalPerfProfile::startRealtime(socketPath, intervalMs, &logger);
+  }
 
   const double searchFactorWhenWinning = cfg.contains("searchFactorWhenWinning") ? cfg.getDouble("searchFactorWhenWinning",0.01,1.0) : 1.0;
   const double searchFactorWhenWinningThreshold = cfg.contains("searchFactorWhenWinningThreshold") ? cfg.getDouble("searchFactorWhenWinningThreshold",0.0,1.0) : 1.0;
@@ -3675,6 +3684,7 @@ int MainCmds::gtp(const vector<string>& args) {
 
 
   maybeSaveAvoidPatterns(true);
+  GlobalPerfProfile::stopRealtime();
   delete engine;
   engine = NULL;
   NeuralNet::globalCleanup();

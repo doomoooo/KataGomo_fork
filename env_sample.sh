@@ -15,3 +15,10 @@ export KATAGO_MODEL_PATH="/path/to/model.bin.gz/or/model.onnx/"
 
 # 4) Config location
 export KATAGO_CONFIG_PATH="/path/to/gtp.cfg"
+
+# 5) Optional realtime monitor for gtp mode
+export KATAGO_GLOBAL_PERF_PROFILE=false
+export KATAGO_MONITOR_SOCKET_PATH="/tmp/katago_perf_monitor.sock"
+export KATAGO_MONITOR_HTTP_HOST="0.0.0.0"
+export KATAGO_MONITOR_HTTP_PORT="8765"
+export KATAGO_MONITOR_INTERVAL_MS="1000"

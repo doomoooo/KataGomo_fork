@@ -983,7 +983,10 @@ void NeuralNet::getOutput(
   InputBuffers* inputBuffers,
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
-  vector<NNOutput*>& outputs) {
+  vector<NNOutput*>& outputs,
+  NNPerfInfo* perfInfo) {
+  if(perfInfo != NULL)
+    *perfInfo = NNPerfInfo();
 
   MetalProcess::getMetalOutput(gpuHandle, inputBuffers, numBatchEltsFilled, inputBufs, outputs);
 }

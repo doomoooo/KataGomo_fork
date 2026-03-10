@@ -24,6 +24,7 @@ NNResultBuf::NNResultBuf()
     rowMetaBuf(),
     hasRowMeta(false),
     result(nullptr),
+    submittedToNNServer(false),
     errorLogLockout(false),
     // If no symmetry is specified, it will use default or random based on config.
     symmetry(NNInputs::SYMMETRY_NOTSPECIFIED),
@@ -176,6 +177,9 @@ NNEvaluator::NNEvaluator(
   queryQueue.reserve(maxBatchSize * 4 * gpuIdxByServerThread.size());
   //Starts readonly. Becomes writable once we spawn server threads
   queryQueue.setReadOnly();
+  queryQueue.setSizeChangedObserver([](size_t newSize) {
+    GlobalPerfProfile::noteQueueLength((int)newSize);
+  });
 
   for(int gpuIdx: gpuIdxByServerThread)
     numGpuBusyClaims[canonicalGpuIdxForScheduling(gpuIdx)] = 0;
@@ -403,6 +407,9 @@ void NNEvaluator::spawnServerThreads() {
   if(serverThreads.size() != 0)
     throw StringError("NNEvaluator::spawnServerThreads called when threads were already running!");
 
+  if(GlobalPerfProfile::isRealtimeRunning())
+    GlobalPerfProfile::configureInferenceSlots(gpuIdxByServerThread);
+
   {
     lock_guard<std::mutex> lock(bufferMutex);
     serverThreadsIsUsingFP16.resize(numThreads,0);
@@ -456,15 +463,21 @@ void NNEvaluator::serve(
 ) {
   struct InferenceThreadActiveGuard {
     bool enabled;
+    int threadIdx;
     explicit InferenceThreadActiveGuard(bool enabled_)
-      : enabled(enabled_)
+      : enabled(enabled_),
+        threadIdx(-1)
+    {}
+    InferenceThreadActiveGuard(bool enabled_, int threadIdx_)
+      : enabled(enabled_),
+        threadIdx(threadIdx_)
     {
       if(enabled)
-        GlobalPerfProfile::changeInferenceThreadActiveCount(1);
+        GlobalPerfProfile::changeInferenceThreadActiveCount(threadIdx,1);
     }
     ~InferenceThreadActiveGuard() {
       if(enabled)
-        GlobalPerfProfile::changeInferenceThreadActiveCount(-1);
+        GlobalPerfProfile::changeInferenceThreadActiveCount(threadIdx,-1);
     }
   };
 
@@ -505,6 +518,7 @@ void NNEvaluator::serve(
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
     const int schedulerGpuIdx = canonicalGpuIdxForScheduling(gpuIdxForThisThread);
     bool claimedIdleGpu = false;
+    double waitTaskSubmitMs = 0.0;
     {
       lock.lock();
       int& busyClaimCount = numGpuBusyClaims[schedulerGpuIdx];
@@ -516,7 +530,9 @@ void NNEvaluator::serve(
     }
 
     if(claimedIdleGpu) {
+      auto waitStart = std::chrono::steady_clock::now();
       bool gotAnything = queryQueue.waitPopUpToN(resultBufs,desiredBatchSize);
+      waitTaskSubmitMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now() - waitStart).count();
       //Queue being closed is a signal that we're done.
       if(!gotAnything) {
         lock.lock();
@@ -526,7 +542,9 @@ void NNEvaluator::serve(
       }
     }
     else {
+      auto waitStart = std::chrono::steady_clock::now();
       bool gotAnything = queryQueue.waitPopExactN(resultBufs, desiredBatchSize);
+      waitTaskSubmitMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now() - waitStart).count();
       if(!gotAnything)
         break;
       lock.lock();
@@ -534,12 +552,9 @@ void NNEvaluator::serve(
       lock.unlock();
     }
 
-    if(GlobalPerfProfile::isEnabled())
-      GlobalPerfProfile::noteQueueLength((int)queryQueue.size());
-
     int numRows = (int)resultBufs.size();
     assert(numRows > 0);
-    InferenceThreadActiveGuard inferenceThreadActiveGuard(GlobalPerfProfile::isEnabled());
+    InferenceThreadActiveGuard inferenceThreadActiveGuard(GlobalPerfProfile::isEnabled(), serverThreadIdx);
 
     bool doRandomize = currentDoRandomize.load(std::memory_order_acquire);
     int defaultSymmetry = currentDefaultSymmetry.load(std::memory_order_acquire);
@@ -611,6 +626,18 @@ void NNEvaluator::serve(
         resultBuf->clientWaitingForResult.notify_all();
         resultLock.unlock();
       }
+      GlobalPerfProfile::recordRealtimeInferenceBatch(
+        serverThreadIdx,
+        gpuIdxForThisThread,
+        numRows,
+        numRows,
+        waitTaskSubmitMs,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      );
     }
     else {
       outputBuf.clear();
@@ -637,13 +664,26 @@ void NNEvaluator::serve(
         }
       }
 
-      NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
+      NNPerfInfo perfInfo;
+      NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf, &perfInfo);
       assert(outputBuf.size() == numRows);
 
       m_numRowsProcessed.fetch_add(numRows, std::memory_order_relaxed);
       m_numBatchesProcessed.fetch_add(1, std::memory_order_relaxed);
       numRowsHandledThisThread += numRows;
       numBatchesHandledThisThread += 1;
+      GlobalPerfProfile::recordRealtimeInferenceBatch(
+        serverThreadIdx,
+        perfInfo.gpuIdx,
+        numRows,
+        numRows,
+        waitTaskSubmitMs,
+        perfInfo.preprocessMs,
+        perfInfo.h2dMs,
+        perfInfo.inferMs,
+        perfInfo.d2hMs,
+        perfInfo.postprocessMs
+      );
 
       for(int row = 0; row < numRows; row++) {
         assert(resultBufs[row] != NULL);
@@ -897,10 +937,9 @@ void NNEvaluator::evaluate(
   numOngoingEvals += 1;
   lock.unlock();
 
+  buf.submittedToNNServer = true;
   bool suc = queryQueue.forcePush(&buf);
   assert(suc);
-  if(GlobalPerfProfile::isEnabled())
-    GlobalPerfProfile::noteQueueLength((int)queryQueue.size());
 
   unique_lock<std::mutex> resultLock(buf.resultMutex);
   while(!buf.hasResult)
