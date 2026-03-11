@@ -1580,8 +1580,8 @@ while (!isKilled) {
 - 按请求做：
   - row pack
   - row-level H2D
-- scheduler 主循环是 spin-first 轮询
-  - 只有长时间空转时才偶尔 `yield()`
+- scheduler 主循环是纯自旋热轮询
+  - 不再包含任何 `yield()` / sleep / backoff
 - 空卡立刻发 partial batch
 - 非空卡等 exact batch
 - slot 在 `D2H + output unpack + notify` 完成前不会复用
@@ -2674,3 +2674,15 @@ reviewer 额外指出了一条中等严重度的问题：
 - 每个 slot 额外维护自己的 `d2hPendingBufferIndices` FIFO
 - 只有 queue 头部 buffer 允许被 `trtQueryOutputCopiesDone(...)` 和 `finalizeCompletedBatch(...)` 处理
 - 因此 D2H / postprocess 的时间线顺序现在和同一 slot 的 D2H stream 提交顺序一致
+
+#### 2026-03-11: scheduler 纯自旋约束
+
+在继续追 `D2H -> postprocess` gap 之前，先把一个实现约束固定下来：
+
+- TRT scheduler 线程现在不再包含任何 `std::this_thread::yield()`。
+- 启动期的基线测量轮询也不再 `yield()`。
+- 当前语义就是：
+  - 宁可持续占用一个 CPU 核
+  - 也不主动把调度时机让给 OS
+
+这意味着后续如果仍然观察到大的 `D2H -> postprocess` 空窗，不能再归因于 scheduler 代码里显式的 `yield/backoff` 逻辑，需要继续查别的原因。
