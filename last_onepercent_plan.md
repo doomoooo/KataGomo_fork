@@ -2165,3 +2165,89 @@ legacy worker-thread 路径仍然保留旧面板。
   - 大窗用 `ms`
   - 微秒级窗口用 `us`
   - 更细时切到 `ns`
+
+### 2026-03-11: 直接读取一段 50ms timeline 后，对“2us overhead” 的实际检查
+
+直接从 monitor 的当前 `50ms` sampled snapshot 读取了一帧真实数据，得到：
+
+- snapshot:
+  - `sequence = 31`
+  - `range_ms = 50.0`
+  - `span_count = 500`
+
+按依赖边界拆出来的 gap：
+
+- `preprocess -> H2D start`
+  - `count = 197`
+  - `p50 = 0.030 us`
+  - `p95 = 1.339 us`
+  - `max = 5.630 us`
+- `row H2D -> next row H2D`
+  - `count = 169`
+  - `p50 = 11.679 us`
+  - `p95 = 86.485 us`
+  - `max = 283.763 us`
+- `last H2D -> infer start`
+  - `count = 29`
+  - `p50 = 1197.349 us`
+  - `p95 = 1705.902 us`
+  - `max = 1730.819 us`
+- `marker infer -> dependent infer`
+  - `count = 29`
+  - `p50 = 1.777 us`
+  - `p95 = 3.513 us`
+  - `max = 4.087 us`
+- `infer -> D2H start`
+  - `count = 30`
+  - 全部 `0.000 us`
+- `D2H -> postprocess start`
+  - `count = 30`
+  - `p50 = 5.008 us`
+  - `p95 = 15.680 us`
+  - `max = 16.375 us`
+
+这些数要这样解释，不能混读：
+
+- `preprocess -> H2D start`
+  - 很小，说明 scheduler 线程在单请求路径上从 row pack 转到发 H2D 基本没有明显额外空洞。
+- `row H2D -> next row H2D`
+  - 这不是 stream/event overhead。
+  - 这里主要混进了：
+    - 下一条请求的 preprocess
+    - 调度线程继续轮询 / 取请求
+  - 所以这项更像“请求级 H2D 的铺开节奏”，不是 `cudaStreamWaitEvent` 成本。
+- `last H2D -> infer start`
+  - 这个 `~1.2 ms` 也**绝不能**读成 wait-event overhead。
+  - 这段时间主要是：
+    - batch 还没到 launch 条件
+    - 或者该 batch 已经做完 H2D，但还在等 marker infer 让路
+  - 当前这帧里所有 infer 都带 marker 依赖，因此没有采到“空卡立即发 partial”那类无 marker 样本。
+- `marker infer -> dependent infer`
+  - 这是当前实现里最接近“GPU 完成被 scheduler 观察到，再把下一个 infer 接上去”的 proxy。
+  - 这一项确实落在 `~2 us`：
+    - `p50 = 1.777 us`
+    - `p95 = 3.513 us`
+  - 这和之前对“poll + 状态机 handoff”大约几微秒的预期是一致的。
+- `infer -> D2H start = 0`
+  - 这是当前 timeline 建模刻意造成的。
+  - D2H 在 launch 时就已经排进 stream，并用 `cudaStreamWaitEvent(inferDone)` 接在 infer 后面。
+  - 时间线会把 D2H 起点锚在 infer 结束，所以这份图**不能**直接拿来量 `cudaStreamWaitEvent` 本身的设备侧税。
+- `D2H -> postprocess start`
+  - 这是当前单 scheduler 线程真正看得到的 host-side 消费延迟。
+  - `p50 = 5.008 us`，比“2us”更大。
+  - 它包含的不是纯 GPU->CPU 通知成本，而是：
+    - poll 发现完成
+    - 当轮循环中可能先处理别的 slot / 新请求
+    - 然后才进入 postprocess
+
+当前最稳的结论：
+
+- “跨线程 handoff ~2us”
+  - 继续沿用之前 condvar benchmark 的判断。
+- “单 scheduler 里，marker infer 完成后把下一条 infer 接上去”
+  - 从真实 snapshot 看，确实也是 `~2 us` 量级。
+- “D2H 完成后 CPU 真正开始 postprocess”
+  - 当前实现里更接近 `~5 us` 中位数，而不是 `2 us`。
+- “`cudaStreamWaitEvent` 本身是不是 2us”
+  - 这份 timeline **看不出来**。
+  - 如果要判断它本身，仍然需要最小 microbenchmark，而不是读当前 scheduler trace。
