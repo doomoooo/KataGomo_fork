@@ -2875,3 +2875,26 @@ reviewer 额外指出了一条中等严重度的问题：
 - dashboard 左侧“近 60 秒趋势”增加第三张 sparkline 卡片
 - 标题为“调度线程空闲”
 - 显示当前 1 秒窗口的空闲占比，以及最近 60 秒历史
+
+#### 2026-03-11: 新增调度线程空轮询耗时实时统计
+
+为回答“如果没有其它动作，一次 scheduler poll 本身要多少微秒”，不做单独离线 benchmark，而是直接在 realtime 里新增：
+
+- `scheduler_idle_poll_avg_us`
+
+定义方式：
+
+- 仅统计 scheduler 主循环里“纯轮询、没有具体动作”的 iteration
+- 也就是：
+  - 没有 `infer done` completion
+  - 没有 `launch`
+  - 没有 `d2h done` finalize
+  - 没有请求处理
+- 每次这样的 iteration 记录一次 wall-clock `startNs/endNs`
+- publisher 每秒取累计 `count / total_ns` 的 delta，输出
+  - `scheduler_idle_poll_avg_us = delta_total_ns / delta_count / 1e3`
+
+展示方式：
+
+- dashboard 左侧“近 60 秒趋势”新增一张“空轮询耗时”卡片
+- 显示当前 1 秒窗口的平均空轮询耗时，以及最近 60 秒历史

@@ -222,6 +222,10 @@ namespace {
     atomic<int64_t> sessionStartNs;
     atomic<int64_t> timelineCaptureStartNs;
     atomic<int64_t> timelineCaptureEndNs;
+    atomic<uint64_t> schedulerIdlePollCount;
+    atomic<int64_t> schedulerIdlePollTotalNs;
+    uint64_t lastSchedulerIdlePollCountSnapshot;
+    int64_t lastSchedulerIdlePollTotalNsSnapshot;
 
     mutex publisherMutex;
     condition_variable publisherCv;
@@ -257,6 +261,10 @@ namespace {
         sessionStartNs(0),
         timelineCaptureStartNs(0),
         timelineCaptureEndNs(0),
+        schedulerIdlePollCount(0),
+        schedulerIdlePollTotalNs(0),
+        lastSchedulerIdlePollCountSnapshot(0),
+        lastSchedulerIdlePollTotalNsSnapshot(0),
         publisherMutex(),
         publisherCv(),
         publisherThread(),
@@ -533,6 +541,10 @@ namespace {
     state.sessionStartNs.store(nowSteadyNs(), std::memory_order_relaxed);
     state.timelineCaptureStartNs.store(0, std::memory_order_relaxed);
     state.timelineCaptureEndNs.store(0, std::memory_order_relaxed);
+    state.schedulerIdlePollCount.store(0, std::memory_order_relaxed);
+    state.schedulerIdlePollTotalNs.store(0, std::memory_order_relaxed);
+    state.lastSchedulerIdlePollCountSnapshot = 0;
+    state.lastSchedulerIdlePollTotalNsSnapshot = 0;
     state.sendErrorCount.store(0, std::memory_order_relaxed);
     state.lastSendError.clear();
     state.lastErrorLogNs = 0;
@@ -944,6 +956,22 @@ namespace {
     schedulerBusyShare = std::max(0.0, std::min(1.0, schedulerBusyShare));
     window1s["scheduler_busy_time_share"] = schedulerBusyShare;
     window1s["scheduler_idle_time_share"] = 1.0 - schedulerBusyShare;
+    uint64_t schedulerIdlePollCount = state.schedulerIdlePollCount.load(std::memory_order_relaxed);
+    int64_t schedulerIdlePollTotalNs = state.schedulerIdlePollTotalNs.load(std::memory_order_relaxed);
+    uint64_t schedulerIdlePollDeltaCount =
+      schedulerIdlePollCount >= state.lastSchedulerIdlePollCountSnapshot
+        ? schedulerIdlePollCount - state.lastSchedulerIdlePollCountSnapshot
+        : 0;
+    int64_t schedulerIdlePollDeltaNs =
+      schedulerIdlePollTotalNs >= state.lastSchedulerIdlePollTotalNsSnapshot
+        ? schedulerIdlePollTotalNs - state.lastSchedulerIdlePollTotalNsSnapshot
+        : 0;
+    state.lastSchedulerIdlePollCountSnapshot = schedulerIdlePollCount;
+    state.lastSchedulerIdlePollTotalNsSnapshot = schedulerIdlePollTotalNs;
+    window1s["scheduler_idle_poll_avg_us"] =
+      schedulerIdlePollDeltaCount > 0
+        ? (double)schedulerIdlePollDeltaNs / (double)schedulerIdlePollDeltaCount / 1e3
+        : 0.0;
 
     json searchLoop;
     searchLoop["total_ms"] = percentileSummaryJson(searchLoopTotalMs);
@@ -1570,6 +1598,17 @@ void GlobalPerfProfile::recordSchedulerBusySpan(int64_t startNs, int64_t endNs) 
     startNs,
     endNs
   });
+}
+
+void GlobalPerfProfile::recordSchedulerIdlePoll(int64_t startNs, int64_t endNs) {
+  if(!isRealtimeRunning())
+    return;
+  if(startNs <= 0)
+    startNs = nowSteadyNs();
+  if(endNs < startNs)
+    endNs = startNs;
+  g_realtimeState.schedulerIdlePollCount.fetch_add(1, std::memory_order_relaxed);
+  g_realtimeState.schedulerIdlePollTotalNs.fetch_add(endNs - startNs, std::memory_order_relaxed);
 }
 
 bool GlobalPerfProfile::wantsRealtimeTimelineSpan(int64_t startNs, int64_t endNs) {

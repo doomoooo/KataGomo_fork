@@ -736,6 +736,9 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
   auto recordSchedulerBusySpan = [&](int64_t startNs, int64_t endNs) {
     GlobalPerfProfile::recordSchedulerBusySpan(startNs, endNs);
   };
+  auto recordSchedulerIdlePoll = [&](int64_t startNs, int64_t endNs) {
+    GlobalPerfProfile::recordSchedulerIdlePoll(startNs, endNs);
+  };
   auto shouldCaptureTimelineSpan = [&](int64_t startNs, int64_t endNs) {
     return GlobalPerfProfile::wantsRealtimeTimelineSpan(startNs, endNs);
   };
@@ -1309,9 +1312,10 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     };
 
     while(true) {
-      int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      const int64_t loopStartNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
       ).count();
+      int64_t nowNs = loopStartNs;
       for(SchedulerState::DeviceState& device: state->devices)
         advanceDeviceProgress(device, nowNs);
 
@@ -1439,6 +1443,9 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
 
       if(queryQueue.isReadOnly() && deferredRequest == nullptr && !state->openBatch.exists && allSlotsIdle && allBuffersFree)
         break;
+
+      if(!didWork && request == nullptr && deferredRequest == nullptr)
+        recordSchedulerIdlePoll(loopStartNs, timelineNowNs());
 
     }
   }
