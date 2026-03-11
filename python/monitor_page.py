@@ -2094,6 +2094,31 @@ TIMELINE_PAGE = """<!doctype html>
       return `${fmtFloat(ns, 0)}ns`;
     }
 
+    function timelineScaleForSpan(spanNs, tickStepNs) {
+      const absSpanNs = Math.abs(Number(spanNs || 0));
+      let unit = 'ns';
+      let divisor = 1;
+      if (absSpanNs >= 1e6) {
+        unit = 'ms';
+        divisor = 1e6;
+      } else if (absSpanNs >= 1e3) {
+        unit = 'us';
+        divisor = 1e3;
+      }
+      const scaledStep = Math.abs(Number(tickStepNs || spanNs || 0)) / divisor;
+      let decimals = 0;
+      if (unit !== 'ns') {
+        if (scaledStep < 0.01) decimals = 3;
+        else if (scaledStep < 0.1) decimals = 2;
+        else if (scaledStep < 1) decimals = 1;
+      }
+      return { unit, divisor, decimals };
+    }
+
+    function fmtTimelineNsWithScale(ns, scale) {
+      return `${fmtFloat(Number(ns || 0) / scale.divisor, scale.decimals)}${scale.unit}`;
+    }
+
     function decodeTimelineSpan(rawSpan, slotInfoBySlot, rangeStartNs) {
       if (!Array.isArray(rawSpan)) return rawSpan;
       const slot = Number(rawSpan[1] ?? -1);
@@ -2268,15 +2293,16 @@ TIMELINE_PAGE = """<!doctype html>
       }
 
       const tickStepNs = timelineTickStepNs(timelineUiState.spanNs);
+      const axisScale = timelineScaleForSpan(timelineUiState.spanNs, tickStepNs);
       const tickStartNs = Math.ceil(viewStartNs / tickStepNs) * tickStepNs;
       const tickSvgs = [];
       for (let tickNs = tickStartNs; tickNs <= viewEndNs + 1; tickNs += tickStepNs) {
         const x = xForNs(tickNs);
         if (x < leftPad || x > width - rightPad) continue;
-        const relNs = tickNs - latestRangeEndNs;
+        const relNs = tickNs - viewStartNs;
         tickSvgs.push(`
           <line class="timeline-grid" x1="${x.toFixed(1)}" y1="${topPad - 10}" x2="${x.toFixed(1)}" y2="${(height - bottomPad + 6).toFixed(1)}"></line>
-          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle">${fmtTimelineNs(relNs)}</text>
+          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle">${fmtTimelineNsWithScale(relNs, axisScale)}</text>
         `);
       }
 
@@ -2289,15 +2315,16 @@ TIMELINE_PAGE = """<!doctype html>
       }).join('');
 
       const axisLine = `<line class="timeline-axis" x1="${leftPad}" y1="${(height - bottomPad + 1).toFixed(1)}" x2="${(width - rightPad).toFixed(1)}" y2="${(height - bottomPad + 1).toFixed(1)}"></line>`;
-      const relStartNs = viewStartNs - latestRangeEndNs;
-      const relEndNs = viewEndNs - latestRangeEndNs;
+      const sampleOffsetStartNs = viewStartNs - latestRangeStartNs;
+      const sampleOffsetEndNs = viewEndNs - latestRangeStartNs;
       const droppedSpans = Number(timeline.dropped_spans || 0);
       const droppedSuffix = droppedSpans > 0 ? ` | clipped ${fmtInt(droppedSpans)}` : '';
       summary.innerHTML = `
         <span><strong>${fmtInt(orderedSlots.length)} 个 slot 全部展开</strong></span>
-        <span>窗口 ${fmtTimelineNs(timelineUiState.spanNs)}</span>
-        <span>相对最新 ${fmtTimelineNs(relStartNs)} .. ${fmtTimelineNs(relEndNs)}</span>
-        <span>样本范围 ${fmtTimelineNs(latestRangeEndNs - latestRangeStartNs)}</span>
+        <span>窗口 ${fmtTimelineNsWithScale(timelineUiState.spanNs, axisScale)}</span>
+        <span>窗口内 0 .. ${fmtTimelineNsWithScale(timelineUiState.spanNs, axisScale)}</span>
+        <span>样本内 ${fmtTimelineNsWithScale(sampleOffsetStartNs, axisScale)} .. ${fmtTimelineNsWithScale(sampleOffsetEndNs, axisScale)}</span>
+        <span>样本范围 ${fmtTimelineNsWithScale(latestRangeEndNs - latestRangeStartNs, axisScale)}</span>
         <span>${timelineUiState.paused ? '已暂停自动刷新' : '自动跟随最新样本中'}</span>
         <span>${droppedSuffix || '未截断 span'}</span>
         <span class="hint">Scheduler/Pre/Post 来自 CPU 时钟；H2D/Infer/D2H 时长来自 cudaEvent timing，位置按依赖关系回填。</span>

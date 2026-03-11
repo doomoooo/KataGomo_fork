@@ -2153,3 +2153,15 @@ legacy worker-thread 路径仍然保留旧面板。
   - `Scheduler/Pre/Post` 来自 CPU 时钟
   - `H2D/Infer/D2H` 时长来自 `cudaEvent timing`
   - 位置按依赖关系回填
+
+后续又补了一刀显示语义：
+
+- 横轴不再显示“相对最新的负时间”
+- 改成“当前窗口内从 `0` 开始向右增长”的正时间轴
+- summary 同时显示：
+  - `窗口内 0 .. span`
+  - `样本内 start .. end`
+- 显示单位按当前缩放跨度统一选取：
+  - 大窗用 `ms`
+  - 微秒级窗口用 `us`
+  - 更细时切到 `ns`
