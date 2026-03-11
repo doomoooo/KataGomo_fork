@@ -855,6 +855,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     startupComplete = true;
 
     NNResultBuf* deferredRequest = nullptr;
+    int idleSpinIterations = 0;
 
     auto handleInferCompletion = [&](SchedulerState::SlotState& slot, int64_t nowNs) {
       SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
@@ -1004,8 +1005,14 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       if(queryQueue.isReadOnly() && deferredRequest == nullptr && !state->openBatch.exists && allSlotsIdle)
         break;
 
-      if(!didWork)
-        std::this_thread::yield();
+      if(!didWork) {
+        idleSpinIterations += 1;
+        if((idleSpinIterations & 0x3FF) == 0)
+          std::this_thread::yield();
+      }
+      else {
+        idleSpinIterations = 0;
+      }
     }
   }
   catch(const std::exception& e) {
