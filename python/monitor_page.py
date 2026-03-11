@@ -334,7 +334,7 @@ DASHBOARD_PAGE = """<!doctype html>
       grid-template-rows: minmax(0, 1.34fr) minmax(0, 0.66fr);
       grid-template-areas:
         "trend depth search infer"
-        "queue batch streams streams";
+        "batch batch streams streams";
       gap: 10px;
       min-height: 0;
     }
@@ -355,7 +355,6 @@ DASHBOARD_PAGE = """<!doctype html>
     .tile-depth { grid-area: depth; }
     .tile-search { grid-area: search; }
     .tile-infer { grid-area: infer; }
-    .tile-queue { grid-area: queue; }
     .tile-batch { grid-area: batch; }
     .tile-streams { grid-area: streams; }
     .chart-body {
@@ -676,6 +675,9 @@ DASHBOARD_PAGE = """<!doctype html>
       .dashboard {
         grid-template-columns: 0.92fr 1fr 1.16fr 1.44fr;
         grid-template-rows: minmax(0, 1.32fr) minmax(0, 0.68fr);
+        grid-template-areas:
+          "trend depth search infer"
+          "batch batch streams streams";
         gap: 8px;
       }
     }
@@ -721,11 +723,6 @@ DASHBOARD_PAGE = """<!doctype html>
         <h2 id="inference-panel-title">推理执行概况</h2>
         <p id="inference-panel-hint" class="hint">按当前后端模式展示推理侧可解释指标；single-scheduler 模式会切换成保守视图。</p>
         <div id="inference-phases" class="chart-body"></div>
-      </div>
-      <div class="panel tile-queue">
-        <h2 id="activity-panel-title">推理资源占用</h2>
-        <p id="activity-panel-hint" class="hint">过去 1 秒时间占比</p>
-        <div id="queue-and-active" class="chart-body"></div>
       </div>
       <div class="panel tile-batch">
         <h2 id="batch-panel-title">GPU Batch 分布</h2>
@@ -915,10 +912,6 @@ DASHBOARD_PAGE = """<!doctype html>
       document.getElementById('inference-panel-hint').textContent = single
         ? '单 scheduler / logical slot 模式下仅 infer_ms 为近似有效值；wait_task_submit / preprocess / H2D / D2H / postprocess 仍未重新接线。'
         : '等待提交 / 预处理 / H2D / 推理 / D2H / 后处理，全部按分位数重建为 PDF 轮廓';
-      document.getElementById('activity-panel-title').textContent = single ? '占用推理槽位数' : '活跃推理线程数';
-      document.getElementById('activity-panel-hint').textContent = single
-        ? '过去 1 秒 non-idle slot 数的时间占比'
-        : '过去 1 秒时间占比';
       document.getElementById('batch-panel-title').textContent = single ? '按推理工作量加权的 GPU Batch 分布' : 'GPU Batch 分布';
       document.getElementById('batch-panel-hint').textContent = single
         ? '按 infer_ms / 等效工作量近似加权；多卡时保持单屏，不逐卡展开'
@@ -1258,17 +1251,6 @@ DASHBOARD_PAGE = """<!doctype html>
         <div class="panel-stack">
           <div class="panel-note">当前 TRT overlapping 路径下，realtime 监控只保留了 infer_ms 的近似值。它来自 scheduler 的等效工作量 / ETA 记账，不是 CUDA event 实测；其余 phase 目前仍是占位零值，所以这里不再展示。</div>
           ${body}
-        </div>
-      `;
-    }
-
-    function renderQueueAndActive(win, singleScheduler) {
-      const title = singleScheduler ? '占用推理槽位数' : '活跃推理线程数';
-      const emptyText = singleScheduler ? '暂无 slot 占用时间占比' : '暂无线程活跃占比';
-      document.getElementById('queue-and-active').innerHTML = `
-        <div class="mini-card" style="height:100%">
-          <h3>${title}</h3>
-          ${histogramHtml(win.inference_thread_active_time_share, fmtPercent, true, emptyText)}
         </div>
       `;
     }
@@ -1622,7 +1604,6 @@ DASHBOARD_PAGE = """<!doctype html>
         document.getElementById('depth-and-queue').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('search-loop').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('inference-phases').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
-        document.getElementById('queue-and-active').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('gpu-batches').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('gpu-streams').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('sparklines').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
@@ -1638,7 +1619,6 @@ DASHBOARD_PAGE = """<!doctype html>
         { key: 'search.wait_nn_ms', label: '等待推理耗时', stat: win.search_loop?.wait_nn_ms },
       ], 1);
       renderInferencePhases(win, singleScheduler);
-      renderQueueAndActive(win, singleScheduler);
       renderGpuBatches(win, singleScheduler);
       renderGpuStreams(win, singleScheduler);
       renderSparklines(state.history || []);
@@ -1770,7 +1750,7 @@ TIMELINE_PAGE = """<!doctype html>
       height: 100vh;
       padding: 14px;
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto auto auto minmax(0, 1fr);
       gap: 12px;
     }
     .panel {
@@ -1882,6 +1862,83 @@ TIMELINE_PAGE = """<!doctype html>
       color: #9a3412;
       border-color: rgba(194,65,12,0.18);
       background: rgba(255,237,213,0.9);
+    }
+    .timeline-streams-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 10px;
+      min-height: 0;
+    }
+    .timeline-section-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      align-items: baseline;
+      justify-content: space-between;
+    }
+    .timeline-section-head h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.1;
+    }
+    .timeline-section-head .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .timeline-streams-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+      min-height: 0;
+    }
+    .timeline-stream-card {
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 8px;
+    }
+    .timeline-stream-card h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.1;
+    }
+    .timeline-stream-card .sub {
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+    .timeline-histogram {
+      display: grid;
+      gap: 6px;
+    }
+    .timeline-hist-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) 56px;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .timeline-hist-label, .timeline-hist-value {
+      white-space: nowrap;
+    }
+    .timeline-bar-bg {
+      height: 9px;
+      border-radius: 999px;
+      background: rgba(23,32,42,0.08);
+      overflow: hidden;
+    }
+    .timeline-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(194,65,12,0.9), rgba(29,78,216,0.9));
     }
     .timeline-shell {
       display: grid;
@@ -2030,6 +2087,14 @@ TIMELINE_PAGE = """<!doctype html>
       </div>
     </section>
 
+    <section class="panel timeline-streams-shell">
+      <div class="timeline-section-head">
+        <h2>每 GPU 的运行中推理图数</h2>
+        <div class="hint">过去 1 秒不同 active infer graph 数的时间占比。这里只看 infer，不含 H2D / D2H stream。</div>
+      </div>
+      <div id="timeline-gpu-streams" class="timeline-streams-grid"></div>
+    </section>
+
     <section class="panel timeline-shell">
       <div id="timeline-summary" class="timeline-summary">
         <span><strong>等待数据</strong></span>
@@ -2044,6 +2109,7 @@ TIMELINE_PAGE = """<!doctype html>
       return Number(v).toFixed(digits);
     };
     const fmtInt = (v) => Number(v || 0).toLocaleString('en-US');
+    const fmtPercent = (v) => `${fmtFloat(Number(v || 0) * 100, 1)}%`;
     const fmtIso = (unixMs) => {
       if (!unixMs) return '等待数据';
       return new Date(unixMs).toLocaleString('zh-CN', { hour12: false });
@@ -2119,6 +2185,10 @@ TIMELINE_PAGE = """<!doctype html>
       return `${fmtFloat(Number(ns || 0) / scale.divisor, scale.decimals)}${scale.unit}`;
     }
 
+    function fmtTimelineDurationUs(ns) {
+      return `${fmtFloat(Number(ns || 0) / 1e3, 2)}us`;
+    }
+
     function decodeTimelineSpan(rawSpan, slotInfoBySlot, rangeStartNs) {
       if (!Array.isArray(rawSpan)) return rawSpan;
       const slot = Number(rawSpan[1] ?? -1);
@@ -2153,7 +2223,48 @@ TIMELINE_PAGE = """<!doctype html>
       const rowText = span.row >= 0 ? `row=${span.row}` : 'row=-';
       const laneText = span.lane || 'unknown';
       const selectedText = selectedSlot && Number(span.slot) === Number(selectedSlot.slot) ? 'selected' : 'other-slot';
-      return `${slotText}\\n${laneText} / ${span.stage}\\n${batchText} ${rowText}\\n${selectedText}`;
+      const durationText = `duration=${fmtTimelineDurationUs(Number(span.end_ns || 0) - Number(span.start_ns || 0))}`;
+      return `${slotText}\\n${laneText} / ${span.stage}\\n${batchText} ${rowText}\\n${durationText}\\n${selectedText}`;
+    }
+
+    function renderTimelineGpuStreams(latest) {
+      const el = document.getElementById('timeline-gpu-streams');
+      const single = isSingleSchedulerMode(latest);
+      const items = latest?.window1s?.cuda_stream_active_time_share_by_gpu || [];
+      if (!latest || !single) {
+        el.innerHTML = '<div class="waiting">当前只对 TRT single-scheduler 路径展示 infer graph 并发统计。</div>';
+        return;
+      }
+      if (items.length === 0) {
+        el.innerHTML = '<div class="waiting">当前后端未提供 infer graph 并发样本。</div>';
+        return;
+      }
+      el.innerHTML = items.map((item) => {
+        const buckets = Array.isArray(item.buckets) ? item.buckets : [];
+        const maxValue = Math.max(...buckets.map((bucket) => Number(bucket.value || 0)), 1e-9);
+        const rows = buckets.length === 0
+          ? '<div class="waiting">暂无 infer graph 并发数据</div>'
+          : `<div class="timeline-histogram">${buckets.map((bucket) => {
+              const width = Math.max(2, Number(bucket.value || 0) / maxValue * 100);
+              return `
+                <div class="timeline-hist-row">
+                  <div class="timeline-hist-label">${bucket.bucket}</div>
+                  <div class="timeline-bar-bg"><div class="timeline-bar-fill" style="width:${width}%"></div></div>
+                  <div class="timeline-hist-value">${fmtPercent(bucket.value)}</div>
+                </div>
+              `;
+            }).join('')}</div>`;
+        const dominant = [...buckets].sort((a, b) => Number(b.value || 0) - Number(a.value || 0))[0];
+        return `
+          <div class="timeline-stream-card">
+            <div>
+              <h3>GPU ${item.gpu}</h3>
+              <div class="sub">主并发 ${dominant ? dominant.bucket : 'N/A'} | bucket 数 ${fmtInt(buckets.length)}</div>
+            </div>
+            ${rows}
+          </div>
+        `;
+      }).join('');
     }
 
     function updateStatusBar(state) {
@@ -2288,7 +2399,14 @@ TIMELINE_PAGE = """<!doctype html>
           const endX = rect.x;
           const endY = rect.cy;
           const midX = startX + Math.max((endX - startX) * 0.5, 14);
-          arrowSvgs.push(`<path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)"></path>`);
+          const gapNs = Math.max(0, Number(span.start_ns || 0) - Number(from.span.end_ns || 0));
+          const fromLabel = `${from.span.stage}#${from.span.id}`;
+          const toLabel = `${span.stage}#${span.id}`;
+          arrowSvgs.push(`
+            <path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)">
+              <title>${fromLabel} -> ${toLabel}\\ngap=${fmtTimelineDurationUs(gapNs)}</title>
+            </path>
+          `);
         }
       }
 
@@ -2364,9 +2482,11 @@ TIMELINE_PAGE = """<!doctype html>
         const state = await resp.json();
         latestRealtimeState = state;
         updateStatusBar(state);
+        renderTimelineGpuStreams(state?.latest || null);
         renderTimeline(state?.latest || null);
       } catch (err) {
         updateStatusBar(latestRealtimeState);
+        renderTimelineGpuStreams(latestRealtimeState?.latest || null);
         document.getElementById('timeline-view').innerHTML = `<div class="waiting">页面请求失败: ${String(err)}</div>`;
       }
     }

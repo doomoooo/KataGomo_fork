@@ -2251,3 +2251,32 @@ legacy worker-thread 路径仍然保留旧面板。
 - “`cudaStreamWaitEvent` 本身是不是 2us”
   - 这份 timeline **看不出来**。
   - 如果要判断它本身，仍然需要最小 microbenchmark，而不是读当前 scheduler trace。
+
+### 2026-03-11: 监控页语义收紧
+
+这轮把 realtime 页面再收了一次，避免 dashboard 同时摆两个容易混淆的指标：
+
+- dashboard:
+  - 删除了“占用推理槽位数”
+  - 保留“每 GPU 的运行中推理图数”
+  - 底部布局重排后，把空出来的面积让给：
+    - GPU Batch 分布
+    - GPU infer 并发分布
+- `/timeline`:
+  - 单独新增“每 GPU 的运行中推理图数”区块
+  - timeline 本体继续只展示 sampled `50ms` 窗口
+
+额外加了 hover 细节：
+
+- 鼠标悬浮在 block 上：
+  - tooltip 里显示该 block 的 `duration`
+- 鼠标悬浮在 dependency arrow 上：
+  - tooltip 里显示这段依赖的 `gap`
+- hover duration 一律统一成：
+  - `us`
+  - 保留 `2` 位小数
+
+这样页面语义更接近当前实现的真实关心点：
+
+- dashboard 看卡级 infer 并发有没有喂满
+- timeline 看调度线程和三条 CUDA stream 的相对顺序与依赖细节
