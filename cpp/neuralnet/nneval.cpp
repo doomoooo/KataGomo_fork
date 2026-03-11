@@ -730,6 +730,9 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       std::chrono::steady_clock::now().time_since_epoch()
     ).count();
   };
+  auto recordSchedulerBusySpan = [&](int64_t startNs, int64_t endNs) {
+    GlobalPerfProfile::recordSchedulerBusySpan(startNs, endNs);
+  };
   auto shouldCaptureTimelineSpan = [&](int64_t startNs, int64_t endNs) {
     return GlobalPerfProfile::wantsRealtimeTimelineSpan(startNs, endNs);
   };
@@ -1304,21 +1307,30 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
         if(!slot.launchedBufferIndices.empty()) {
           SchedulerState::BufferState& buffer = state->buffers[slot.launchedBufferIndices.front()];
           if(NeuralNet::trtQueryInferenceDone(buffer.serverBuf->inputBuffers)) {
+            const int64_t busyStartNs = timelineNowNs();
             handleInferCompletion(slot, buffer);
+            recordSchedulerBusySpan(busyStartNs, timelineNowNs());
             didWork = true;
           }
         }
       }
 
-      if(state->openBatch.exists)
-        didWork = maybeLaunchOpenBatch() || didWork;
+      if(state->openBatch.exists) {
+        const int64_t busyStartNs = timelineNowNs();
+        bool launched = maybeLaunchOpenBatch();
+        if(launched)
+          recordSchedulerBusySpan(busyStartNs, timelineNowNs());
+        didWork = launched || didWork;
+      }
 
       for(SchedulerState::SlotState& slot: state->slots) {
         if(!slot.d2hPendingBufferIndices.empty()) {
           SchedulerState::BufferState& buffer = state->buffers[slot.d2hPendingBufferIndices.front()];
           if(buffer.stage == SchedulerState::BufferStage::D2HPending &&
               NeuralNet::trtQueryOutputCopiesDone(buffer.serverBuf->inputBuffers)) {
+            const int64_t busyStartNs = timelineNowNs();
             finalizeCompletedBatch(buffer);
+            recordSchedulerBusySpan(busyStartNs, timelineNowNs());
             didWork = true;
           }
         }
@@ -1341,12 +1353,16 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           SchedulerState::BufferState& buffer = state->buffers[state->openBatch.bufferIdx];
           if((int)buffer.requests.size() >= maxBatchSize) {
             deferredRequest = request;
-            if(maybeLaunchOpenBatch())
+            const int64_t busyStartNs = timelineNowNs();
+            if(maybeLaunchOpenBatch()) {
+              recordSchedulerBusySpan(busyStartNs, timelineNowNs());
               didWork = true;
+            }
           }
           else {
+          const int64_t busyStartNs = timelineNowNs();
           int rowIdx = (int)buffer.requests.size();
-          int64_t preprocessStartNs = timelineNowNs();
+          int64_t preprocessStartNs = busyStartNs;
           bool doRandomize = currentDoRandomize.load(std::memory_order_acquire);
           int defaultSymmetry = currentDefaultSymmetry.load(std::memory_order_acquire);
           if(request->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
@@ -1387,6 +1403,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           didWork = true;
           if(maybeLaunchOpenBatch())
             didWork = true;
+          recordSchedulerBusySpan(busyStartNs, timelineNowNs());
           }
         }
       }

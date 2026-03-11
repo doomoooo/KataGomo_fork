@@ -706,7 +706,7 @@ DASHBOARD_PAGE = """<!doctype html>
     <section class="dashboard">
       <div class="panel tile-trend">
         <h2>近 60 秒趋势</h2>
-        <p class="hint">`visits/s` 与 `nnEval/s`</p>
+        <p class="hint">`visits/s`、`nnEval/s` 和调度线程空闲时间占比</p>
         <div id="sparklines" class="chart-body spark-wrap"></div>
       </div>
       <div class="panel tile-depth">
@@ -1580,8 +1580,10 @@ DASHBOARD_PAGE = """<!doctype html>
     function renderSparklines(history) {
       const visits = history.map((item) => Number(item.visits_per_s || 0));
       const nneval = history.map((item) => Number(item.nn_eval_per_s || 0));
+      const schedulerIdle = history.map((item) => Number(item.scheduler_idle_time_share || 0));
       const lastVisits = visits.length > 0 ? visits[visits.length - 1] : 0;
       const lastNnEval = nneval.length > 0 ? nneval[nneval.length - 1] : 0;
+      const lastSchedulerIdle = schedulerIdle.length > 0 ? schedulerIdle[schedulerIdle.length - 1] : 0;
       document.getElementById('sparklines').innerHTML = `
         <div class="spark-card">
           <header><h3>Visits / s</h3><strong>${fmtFloat(lastVisits, 1)}</strong></header>
@@ -1590,6 +1592,10 @@ DASHBOARD_PAGE = """<!doctype html>
         <div class="spark-card">
           <header><h3>nnEval / s</h3><strong>${fmtFloat(lastNnEval, 1)}</strong></header>
           ${buildSparkline(nneval, '#c2410c')}
+        </div>
+        <div class="spark-card">
+          <header><h3>调度线程空闲</h3><strong>${fmtPercent(lastSchedulerIdle)}</strong></header>
+          ${buildSparkline(schedulerIdle, '#1d4ed8')}
         </div>
       `;
     }
@@ -2617,6 +2623,7 @@ class MonitorState:
             "nn_eval_per_s": window.get("nn_eval_per_s", 0.0),
             "nn_batches_per_s": window.get("nn_batches_per_s", 0.0),
             "avg_batch_size": window.get("avg_batch_size", 0.0),
+            "scheduler_idle_time_share": window.get("scheduler_idle_time_share", 0.0),
             "search_threads": totals.get("search_threads", 0),
         }
         with self._lock:

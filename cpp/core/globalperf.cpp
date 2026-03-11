@@ -37,6 +37,7 @@ namespace {
   static constexpr size_t INFERENCE_EVENT_RING_CAPACITY = 4096;
   static constexpr size_t QUEUE_LENGTH_RING_CAPACITY = 4096;
   static constexpr size_t TIMELINE_SPAN_RING_CAPACITY = 8192;
+  static constexpr size_t SCHEDULER_BUSY_RING_CAPACITY = 4096;
   static constexpr int64_t TIMELINE_WINDOW_NS = 50 * ONE_MILLISECOND_NS;
   static constexpr size_t TIMELINE_SNAPSHOT_MAX_SPANS = 1024;
 
@@ -161,6 +162,12 @@ namespace {
     int rowIdx = -1;
   };
 
+  struct SchedulerBusyRealtimeSample {
+    uint64_t sequence = 0;
+    int64_t startNs = 0;
+    int64_t endNs = 0;
+  };
+
   struct SearchRealtimeSlot {
     std::atomic<uint64_t> totalVisits;
     VersionedRingBuffer<SearchLoopRealtimeSample, SEARCH_LOOP_RING_CAPACITY> searchLoops;
@@ -197,6 +204,7 @@ namespace {
     vector<pair<int, shared_ptr<std::atomic<int>>>> gpuStreamCounts;
     VersionedRingBuffer<DeltaEventSample, QUEUE_LENGTH_RING_CAPACITY> queueLengthEvents;
     VersionedRingBuffer<TimelineSpanRealtimeSample, TIMELINE_SPAN_RING_CAPACITY> timelineSpans;
+    VersionedRingBuffer<SchedulerBusyRealtimeSample, SCHEDULER_BUSY_RING_CAPACITY> schedulerBusySpans;
 
     atomic<uint64_t> retiredSearchVisits;
     atomic<uint64_t> retiredInferenceRows;
@@ -234,6 +242,7 @@ namespace {
         gpuStreamCounts(),
         queueLengthEvents(),
         timelineSpans(),
+        schedulerBusySpans(),
         retiredSearchVisits(0),
         retiredInferenceRows(0),
         retiredInferenceBatches(0),
@@ -509,6 +518,7 @@ namespace {
     state.gpuStreamCounts.clear();
     resetRing(state.queueLengthEvents);
     resetRing(state.timelineSpans);
+    resetRing(state.schedulerBusySpans);
     state.retiredSearchVisits.store(0, std::memory_order_relaxed);
     state.retiredInferenceRows.store(0, std::memory_order_relaxed);
     state.retiredInferenceBatches.store(0, std::memory_order_relaxed);
@@ -696,6 +706,46 @@ namespace {
     return total;
   }
 
+  static int64_t computeCoveredDurationNs(
+    vector<SchedulerBusyRealtimeSample>& spans,
+    int64_t windowStartNs,
+    int64_t windowEndNs
+  ) {
+    if(spans.empty() || windowEndNs <= windowStartNs)
+      return 0;
+    sort(spans.begin(), spans.end(), [](const SchedulerBusyRealtimeSample& a, const SchedulerBusyRealtimeSample& b) {
+      if(a.startNs != b.startNs)
+        return a.startNs < b.startNs;
+      return a.endNs < b.endNs;
+    });
+    int64_t coveredNs = 0;
+    int64_t cursorStartNs = 0;
+    int64_t cursorEndNs = 0;
+    bool hasCursor = false;
+    for(const SchedulerBusyRealtimeSample& span: spans) {
+      int64_t clippedStartNs = std::max(windowStartNs, span.startNs);
+      int64_t clippedEndNs = std::min(windowEndNs, span.endNs);
+      if(clippedEndNs <= clippedStartNs)
+        continue;
+      if(!hasCursor) {
+        cursorStartNs = clippedStartNs;
+        cursorEndNs = clippedEndNs;
+        hasCursor = true;
+        continue;
+      }
+      if(clippedStartNs <= cursorEndNs) {
+        cursorEndNs = std::max(cursorEndNs, clippedEndNs);
+        continue;
+      }
+      coveredNs += cursorEndNs - cursorStartNs;
+      cursorStartNs = clippedStartNs;
+      cursorEndNs = clippedEndNs;
+    }
+    if(hasCursor)
+      coveredNs += cursorEndNs - cursorStartNs;
+    return coveredNs;
+  }
+
   static json buildRealtimeSnapshot() {
     RealtimeState& state = g_realtimeState;
     const int64_t nowNs = nowSteadyNs();
@@ -740,6 +790,7 @@ namespace {
     vector<vector<DeltaEventSample>> streamEventsByGpu;
     vector<vector<double>> gpuBatchTimeBySizeByGpu;
     vector<TimelineSpanRealtimeSample> timelineSpans;
+    vector<SchedulerBusyRealtimeSample> schedulerBusySpans;
 
     {
       lock_guard<mutex> lock(state.configMutex);
@@ -822,6 +873,11 @@ namespace {
           return;
         timelineSpans.push_back(sample);
       });
+      forEachRingSample(state.schedulerBusySpans, [&](const SchedulerBusyRealtimeSample& sample) {
+        if(sample.endNs < windowStartNs || sample.startNs > nowNs)
+          return;
+        schedulerBusySpans.push_back(sample);
+      });
     }
 
     queueTimeShareBuckets = computeTimeShareBuckets(
@@ -883,6 +939,11 @@ namespace {
     window1s["gpu_batch_time_share"] = bucketArrayJson(gpuBatchTimeBySize, true);
     window1s["gpu_batch_time_share_by_gpu"] = gpuBatchTimeShareByGpu;
     window1s["cuda_stream_active_time_share_by_gpu"] = gpuStreamTimeShareByGpu;
+    int64_t schedulerBusyNs = computeCoveredDurationNs(schedulerBusySpans, windowStartNs, nowNs);
+    double schedulerBusyShare = windowStartNs < nowNs ? (double)schedulerBusyNs / (double)(nowNs - windowStartNs) : 0.0;
+    schedulerBusyShare = std::max(0.0, std::min(1.0, schedulerBusyShare));
+    window1s["scheduler_busy_time_share"] = schedulerBusyShare;
+    window1s["scheduler_idle_time_share"] = 1.0 - schedulerBusyShare;
 
     json searchLoop;
     searchLoop["total_ms"] = percentileSummaryJson(searchLoopTotalMs);
@@ -1494,6 +1555,20 @@ void GlobalPerfProfile::recordRealtimeTimelineSpan(
     dependencySpanId1,
     batchUid,
     rowIdx
+  });
+}
+
+void GlobalPerfProfile::recordSchedulerBusySpan(int64_t startNs, int64_t endNs) {
+  if(!isRealtimeRunning())
+    return;
+  if(startNs <= 0)
+    startNs = nowSteadyNs();
+  if(endNs < startNs)
+    endNs = startNs;
+  writeRingSample(g_realtimeState.schedulerBusySpans, SchedulerBusyRealtimeSample{
+    0,
+    startNs,
+    endNs
   });
 }
 

@@ -2806,3 +2806,30 @@ reviewer 额外指出了一条中等严重度的问题：
 - timeline 是否重新出现逐 row H2D blocks
 - H2D / Infer / D2H 的长度和相对顺序是否重新与 CUDA event 观测一致
 - 如果恢复精度后再次出现明显性能影响，再单独把“采样数据写入预分配缓冲区，由汇总线程处理”的结构落地
+
+#### 2026-03-11: 新增调度线程空闲时间占比实时统计
+
+为后续继续压 `infer -> D2H -> postprocess` handoff gap，dashboard 侧新增一个更直接的 realtime 指标：
+
+- `scheduler_idle_time_share`
+
+定义方式：
+
+- 调度线程每次真正进入一段具体工作时，记录一段 `busy span`
+- `busy span` 使用 wall clock / steady clock 的 `startNs` 和 `endNs`
+- realtime publisher 在每秒快照时，把最近 1 秒窗口内所有 `busy span` 做裁窗并求并集长度
+- `scheduler_busy_time_share = busy_ns / 1s`
+- `scheduler_idle_time_share = 1 - scheduler_busy_time_share`
+
+当前接线范围：
+
+- `infer done -> handleInferCompletion`
+- `maybeLaunchOpenBatch`
+- `d2h done -> finalizeCompletedBatch`
+- 请求处理分支里的 preprocess / H2D enqueue / 可选 launch
+
+展示方式：
+
+- dashboard 左侧“近 60 秒趋势”增加第三张 sparkline 卡片
+- 标题为“调度线程空闲”
+- 显示当前 1 秒窗口的空闲占比，以及最近 60 秒历史
