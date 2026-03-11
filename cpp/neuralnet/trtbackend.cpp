@@ -2181,11 +2181,15 @@ struct InputBuffers {
   bool trtSharedResourcesInitialized;
   map<string, void*> trtDeviceBuffers;
   cudaEvent_t trtH2DDoneEvent;
+  cudaEvent_t trtInferDoneEvent;
   cudaEvent_t trtD2HDoneEvent;
   bool trtH2DPending;
+  bool trtInferPending;
   bool trtD2HPending;
   vector<cudaEvent_t> trtTimelineH2DStartEvents;
   vector<cudaEvent_t> trtTimelineH2DEndEvents;
+  cudaEvent_t trtTimelineInferStartEvent;
+  cudaEvent_t trtTimelineInferEndEvent;
   cudaEvent_t trtTimelineD2HStartEvent;
   cudaEvent_t trtTimelineD2HEndEvent;
 
@@ -2196,8 +2200,10 @@ struct InputBuffers {
     trtSharedResourcesInitialized = false;
     trtDeviceBuffers.clear();
     trtH2DDoneEvent = nullptr;
+    trtInferDoneEvent = nullptr;
     trtD2HDoneEvent = nullptr;
     trtH2DPending = false;
+    trtInferPending = false;
     trtD2HPending = false;
 
     if(nnXLen > NNPos::MAX_BOARD_LEN)
@@ -2286,6 +2292,8 @@ struct InputBuffers {
     ownershipResults = PinnedFloatBuffer(maxBatchSize * singleOwnershipResultElts);
     trtTimelineH2DStartEvents.assign(maxBatchSize, nullptr);
     trtTimelineH2DEndEvents.assign(maxBatchSize, nullptr);
+    trtTimelineInferStartEvent = nullptr;
+    trtTimelineInferEndEvent = nullptr;
     trtTimelineD2HStartEvent = nullptr;
     trtTimelineD2HEndEvent = nullptr;
   }
@@ -2306,6 +2314,11 @@ struct InputBuffers {
         cudaError_t status = cudaEventDestroy(trtD2HDoneEvent);
         (void)status;
         trtD2HDoneEvent = nullptr;
+      }
+      if(trtInferDoneEvent != nullptr) {
+        cudaError_t status = cudaEventDestroy(trtInferDoneEvent);
+        (void)status;
+        trtInferDoneEvent = nullptr;
       }
       if(trtH2DDoneEvent != nullptr) {
         cudaError_t status = cudaEventDestroy(trtH2DDoneEvent);
@@ -2328,6 +2341,16 @@ struct InputBuffers {
         cudaError_t status = cudaEventDestroy(trtTimelineD2HEndEvent);
         (void)status;
         trtTimelineD2HEndEvent = nullptr;
+      }
+      if(trtTimelineInferEndEvent != nullptr) {
+        cudaError_t status = cudaEventDestroy(trtTimelineInferEndEvent);
+        (void)status;
+        trtTimelineInferEndEvent = nullptr;
+      }
+      if(trtTimelineInferStartEvent != nullptr) {
+        cudaError_t status = cudaEventDestroy(trtTimelineInferStartEvent);
+        (void)status;
+        trtTimelineInferStartEvent = nullptr;
       }
       if(trtTimelineD2HStartEvent != nullptr) {
         cudaError_t status = cudaEventDestroy(trtTimelineD2HStartEvent);
@@ -2985,8 +3008,10 @@ void NeuralNet::trtInitializeSharedBuffer(
     buffers->trtDeviceBuffers.emplace(name, deviceBuffer);
   }
   CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreateWithFlags(&buffers->trtH2DDoneEvent, cudaEventDisableTiming));
+  CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreateWithFlags(&buffers->trtInferDoneEvent, cudaEventDisableTiming));
   CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreateWithFlags(&buffers->trtD2HDoneEvent, cudaEventDisableTiming));
   buffers->trtH2DPending = false;
+  buffers->trtInferPending = false;
   buffers->trtD2HPending = false;
 
   if(computeHandle->perfProfileEnabled) {
@@ -2994,6 +3019,8 @@ void NeuralNet::trtInitializeSharedBuffer(
       CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineH2DStartEvents[rowIdx]));
       CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineH2DEndEvents[rowIdx]));
     }
+    CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineInferStartEvent));
+    CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineInferEndEvent));
     CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineD2HStartEvent));
     CUDA_ERR("trtInitializeSharedBuffer", cudaEventCreate(&buffers->trtTimelineD2HEndEvent));
   }
@@ -3082,22 +3109,21 @@ void NeuralNet::trtLaunchInferenceAsync(
     throw StringError("trtLaunchInferenceAsync: shared buffer not registered with compute handle");
   setInputShapesForExec(computeHandle, state->exec.get(), batchSize);
   if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(computeHandle->timelineInferStartEvent, computeHandle->inferStream));
+    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtTimelineInferStartEvent, computeHandle->inferStream));
   computeHandle->maybeRecordLaunchInterval();
   enqueueWithOptionalCudaGraphForExec(computeHandle, state->exec.get(), state->batchGraphStates, batchSize);
   if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(computeHandle->timelineInferEndEvent, computeHandle->inferStream));
-  CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(computeHandle->inferDoneEvent, computeHandle->inferStream));
-  computeHandle->inferPending = true;
+    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtTimelineInferEndEvent, computeHandle->inferStream));
+  CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtInferDoneEvent, computeHandle->inferStream));
+  buffers->trtInferPending = true;
 }
 
-bool NeuralNet::trtQueryInferenceDone(ComputeHandle* computeHandle) {
-  computeHandle->setDevice("trtQueryInferenceDone");
-  if(!computeHandle->inferPending)
+bool NeuralNet::trtQueryInferenceDone(InputBuffers* buffers) {
+  if(!buffers->trtInferPending)
     return false;
-  bool done = queryCudaEvent("trtQueryInferenceDone", computeHandle->inferDoneEvent);
+  bool done = queryCudaEvent("trtQueryInferenceDone", buffers->trtInferDoneEvent);
   if(done)
-    computeHandle->inferPending = false;
+    buffers->trtInferPending = false;
   return done;
 }
 
@@ -3137,9 +3163,8 @@ double NeuralNet::trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int row
   );
 }
 
-double NeuralNet::trtGetLastInferenceElapsedMs(ComputeHandle* computeHandle) {
-  computeHandle->setDevice("trtGetLastInferenceElapsedMs");
-  return elapsedMsBetweenEvents("trtGetLastInferenceElapsedMs", computeHandle->timelineInferStartEvent, computeHandle->timelineInferEndEvent);
+double NeuralNet::trtGetLastInferenceElapsedMs(InputBuffers* buffers) {
+  return elapsedMsBetweenEvents("trtGetLastInferenceElapsedMs", buffers->trtTimelineInferStartEvent, buffers->trtTimelineInferEndEvent);
 }
 
 double NeuralNet::trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers) {

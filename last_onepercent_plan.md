@@ -2531,3 +2531,146 @@ legacy worker-thread 路径仍然保留旧面板。
   - buffer 仅在 postprocess 结束后复用
   - scheduler 热路径不依赖 `cudaStreamWaitEvent`
 - 以及哪些旧文档段落还没有完全重写，仍然和当前实现表述不一致。
+
+### 2026-03-11: 修正 v2 launch 语义，exact batch 不必等 target slot 空
+
+这条是今天从 raw timeline 数据里重新确认出来的设计修正。它覆盖当前实现里“必须等 `targetSlot` 变空才能 launch infer”的做法。
+
+#### 观察到的问题
+
+- 同一条 infer lane 上，相邻两次 infer 之间出现了稳定的 `~15-23 us` gap。
+- 读取 raw timeline 后，能看到：
+  - 下一批 exact batch 的最后一条 H2D 往往早在前一批 infer 结束前就已经完成
+  - 但下一次 `cudaGraphLaunch()` 仍然要等到 CPU 看见上一批 infer 完成之后才发
+- 这说明当前 gap 不是 `cudaStream` 自己的排队税，而是 scheduler 没有提前把下一批 infer 排到同一条 infer stream 上。
+
+#### 正确语义
+
+- 一旦 `open batch` 满足 launch 条件：
+  - 空卡：允许 partial
+  - 非空卡：必须 exact batch
+- 并且这批的 H2D 已经完成
+- 那么 **应当立刻把 `cudaGraphLaunch()` enqueue 到它绑定的 `targetSlot.inferStream` 上**
+- **不需要等待 `targetSlot` 当前那批 infer 先结束**
+- 同一条 CUDA stream 的顺序语义会保证：
+  - 先前 infer 先执行
+  - 后续 infer 自动接在后面
+
+也就是说：
+
+- 当前错误实现：
+  - `inferDone -> CPU bookkeeping -> launch next infer`
+- 目标实现：
+  - `batch exact + H2D done -> 立即 enqueue 到 target infer stream`
+  - `inferDone` 只用于之后 CPU 侧触发 D2H / postprocess
+
+#### 对实现的直接含义
+
+- `slot.inferBusy` 不能再作为 `maybeLaunchOpenBatch()` 的 launch gate。
+- slot 不再只允许“至多 1 个已 launch infer batch”。
+- 每个 slot 需要显式维护：
+  - 已经 enqueue 到这条 infer stream 上的 buffer 队列
+- 因为同一条 infer stream 上会连续排多个 batch，所以 infer 完成事件不能再是 slot 级：
+  - 必须改成 **buffer 级 inferDoneEvent**
+  - infer timing event 也必须改成 **buffer 级**
+- CPU 在轮询 infer 完成时，应当查看：
+  - 某个 slot 的 infer queue 头部 buffer 是否完成
+- 完成后：
+  - 为该 buffer 提交 D2H
+  - 再从这条 slot queue 头部弹出
+  - queue 后面的 infer 不需要 CPU 再次 launch，它早就已经排进 infer stream 里了
+
+#### 时间线建模也要同步修正
+
+- 相邻 infer span 之间应该允许出现：
+  - `dep0 = 本 batch 最后一个 H2D span`
+  - `dep1 = 同 slot 上一个 infer span`
+- 这样时间线才能正确表达：
+  - “同一 infer stream 的串行关系”
+  - 而不是把它误解为 CPU 晚发导致的空洞
+
+#### 2026-03-11 实现进展
+
+这节对应的代码修复已经完成，核心变化如下：
+
+- `slot.inferBusy` launch gate 已经删除。
+- `maybeLaunchOpenBatch()` 现在会在 `open batch` 满足 launch 条件且 H2D 完成后，立刻把 infer enqueue 到 `targetSlot.inferStream`。
+- 每个 slot 现在维护 `launchedBufferIndices`，表达“已经排进这条 infer stream 的 buffer FIFO”。
+- infer 完成查询已经改成 **buffer 级**：
+  - `trtQueryInferenceDone(InputBuffers*)`
+  - `trtGetLastInferenceElapsedMs(InputBuffers*)`
+- `InputBuffers` 现在拥有自己的：
+  - `trtInferDoneEvent`
+  - `trtTimelineInferStartEvent`
+  - `trtTimelineInferEndEvent`
+- scheduler 轮询逻辑现在是：
+  - 看每个 slot 的 infer FIFO 头部 buffer 是否完成
+  - 完成后提交该 buffer 的 D2H
+  - 再把它从 slot FIFO 头部弹出
+  - FIFO 后面的 infer 不需要 CPU 再次 launch
+
+#### 2026-03-11 验证结果
+
+- 干净 GPU 环境下，`./run.sh --benchmark` 结果：
+  - `visits/s = 6518.64`
+  - `nnEvals/s = 4296.19`
+  - `nnBatches/s = 615.04`
+  - `avgBatchSize = 6.99`
+- `window1s.cuda_stream_active_time_share_by_gpu` 显示：
+  - GPU0 的 `bucket=2` 占比为 `1.0`
+  - 说明当前稳定维持 2 条 infer stream 同时活跃
+- 读取一帧 `50ms` raw timeline 样本后：
+  - slot 0 上连续 infer 的 gap 为 `0.00 us`
+  - slot 1 上连续 infer 的 gap 为 `0.00 us`
+  - 说明 exact batch 已经成功提前排进同一条 infer stream
+  - 之前那种 `~15-23 us` 的 CPU handoff gap 已经消失
+
+#### 剩余注意事项
+
+- 这次修复只改变了 shared-buffer TRT scheduler 路径。
+- `trtbackend.cpp` 里旧的同步 `getOutput()` fallback 仍然保留 `cudaStreamWaitEvent(...)`，因为那条路径不属于当前 scheduler 热路径。
+- benchmark 的 `inference_preprocess_ms / inference_h2d_ms / inference_wait_gpu_ms / inference_d2h_ms / inference_postprocess_ms` 目前仍是 `n/a`。
+  - 这说明单调度 / shared-buffer 新模型下，`GlobalPerfProfile::recordInferencePhases(...)` 这组老阶段统计还没有重新接线。
+
+#### 2026-03-11: D2H -> postprocess 大 gap 的进一步分析
+
+修正 D2H 时间线起点之后，raw timeline 里仍然能看到：
+
+- `D2H -> postprocess` gap 大约 `0.72-0.89 ms`
+- 但 postprocess block 自己只有 `~1.6 us`
+
+当前更合理的解释是：
+
+- 这不是 postprocess 自己慢
+- 也不是 D2H span 被画早了
+- 而是 **D2H 已经完成之后，scheduler 线程要过 `~0.8 ms` 才重新拿到 CPU 并开始 finalize**
+
+支持这个判断的证据：
+
+- `kata-analyze 100` 下的 raw timeline 里，在 `D2H end -> postprocess start` 之间几乎没有别的可见 scheduler block
+- 机器配置是 `24` 个逻辑 CPU，而当前运行时有：
+  - `21` 个 search threads
+  - `1` 个 scheduler thread
+  - 以及 GTP / monitor / 其他辅助线程
+- 因此这段 gap 更像 **单 scheduler 在线程资源接近吃满时被 OS 调度推迟**
+
+这条现象需要单独记账，因为它直接关系到后续是否要做：
+
+- 给 scheduler thread 预留 CPU 资源
+- 降低 search threads
+- 提升 scheduler thread 优先级 / affinity
+- 或者把 postprocess 从 scheduler 主循环里拆出去
+
+#### 2026-03-11: reviewer 额外发现并已修复的时间线问题
+
+reviewer 额外指出了一条中等严重度的问题：
+
+- 同一 slot 上如果多个 `D2HPending` buffer 在 scheduler 下一次轮询前都已经完成
+- 原实现会按全局 `state->buffers` 顺序 finalize
+- 这会让同一条 D2H stream 的 span / dependency 链在时间线上偶发乱序
+
+当前修复是：
+
+- 每个 slot 额外维护自己的 `d2hPendingBufferIndices` FIFO
+- 只有 queue 头部 buffer 允许被 `trtQueryOutputCopiesDone(...)` 和 `finalizeCompletedBatch(...)` 处理
+- 因此 D2H / postprocess 的时间线顺序现在和同一 slot 的 D2H stream 提交顺序一致
