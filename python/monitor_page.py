@@ -15,7 +15,7 @@ from typing import Any, Deque, Dict, List, Optional
 from env_defaults import load_env_sh_defaults
 
 
-HTML_PAGE = """<!doctype html>
+DASHBOARD_PAGE = """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -57,7 +57,7 @@ HTML_PAGE = """<!doctype html>
       height: 100vh;
       padding: 10px;
       display: grid;
-      grid-template-rows: 72px 86px 220px minmax(0, 1fr);
+      grid-template-rows: 72px 86px minmax(0, 1fr);
       gap: 10px;
     }
     .topbar {
@@ -110,6 +110,29 @@ HTML_PAGE = """<!doctype html>
       max-width: 44rem;
       font-size: 12px;
       line-height: 1.35;
+    }
+    .brand-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: space-between;
+    }
+    .brand-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,118,110,0.18);
+      background: rgba(255,255,255,0.74);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .brand-link:hover {
+      background: rgba(255,255,255,0.92);
     }
     .status-grid {
       display: grid;
@@ -644,7 +667,7 @@ HTML_PAGE = """<!doctype html>
     }
     @media (max-width: 1500px) {
       .wrap {
-        grid-template-rows: 68px 78px 206px minmax(0, 1fr);
+        grid-template-rows: 68px 78px minmax(0, 1fr);
         gap: 8px;
         padding: 8px;
       }
@@ -663,8 +686,13 @@ HTML_PAGE = """<!doctype html>
     <section class="topbar">
       <div class="panel brand">
         <div class="eyebrow">KataGo GTP Realtime Monitor</div>
-        <h1 class="title">搜索资源监控</h1>
-        <p class="subtitle">固定一屏展示，1Hz 刷新；深度/队列是真实直方图，耗时指标按分位数重建为稳定横轴的 PDF 轮廓。</p>
+        <div class="brand-meta">
+          <div>
+            <h1 class="title">搜索资源监控</h1>
+            <p class="subtitle">固定一屏展示 1Hz 搜索与推理概览。详细调度线程 / CUDA Stream 时间线已拆到独立页面，避免主 dashboard 被压扁。</p>
+          </div>
+          <a class="brand-link" href="/timeline">打开时间线页面</a>
+        </div>
       </div>
       <div class="panel">
         <div id="status-grid" class="status-grid"></div>
@@ -672,24 +700,6 @@ HTML_PAGE = """<!doctype html>
     </section>
 
     <section id="metrics" class="metric-grid"></section>
-
-    <section class="panel timeline-shell">
-      <div class="timeline-top">
-        <div class="timeline-titlebox">
-          <h2>调度线程 / CUDA Stream 时间线</h2>
-          <p id="timeline-hint" class="hint">每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。</p>
-        </div>
-        <div class="timeline-controls">
-          <label>
-            观察 Slot
-            <select id="timeline-slot-select"></select>
-          </label>
-          <button id="timeline-latest-btn" type="button">回到最新</button>
-          <div id="timeline-summary" class="timeline-summary">等待数据</div>
-        </div>
-      </div>
-      <div id="timeline-view" class="timeline-view"></div>
-    </section>
 
     <section class="dashboard">
       <div class="panel tile-trend">
@@ -804,6 +814,7 @@ HTML_PAGE = """<!doctype html>
       latestRangeStartNs: 0,
     };
     let latestRealtimeState = null;
+    const hasTimelineDom = () => Boolean(document.getElementById('timeline-view'));
 
     function clamp(value, minValue, maxValue) {
       return Math.min(Math.max(value, minValue), maxValue);
@@ -916,9 +927,12 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('streams-panel-hint').textContent = single
         ? '过去 1 秒不同 active infer graph 数的时间占比，不含 H2D / D2H stream'
         : '过去 1 秒不同活跃 stream 数的时间占比';
-      document.getElementById('timeline-hint').textContent = single
-        ? '每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
-        : 'timeline 当前主要服务于 TRT single-scheduler 路径；其他后端暂未接线。';
+      const timelineHint = document.getElementById('timeline-hint');
+      if (timelineHint) {
+        timelineHint.textContent = single
+          ? '每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
+          : 'timeline 当前主要服务于 TRT single-scheduler 路径；其他后端暂未接线。';
+      }
     }
 
     function renderMetricCards(state) {
@@ -1362,6 +1376,7 @@ HTML_PAGE = """<!doctype html>
 
     function updateTimelineSlotSelect(slots) {
       const select = document.getElementById('timeline-slot-select');
+      if (!select) return;
       const renderedKeys = slots.map((slot) => timelineSlotKey(slot)).join('|');
       if (select.dataset.renderedKeys === renderedKeys) {
         if (timelineUiState.selectedSlotKey) select.value = timelineUiState.selectedSlotKey;
@@ -1376,6 +1391,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderTimeline(latest) {
+      if (!hasTimelineDom()) return;
       const view = document.getElementById('timeline-view');
       const summary = document.getElementById('timeline-summary');
       const timeline = latest?.timeline;
@@ -1644,20 +1660,703 @@ HTML_PAGE = """<!doctype html>
       }
     }
 
-    document.getElementById('timeline-slot-select').addEventListener('change', (event) => {
-      timelineUiState.selectedSlotKey = event.target.value || null;
+    const timelineSlotSelect = document.getElementById('timeline-slot-select');
+    const timelineLatestBtn = document.getElementById('timeline-latest-btn');
+    const timelineView = document.getElementById('timeline-view');
+
+    if (timelineSlotSelect) {
+      timelineSlotSelect.addEventListener('change', (event) => {
+        timelineUiState.selectedSlotKey = event.target.value || null;
+        timelineUiState.followLatest = true;
+        timelineUiState.centerNs = null;
+        renderTimeline(latestRealtimeState?.latest || null);
+      });
+    }
+
+    if (timelineLatestBtn) {
+      timelineLatestBtn.addEventListener('click', () => {
+        timelineUiState.followLatest = true;
+        timelineUiState.centerNs = null;
+        renderTimeline(latestRealtimeState?.latest || null);
+      });
+    }
+
+    if (timelineView) {
+      timelineView.addEventListener('mousedown', (event) => {
+        if (event.button !== 0 || timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
+        timelineUiState.drag = { startX: event.clientX, centerNs: timelineUiState.centerNs };
+        timelineUiState.followLatest = false;
+        event.currentTarget.classList.add('dragging');
+        event.preventDefault();
+      });
+    }
+
+    window.addEventListener('mousemove', (event) => {
+      if (!timelineUiState.drag || timelineUiState.chartWidthPx <= 1) return;
+      const deltaPx = event.clientX - timelineUiState.drag.startX;
+      const deltaNs = deltaPx / timelineUiState.chartWidthPx * timelineUiState.spanNs;
+      timelineUiState.centerNs = timelineUiState.drag.centerNs - deltaNs;
+      renderTimeline(latestRealtimeState?.latest || null);
+    });
+
+    window.addEventListener('mouseup', () => {
+      timelineUiState.drag = null;
+      if (timelineView) timelineView.classList.remove('dragging');
+    });
+
+    if (timelineView) {
+      timelineView.addEventListener('wheel', (event) => {
+        if (timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const localX = event.clientX - rect.left;
+        if (localX < timelineUiState.chartLeftPx) return;
+        event.preventDefault();
+        const focusRatio = clamp((localX - timelineUiState.chartLeftPx) / timelineUiState.chartWidthPx, 0, 1);
+        const focusNs = timelineUiState.viewStartNs + focusRatio * timelineUiState.spanNs;
+        const dataSpanNs = Math.max(timelineUiState.latestRangeEndNs - timelineUiState.latestRangeStartNs, 20e6);
+        const zoomFactor = event.deltaY > 0 ? 1.18 : 0.84;
+        const newSpanNs = clamp(timelineUiState.spanNs * zoomFactor, 5e6, dataSpanNs);
+        const newStartNs = focusNs - focusRatio * newSpanNs;
+        timelineUiState.spanNs = newSpanNs;
+        timelineUiState.centerNs = newStartNs + newSpanNs / 2;
+        timelineUiState.followLatest = false;
+        renderTimeline(latestRealtimeState?.latest || null);
+      }, { passive: false });
+    }
+
+    fetchState();
+    window.setInterval(fetchState, 1000);
+  </script>
+</body>
+</html>
+"""
+
+
+TIMELINE_PAGE = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KataGo Timeline</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: rgba(255,255,255,0.82);
+      --panel-strong: rgba(255,255,255,0.94);
+      --ink: #17202a;
+      --muted: #5d6670;
+      --line: rgba(23,32,42,0.12);
+      --accent: #0f766e;
+      --accent-2: #c2410c;
+      --accent-3: #1d4ed8;
+      --shadow: 0 14px 34px rgba(25, 32, 40, 0.08);
+      --radius: 18px;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; min-width: 0; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(15,118,110,0.18), transparent 38%),
+        radial-gradient(circle at top right, rgba(194,65,12,0.12), transparent 32%),
+        linear-gradient(180deg, #f8f4ec 0%, #f2ebe0 100%);
+    }
+    .timeline-app {
+      width: 100vw;
+      height: 100vh;
+      padding: 14px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 12px;
+    }
+    .panel {
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.02;
+    }
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 78rem;
+    }
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,118,110,0.18);
+      background: var(--panel-strong);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .statusbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+    .status-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .status-pill {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(23,32,42,0.08);
+      white-space: nowrap;
+    }
+    .status-pill.paused {
+      color: #9a3412;
+      border-color: rgba(194,65,12,0.18);
+      background: rgba(255,237,213,0.82);
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: end;
+      gap: 10px;
+      align-items: end;
+    }
+    .controls label {
+      display: grid;
+      gap: 5px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .controls select,
+    .controls button {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-height: 38px;
+    }
+    .controls button {
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .controls button.pause-active {
+      color: #9a3412;
+      border-color: rgba(194,65,12,0.18);
+      background: rgba(255,237,213,0.9);
+    }
+    .timeline-shell {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 12px;
+      min-height: 0;
+    }
+    .timeline-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .timeline-summary strong {
+      color: var(--ink);
+    }
+    .timeline-summary .hint {
+      font-family: var(--sans);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .timeline-view {
+      min-height: 0;
+      height: 100%;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,255,255,0.62)),
+        linear-gradient(90deg, rgba(15,118,110,0.04), rgba(29,78,216,0.04));
+      overflow: hidden;
+      position: relative;
+      cursor: grab;
+    }
+    .timeline-view.dragging {
+      cursor: grabbing;
+    }
+    .timeline-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      user-select: none;
+    }
+    .timeline-axis {
+      stroke: rgba(23,32,42,0.18);
+      stroke-width: 1;
+    }
+    .timeline-grid {
+      stroke: rgba(23,32,42,0.12);
+      stroke-width: 1;
+      stroke-dasharray: 3 4;
+    }
+    .timeline-lane-divider {
+      stroke: rgba(23,32,42,0.08);
+      stroke-width: 1;
+    }
+    .timeline-label {
+      fill: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .timeline-lane-label {
+      fill: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .timeline-block {
+      stroke: rgba(23,32,42,0.18);
+      stroke-width: 1;
+    }
+    .timeline-block-label {
+      fill: rgba(255,255,255,0.96);
+      font-size: 10px;
+      font-family: var(--mono);
+      pointer-events: none;
+    }
+    .timeline-arrow {
+      fill: none;
+      stroke: rgba(23,32,42,0.42);
+      stroke-width: 1.3;
+      stroke-linecap: round;
+    }
+    .timeline-legend {
+      position: absolute;
+      right: 14px;
+      top: 12px;
+      display: flex;
+      gap: 10px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(23,32,42,0.08);
+      font-size: 10px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .timeline-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .timeline-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .waiting {
+      padding: 8px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      border: 1px dashed rgba(23,32,42,0.18);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.52);
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="timeline-app">
+    <section class="panel topbar">
+      <div>
+        <div class="eyebrow">KataGo Realtime Timeline</div>
+        <h1>调度线程 / CUDA Stream 时间线</h1>
+        <p class="subtitle">独立页面只展示 sampled timeline。默认跟随最近窗口；可拖拽平移、滚轮水平缩放、切换 slot，并且支持暂停自动刷新后停在某个快照上慢慢看。</p>
+      </div>
+      <a class="nav-link" href="/">返回 Dashboard</a>
+    </section>
+
+    <section class="panel statusbar">
+      <div id="timeline-status-meta" class="status-meta">
+        <div class="status-pill">等待快照</div>
+      </div>
+      <div class="controls">
+        <button id="timeline-pause-btn" type="button">暂停刷新</button>
+        <button id="timeline-refresh-btn" type="button">手动刷新</button>
+        <button id="timeline-latest-btn" type="button">回到最新</button>
+      </div>
+    </section>
+
+    <section class="panel timeline-shell">
+      <div id="timeline-summary" class="timeline-summary">
+        <span><strong>等待数据</strong></span>
+      </div>
+      <div id="timeline-view" class="timeline-view"></div>
+    </section>
+  </div>
+
+  <script>
+    const fmtFloat = (v, digits = 2) => {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return 'N/A';
+      return Number(v).toFixed(digits);
+    };
+    const fmtInt = (v) => Number(v || 0).toLocaleString('en-US');
+    const fmtIso = (unixMs) => {
+      if (!unixMs) return '等待数据';
+      return new Date(unixMs).toLocaleString('zh-CN', { hour12: false });
+    };
+    const clamp = (value, minValue, maxValue) => Math.min(Math.max(value, minValue), maxValue);
+    const inferenceModeOf = (latest) => latest?.status?.inference_mode || 'legacy_worker_threads';
+    const isSingleSchedulerMode = (latest) => inferenceModeOf(latest) === 'single_scheduler_slots';
+    const timelineStageColors = {
+      preprocess: '#0f766e',
+      h2d: '#1d4ed8',
+      infer: '#c2410c',
+      d2h: '#16a34a',
+      postprocess: '#7c3aed',
+    };
+    const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
+    const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
+    const timelineUiState = {
+      spanNs: 50e6,
+      centerNs: null,
+      followLatest: true,
+      drag: null,
+      chartLeftPx: 0,
+      chartWidthPx: 1,
+      viewStartNs: 0,
+      latestRangeEndNs: 0,
+      latestRangeStartNs: 0,
+      paused: false,
+    };
+    let latestRealtimeState = null;
+
+    function timelineSlotKey(slot) {
+      return `${slot.gpu}:${slot.slot}`;
+    }
+
+    function timelineTickStepNs(spanNs) {
+      const candidates = [1e6, 2e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6];
+      for (const candidate of candidates) {
+        if (spanNs / candidate <= 9) return candidate;
+      }
+      return 1000e6;
+    }
+
+    function decodeTimelineSpan(rawSpan, slotInfoBySlot, rangeStartNs) {
+      if (!Array.isArray(rawSpan)) return rawSpan;
+      const slot = Number(rawSpan[1] ?? -1);
+      const slotInfo = slotInfoBySlot.get(slot) || { gpu: -1, slot };
+      return {
+        id: Number(rawSpan[0] ?? 0),
+        slot,
+        gpu: Number(slotInfo.gpu ?? -1),
+        lane: timelineLaneNames[Number(rawSpan[2] ?? -1)] || 'unknown',
+        stage: timelineStageNames[Number(rawSpan[3] ?? -1)] || 'unknown',
+        batch_uid: Number(rawSpan[4] ?? 0),
+        row: Number(rawSpan[5] ?? -1),
+        start_ns: rangeStartNs + Number(rawSpan[6] ?? 0),
+        end_ns: rangeStartNs + Number(rawSpan[7] ?? 0),
+        dep0: Number(rawSpan[8] ?? 0),
+        dep1: Number(rawSpan[9] ?? 0),
+      };
+    }
+
+    function timelineSpanLabel(span) {
+      if (span.stage === 'preprocess') return `prep r${span.row}`;
+      if (span.stage === 'h2d') return `h2d r${span.row}`;
+      if (span.stage === 'infer') return `infer b${span.batch_uid}`;
+      if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
+      if (span.stage === 'postprocess') return `post b${span.batch_uid}`;
+      return span.stage || 'event';
+    }
+
+    function timelineSpanTitle(span, selectedSlot) {
+      const slotText = `GPU ${span.gpu} / Slot ${span.slot}`;
+      const batchText = span.batch_uid ? `batch=${span.batch_uid}` : 'batch=n/a';
+      const rowText = span.row >= 0 ? `row=${span.row}` : 'row=-';
+      const laneText = span.lane || 'unknown';
+      const selectedText = selectedSlot && Number(span.slot) === Number(selectedSlot.slot) ? 'selected' : 'other-slot';
+      return `${slotText}\\n${laneText} / ${span.stage}\\n${batchText} ${rowText}\\n${selectedText}`;
+    }
+
+    function updateStatusBar(state) {
+      const latest = state?.latest || null;
+      const receiver = state?.receiver || {};
+      const pills = [];
+      pills.push(`<div class="status-pill ${timelineUiState.paused ? 'paused' : ''}">${timelineUiState.paused ? '自动刷新已暂停' : '自动刷新中'}</div>`);
+      pills.push(`<div class="status-pill">最新快照 ${fmtIso(latest?.timestamp_unix_ms)}</div>`);
+      pills.push(`<div class="status-pill">sequence ${fmtInt(latest?.sequence || 0)}</div>`);
+      pills.push(`<div class="status-pill">模式 ${latest ? inferenceModeOf(latest) : '等待数据'}</div>`);
+      pills.push(`<div class="status-pill">接收快照 ${fmtInt(receiver.received_count || 0)}</div>`);
+      document.getElementById('timeline-status-meta').innerHTML = pills.join('');
+      const pauseBtn = document.getElementById('timeline-pause-btn');
+      pauseBtn.textContent = timelineUiState.paused ? '恢复刷新' : '暂停刷新';
+      pauseBtn.classList.toggle('pause-active', timelineUiState.paused);
+    }
+
+    function renderTimeline(latest) {
+      const view = document.getElementById('timeline-view');
+      const summary = document.getElementById('timeline-summary');
+      const timeline = latest?.timeline;
+      if (!latest || !timeline || !Array.isArray(timeline.slots) || !Array.isArray(timeline.spans) || !isSingleSchedulerMode(latest)) {
+        view.innerHTML = '<div class="waiting">当前只对 TRT single-scheduler 路径提供 timeline；等待可视化样本。</div>';
+        summary.innerHTML = '<span><strong>等待数据</strong></span>';
+        return;
+      }
+
+      const slots = timeline.slots || [];
+      if (slots.length === 0) {
+        view.innerHTML = '<div class="waiting">当前没有可观察的 logical slot</div>';
+        summary.innerHTML = '<span><strong>暂无 slot</strong></span>';
+        return;
+      }
+
+      const orderedSlots = [...slots].sort((a, b) => Number(a.gpu) - Number(b.gpu) || Number(a.slot) - Number(b.slot));
+      const latestRangeStartNs = Number(timeline.range_start_ns || 0);
+      const latestRangeEndNs = Number(timeline.range_end_ns || 0);
+      const slotInfoBySlot = new Map(slots.map((slot) => [Number(slot.slot), slot]));
+      const decodedSpans = (timeline.spans || []).map((span) => decodeTimelineSpan(span, slotInfoBySlot, latestRangeStartNs));
+      const dataSpanNs = Math.max(latestRangeEndNs - latestRangeStartNs, 20e6);
+      timelineUiState.latestRangeStartNs = latestRangeStartNs;
+      timelineUiState.latestRangeEndNs = latestRangeEndNs;
+      timelineUiState.spanNs = clamp(timelineUiState.spanNs, 5e6, dataSpanNs);
+      if (timelineUiState.followLatest || timelineUiState.centerNs === null) {
+        timelineUiState.centerNs = latestRangeEndNs - timelineUiState.spanNs / 2;
+      }
+
+      const maxViewStartNs = Math.max(latestRangeStartNs, latestRangeEndNs - timelineUiState.spanNs);
+      const viewStartNs = clamp(timelineUiState.centerNs - timelineUiState.spanNs / 2, latestRangeStartNs, maxViewStartNs);
+      const viewEndNs = viewStartNs + timelineUiState.spanNs;
+      timelineUiState.viewStartNs = viewStartNs;
+      timelineUiState.centerNs = viewStartNs + timelineUiState.spanNs / 2;
+
+      const width = Math.max(view.clientWidth || 1480, 1480);
+      const height = Math.max(view.clientHeight || 720, 720);
+      const leftPad = 194;
+      const rightPad = 22;
+      const topPad = 28;
+      const bottomPad = 28;
+      const laneGap = 12;
+      const lanes = [{ id: 'scheduler', label: 'Scheduler Thread', slot: null, laneName: 'scheduler' }];
+      for (const slot of orderedSlots) {
+        lanes.push({ id: `slot-${slot.slot}-h2d`, label: `GPU ${slot.gpu} / Slot ${slot.slot} H2D`, slot: Number(slot.slot), laneName: 'h2d' });
+        lanes.push({ id: `slot-${slot.slot}-infer`, label: `GPU ${slot.gpu} / Slot ${slot.slot} Infer`, slot: Number(slot.slot), laneName: 'infer' });
+        lanes.push({ id: `slot-${slot.slot}-d2h`, label: `GPU ${slot.gpu} / Slot ${slot.slot} D2H`, slot: Number(slot.slot), laneName: 'd2h' });
+      }
+      const chartWidth = Math.max(width - leftPad - rightPad, 300);
+      const laneHeight = Math.max((height - topPad - bottomPad - laneGap * (lanes.length - 1)) / lanes.length, 34);
+      timelineUiState.chartLeftPx = leftPad;
+      timelineUiState.chartWidthPx = chartWidth;
+
+      const xForNs = (ns) => leftPad + (Number(ns || 0) - viewStartNs) / Math.max(timelineUiState.spanNs, 1) * chartWidth;
+      const stageSpans = decodedSpans.filter((span) => Number(span.end_ns || 0) >= viewStartNs && Number(span.start_ns || 0) <= viewEndNs);
+      const laneSpans = new Map();
+      laneSpans.set('scheduler', stageSpans.filter((span) => span.lane === 'scheduler'));
+      for (const lane of lanes) {
+        if (lane.laneName === 'scheduler') continue;
+        laneSpans.set(lane.id, stageSpans.filter((span) => Number(span.slot) === lane.slot && span.lane === lane.laneName));
+      }
+
+      const visibleRects = new Map();
+      const laneY = new Map();
+      lanes.forEach((lane, idx) => {
+        laneY.set(lane.id, topPad + idx * (laneHeight + laneGap));
+      });
+
+      const allBlockSvgs = [];
+      for (const lane of lanes) {
+        const spans = [...(laneSpans.get(lane.id) || [])].sort((a, b) => Number(a.start_ns || 0) - Number(b.start_ns || 0));
+        for (const span of spans) {
+          const laneTop = laneY.get(lane.id);
+          const rawStartX = xForNs(span.start_ns);
+          const rawEndX = xForNs(span.end_ns);
+          const x = Math.max(leftPad, Math.min(rawStartX, width - rightPad));
+          const endX = Math.max(x + 3, Math.min(Math.max(rawEndX, rawStartX + 3), width - rightPad));
+          const rectWidth = Math.max(endX - x, 3);
+          const color = timelineStageColors[span.stage] || '#64748b';
+          const opacity = lane.laneName === 'scheduler' ? 0.56 : 0.94;
+          const y = laneTop + 12;
+          const blockHeight = Math.max(laneHeight - 24, 24);
+          visibleRects.set(Number(span.id), {
+            x,
+            y,
+            w: rectWidth,
+            h: blockHeight,
+            cx: x + rectWidth / 2,
+            cy: y + blockHeight / 2,
+            span,
+          });
+          const label = rectWidth >= 58 ? timelineSpanLabel(span) : '';
+          const slotPrefix = lane.laneName === 'scheduler' ? `s${span.slot} ` : '';
+          allBlockSvgs.push(`
+            <g>
+              <rect class="timeline-block" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${rectWidth.toFixed(1)}" height="${blockHeight.toFixed(1)}" rx="6" fill="${color}" fill-opacity="${opacity}">
+                <title>${timelineSpanTitle(span, null)}</title>
+              </rect>
+              ${label ? `<text class="timeline-block-label" x="${(x + 8).toFixed(1)}" y="${(y + blockHeight / 2 + 4).toFixed(1)}">${slotPrefix}${label}</text>` : ''}
+            </g>
+          `);
+        }
+      }
+
+      const arrowSvgs = [];
+      for (const rect of visibleRects.values()) {
+        const span = rect.span;
+        const deps = [Number(span.dep0 || 0), Number(span.dep1 || 0)].filter((dep) => dep > 0);
+        for (const dep of deps) {
+          const from = visibleRects.get(dep);
+          if (!from) continue;
+          const startX = from.x + from.w;
+          const startY = from.cy;
+          const endX = rect.x;
+          const endY = rect.cy;
+          const midX = startX + Math.max((endX - startX) * 0.5, 14);
+          arrowSvgs.push(`<path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)"></path>`);
+        }
+      }
+
+      const tickStepNs = timelineTickStepNs(timelineUiState.spanNs);
+      const tickStartNs = Math.ceil(viewStartNs / tickStepNs) * tickStepNs;
+      const tickSvgs = [];
+      for (let tickNs = tickStartNs; tickNs <= viewEndNs + 1; tickNs += tickStepNs) {
+        const x = xForNs(tickNs);
+        if (x < leftPad || x > width - rightPad) continue;
+        const relMs = (tickNs - latestRangeEndNs) / 1e6;
+        tickSvgs.push(`
+          <line class="timeline-grid" x1="${x.toFixed(1)}" y1="${topPad - 10}" x2="${x.toFixed(1)}" y2="${(height - bottomPad + 6).toFixed(1)}"></line>
+          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle">${fmtFloat(relMs, 1)}ms</text>
+        `);
+      }
+
+      const laneLabelSvgs = lanes.map((lane) => {
+        const y = laneY.get(lane.id);
+        return `
+          <text class="timeline-lane-label" x="14" y="${(y + 24).toFixed(1)}">${lane.label}</text>
+          <line class="timeline-lane-divider" x1="0" y1="${(y + laneHeight + 2).toFixed(1)}" x2="${width}" y2="${(y + laneHeight + 2).toFixed(1)}"></line>
+        `;
+      }).join('');
+
+      const axisLine = `<line class="timeline-axis" x1="${leftPad}" y1="${(height - bottomPad + 1).toFixed(1)}" x2="${(width - rightPad).toFixed(1)}" y2="${(height - bottomPad + 1).toFixed(1)}"></line>`;
+      const relStartMs = (viewStartNs - latestRangeEndNs) / 1e6;
+      const relEndMs = (viewEndNs - latestRangeEndNs) / 1e6;
+      const droppedSpans = Number(timeline.dropped_spans || 0);
+      const droppedSuffix = droppedSpans > 0 ? ` | clipped ${fmtInt(droppedSpans)}` : '';
+      summary.innerHTML = `
+        <span><strong>${fmtInt(orderedSlots.length)} 个 slot 全部展开</strong></span>
+        <span>窗口 ${fmtFloat(timelineUiState.spanNs / 1e6, 1)} ms</span>
+        <span>相对最新 ${fmtFloat(relStartMs, 1)} .. ${fmtFloat(relEndMs, 1)} ms</span>
+        <span>样本范围 ${fmtFloat((latestRangeEndNs - latestRangeStartNs) / 1e6, 1)} ms</span>
+        <span>${timelineUiState.paused ? '已暂停自动刷新' : '自动跟随最新样本中'}</span>
+        <span>${droppedSuffix || '未截断 span'}</span>
+        <span class="hint">Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 仍是 enqueue proxy。</span>
+      `;
+
+      view.innerHTML = `
+        <svg class="timeline-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+          <defs>
+            <marker id="timeline-arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(23,32,42,0.42)"></path>
+            </marker>
+          </defs>
+          ${tickSvgs.join('')}
+          ${axisLine}
+          ${laneLabelSvgs}
+          ${arrowSvgs.join('')}
+          ${allBlockSvgs.join('')}
+        </svg>
+        <div class="timeline-legend">
+          <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>Post</span>
+        </div>
+      `;
+    }
+
+    async function fetchState(force = false) {
+      if (timelineUiState.paused && !force) {
+        updateStatusBar(latestRealtimeState);
+        return;
+      }
+      try {
+        const resp = await fetch('/api/state', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const state = await resp.json();
+        latestRealtimeState = state;
+        updateStatusBar(state);
+        renderTimeline(state?.latest || null);
+      } catch (err) {
+        updateStatusBar(latestRealtimeState);
+        document.getElementById('timeline-view').innerHTML = `<div class="waiting">页面请求失败: ${String(err)}</div>`;
+      }
+    }
+
+    const timelinePauseBtn = document.getElementById('timeline-pause-btn');
+    const timelineRefreshBtn = document.getElementById('timeline-refresh-btn');
+    const timelineLatestBtn = document.getElementById('timeline-latest-btn');
+    const timelineView = document.getElementById('timeline-view');
+
+    timelinePauseBtn.addEventListener('click', () => {
+      timelineUiState.paused = !timelineUiState.paused;
+      updateStatusBar(latestRealtimeState);
+    });
+
+    timelineRefreshBtn.addEventListener('click', () => {
+      fetchState(true);
+    });
+
+    timelineLatestBtn.addEventListener('click', () => {
       timelineUiState.followLatest = true;
       timelineUiState.centerNs = null;
       renderTimeline(latestRealtimeState?.latest || null);
     });
 
-    document.getElementById('timeline-latest-btn').addEventListener('click', () => {
-      timelineUiState.followLatest = true;
-      timelineUiState.centerNs = null;
-      renderTimeline(latestRealtimeState?.latest || null);
-    });
-
-    document.getElementById('timeline-view').addEventListener('mousedown', (event) => {
+    timelineView.addEventListener('mousedown', (event) => {
       if (event.button !== 0 || timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
       timelineUiState.drag = { startX: event.clientX, centerNs: timelineUiState.centerNs };
       timelineUiState.followLatest = false;
@@ -1675,10 +2374,10 @@ HTML_PAGE = """<!doctype html>
 
     window.addEventListener('mouseup', () => {
       timelineUiState.drag = null;
-      document.getElementById('timeline-view').classList.remove('dragging');
+      timelineView.classList.remove('dragging');
     });
 
-    document.getElementById('timeline-view').addEventListener('wheel', (event) => {
+    timelineView.addEventListener('wheel', (event) => {
       if (timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
       const rect = event.currentTarget.getBoundingClientRect();
       const localX = event.clientX - rect.left;
@@ -1696,8 +2395,9 @@ HTML_PAGE = """<!doctype html>
       renderTimeline(latestRealtimeState?.latest || null);
     }, { passive: false });
 
-    fetchState();
-    window.setInterval(fetchState, 1000);
+    updateStatusBar(null);
+    fetchState(true);
+    window.setInterval(() => fetchState(false), 1000);
   </script>
 </body>
 </html>
@@ -1777,7 +2477,16 @@ def make_handler(state: MonitorState):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path == "/":
-                body = HTML_PAGE.encode("utf-8")
+                body = DASHBOARD_PAGE.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if self.path == "/timeline":
+                body = TIMELINE_PAGE.encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
