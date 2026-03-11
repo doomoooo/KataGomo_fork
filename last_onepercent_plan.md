@@ -2280,3 +2280,121 @@ legacy worker-thread 路径仍然保留旧面板。
 
 - dashboard 看卡级 infer 并发有没有喂满
 - timeline 看调度线程和三条 CUDA stream 的相对顺序与依赖细节
+
+### 2026-03-11: 调度模型改版 v2，放弃跨 stream event 依赖，改成 shared-buffer + CPU 热轮询推进
+
+这节记录最新确认的设计变更。它会覆盖本文前面所有基于：
+
+- `s+1` 个 slot
+- `markerSlot`
+- `lastH2DEvent`
+- `cudaStreamWaitEvent(infer, h2dDone)`
+- `cudaStreamWaitEvent(infer, markerGraphDone)`
+- `cudaStreamWaitEvent(d2h, inferDone)`
+
+的 overlap 方案。
+
+触发原因：
+
+- 重新观察实际 trace 后，当前判断是：**跨 `cudaStream` 做 event 同步本身太贵**。
+- 因此接下来的方案不再试图用 “多个 stream + waitEvent handoff” 去拼出 GPU 侧自动接力。
+- 阶段推进重新交回单个 scheduler thread，通过 `cudaEventQuery()` 热轮询来做。
+
+最新核心模型：
+
+- 每张卡不再有 `s+1` 个 slot，而是只有 `s` 个 slot。
+- 每个 slot 仍然保留：
+  - 1 条 H2D stream
+  - 1 条 infer stream
+  - 1 条 D2H stream
+  - 1 个 execution context
+- 但每张卡额外维护 **`s+1` 个共享 buffer**。
+- buffer 不再和 slot / stream 强绑定。
+- 每个 buffer 持有：
+  - host pinned input/output buffer
+  - device input/output buffer
+  - `h2dDoneEvent`
+  - `d2hDoneEvent`
+  - `postDone`
+- 全局仍然只有一个 `open batch`。
+- `open batch` 在创建时立即绑定：
+  - `targetDevice`
+  - `targetSlot`
+  - `bufferIdx`
+- 这个绑定在 launch 前不再迁移，行为上与目前的 slot 绑定保持一致。
+
+明确删掉的旧设计点：
+
+- 不再有 `n+1` 个流的 round robin。
+- 不再有 `markerSlot`。
+- 不再有“future launch 在 GPU 侧 wait 另一个 slot 的 inferDoneEvent”。
+- 不再有“infer stream wait H2D stream event”。
+- 不再有“D2H stream wait infer stream event”。
+- `targetSlot` 选择仍然使用 ETA，但 ETA 只用于：
+  - 选空卡
+  - 或在非空卡中选“预计最早完成”的 slot
+- ETA 不再承担“构造 marker 依赖链”的职责。
+
+新的阶段推进语义：
+
+1. scheduler 选择 `targetDevice + targetSlot + bufferIdx`
+2. CPU 先检查该 buffer 的上一次后处理已完成：
+   - `postDone == true`
+3. 立即把该 buffer 标记为：
+   - `postDone = false`
+4. 预处理写入这个 buffer 的 host input
+5. 在 `targetSlot.h2dStream` 上发请求级 H2D
+6. scheduler 热轮询该 buffer 的 `h2dDoneEvent`
+7. 若满足发射条件：
+   - 空卡，允许 partial batch
+   - 非空卡，只允许 exact batch
+   - 且 `targetSlot` 的 infer 已空出
+8. 则 scheduler 在 `targetSlot.inferStream` 上发 infer
+9. scheduler 热轮询 `targetSlot.inferDoneEvent`
+10. infer 一完成，就由 scheduler 在 `targetSlot.d2hStream` 上发 D2H
+11. scheduler 热轮询该 buffer 的 `d2hDoneEvent`
+12. D2H 完成后做 postprocess，并将该 buffer 重新标记为可复用
+
+这里要特别注意：
+
+- “slot 什么时候可继续接下一次 infer”和“buffer 什么时候可复用”现在是两件不同的事。
+- slot 在 infer 完成、D2H 已经排出之后就可以重新进入下一轮 infer 调度。
+- buffer 只有在 postprocess 完成之后才可复用。
+- 这正是 `s` 个 slot 共享 `s+1` 个 buffer 的意义：
+  - infer 尽量持续喂满
+  - postprocess 慢一点时，不必把 infer slot 也一起卡死
+
+对代码和文档的直接含义：
+
+- [cpp/neuralnet/nneval.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp) 里当前 `SchedulerState` 的这些字段后续都应删除或改写：
+  - `markerSlotIdx`
+  - `pendingH2DSpans` 里“等待 infer 完成后再回填并串接 marker 依赖”的假设
+  - 所有“queued launch 等 marker 完成后自动转 running infer”的逻辑
+- [cpp/neuralnet/trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp) 里当前这些 helper 的语义后续都要改：
+  - `trtLaunchInferenceAsync(..., dependencyHandle)`
+  - `trtEnqueueOutputCopiesAsync()` 内部对 `inferDoneEvent` 的 `cudaStreamWaitEvent`
+  - 任何以“跨 stream wait event”表达阶段顺序的实现
+- [cpp/neuralnet/nninterface.h](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nninterface.h) 里的 TRT slot helper 后续要向：
+  - slot-owned stream/context
+  - buffer-owned input/output storage
+  - CPU 显式推进阶段
+ 这套模型收口。
+
+旧章节状态说明：
+
+- 本文前面的这些章节现在都应视为 **历史方案**，不是后续实现目标：
+  - `单调度线程 + global open batch 工作流草案 v0`
+  - `ETA / work accounting 模型 v0`
+  - `映射到当前代码的最小改造顺序`
+  - `状态机草案 v0`
+  - `调度主循环伪代码 v0`
+  - `修正 single-scheduler 的 marker handoff 计数/状态 bug`
+- 这些内容暂时保留，只作为“为什么会演化到当前版本”的背景记录。
+- 后续真正实现时，应以本节定义的 v2 shared-buffer 模型为准重写对应段落，而不是继续在旧 `markerSlot` 方案上打补丁。
+
+当前开发状态：
+
+- 代码当前仍然主要站在旧 `markerSlot / waitEvent` 设计上。
+- 本节只是先把新的方向正式写进文档，防止后续实现仍沿着旧语义前进。
+- 下一步文档工作应是：
+  - 把状态机、主循环伪代码、TRT helper 接口，全部改写成 v2 shared-buffer 版本。
