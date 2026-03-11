@@ -2032,3 +2032,58 @@ legacy worker-thread 路径仍然保留旧面板。
   - 通过
 - `run.sh --gtp` + `kata-analyze 100` + Playwright screenshot
   - 已完成，页面和 `/api/state` 均正常更新
+
+### 2026-03-11: 修正 single-scheduler 的 marker handoff 计数/状态 bug
+
+这次又回头对照了本文前面的 scheduler 设计，发现真正的 bug 不是“缺一个并发阈值”，而是当前实现把文档里的 `markerSlot` handoff 语义压扁错了。
+
+错误点：
+
+- `SlotState` 之前拆成了：
+  - `QueuedInfer`
+  - `RunningInfer`
+- 且 `handleInferCompletion()` 在一个 marker 完成后，只会把 **1 个** 依赖它的 queued slot 提升成 `RunningInfer`。
+- 但按本文设计，只要多个 future launch 都在各自 infer stream 上 wait 同一个 `markerSlot.graphDoneEvent`，那么 marker 完成时，它们都应当同时获得启动资格。
+- 尤其在单卡冷启动阶段，这决定了能不能从：
+  - `1 running + 2 queued-behind-same-marker`
+  正确爬升到：
+  - `2 running`
+
+修正后的实现：
+
+- `SlotStage` 改回更接近文档的：
+  - `Idle`
+  - `Filling`
+  - `LaunchQueued`
+  - `D2HPending`
+- `LaunchQueued` 里再用 `inferStarted` 区分：
+  - graph 已排队但还在等 marker
+  - graph 已真正开始 running
+- `OpenBatchState` 也显式保留：
+  - `targetSlotIdx`
+  - `targetGpuIdx`
+  - `markerSlotIdx`
+- work accounting 和 marker 选择现在都只看：
+  - `stage == LaunchQueued && inferStarted == true`
+- 一个 marker 完成后，会把 **所有** `markerSlotIdx == marker` 且 `inferStarted == false` 的 queued launch 一起转成 active infer，并一起增加 `activeInferCount`。
+
+这次修正后的直接结果：
+
+- `activeInferCount` 重新表示“当前真正 running 的 infer graph 数”，不再被错误压成单链。
+- realtime monitor 里的 `cuda_stream_active_time_share_by_gpu` 也重新有了可读性。
+
+本轮实时复测：
+
+- 重新启动：
+  - `python3 python/monitor_page.py --host 0.0.0.0 --port 8765`
+  - `./run.sh --gtp --katago-bin ./cpp/build/katago`
+  - GTP stdin:
+    - `boardsize 19`
+    - `clear_board`
+    - `kata-analyze 100`
+- 直接抓 `/api/state` 的 `latest.window1s.cuda_stream_active_time_share_by_gpu`：
+  - GPU0:
+    - `bucket=1 -> 3.9753e-05`
+    - `bucket=2 -> 0.999960247`
+
+这说明当前单卡 `TRT_CUDA_STREAMS=2` 的 steady-state 已经重新回到“绝大多数时间 2 条 infer stream 同时在跑”的目标行为。
