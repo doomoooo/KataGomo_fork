@@ -1656,3 +1656,187 @@ smoke 观察到的关键现象：
 - “让搜索线程自己接手 pre/post” 的宽边界方案
 - 更精细的 perf 分阶段计时
 - 对 queued infer 的 ETA 仍是近似模型，不是精确重建 GPU 内部调度
+
+### 2026-03-11: `globalPerfProfile` / `monitor_page.py` 语义清算
+
+这次 single-scheduler + logical-slot 改造之后，`globalPerfProfile` 里有几类指标已经不再符合原来的名字或前端文案。
+
+#### 1. 已经失效最严重的：`inference_thread_*`
+
+当前生产端：
+
+- scheduler 在 open batch 绑定到 slot 时调用
+  - [nneval.cpp:606](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L606)
+  - [nneval.cpp:638](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L638)
+- batch 全部完成并释放 slot 时调用
+  - [nneval.cpp:930](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L930)
+
+聚合端仍然把它叫：
+
+- `currentInferenceThreadActiveCount`
+  - [globalperf.cpp:661](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L661)
+- `inference_thread_active_time_share`
+  - [globalperf.cpp:823](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L823)
+- benchmark 文本里也叫 `inference_thread_time_share`
+  - [globalperf.cpp:1406](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L1406)
+
+前端也还在写：
+
+- “活跃推理线程数”
+  - [monitor_page.py:545](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L545)
+  - [monitor_page.py:1001](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L1001)
+
+但现在真实语义已经是：
+
+- “过去 1 秒内处于非 idle 状态的 logical slot 数时间占比”
+
+因此：
+
+- 名字里的 `thread` 已经过时
+- 它不再表示真实 OS thread 数
+- 也不等于“正在 GPU 上跑 infer 的并发数”
+  - 因为 slot 从 `Filling` 到 `D2HPending` 整段都会计活跃
+
+建议改名方向：
+
+- C++ 内部字段：`inference_slot_active_*`
+- 前端标题：`活跃推理 slot 数`
+
+#### 2. 前端“推理阶段耗时”文案已经过头，scheduler 路径下只有 `infer_ms` 还接近有意义
+
+realtime 聚合端仍然按 batch 样本收：
+
+- `wait_task_submit_ms / preprocess_ms / h2d_ms / infer_ms / d2h_ms / postprocess_ms`
+  - [globalperf.cpp:735](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L735)
+  - [globalperf.cpp:835](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L835)
+
+但 scheduler 路径下实际写入是：
+
+- `wait_task_submit_ms = 0`
+- `preprocess_ms = 0`
+- `h2d_ms = 0`
+- `infer_ms = completedInferMs`
+- `d2h_ms = 0`
+- `postprocess_ms = 0`
+  - [nneval.cpp:901](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L901)
+
+前端当前文案却写成：
+
+- “等待提交 / 预处理 / H2D / 推理 / D2H / 后处理，全部按分位数重建为 PDF 轮廓”
+  - [monitor_page.py:540](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L540)
+  - [monitor_page.py:1114](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L1114)
+
+这在 scheduler 路径下已经不成立：
+
+- 除 `infer_ms` 外，其余 5 个 phase 目前只是占位零值
+- `infer_ms` 也只是 ETA / equivalent work 近似，不是严格的 GPU event 实测
+
+结论：
+
+- 这个面板对 scheduler 路径已经属于“spec 失效”
+- 如果不立刻补真实 phase timing，前端至少要标注：
+  - “当前 TRT overlapping 路径下仅 `推理` 为近似值，其余 phase 暂未采样”
+
+#### 3. “每 GPU 的 cudaStream 活跃数”这个标题现在也过度承诺
+
+当前聚合端的 `cuda_stream_active_time_share_by_gpu` 来源于：
+
+- `changeGpuStreamActiveCount(...)`
+  - [globalperf.cpp:1333](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L1333)
+
+scheduler 路径下只在 infer graph 真正 running 时加减：
+
+- launch 进入 `RunningInfer`
+  - [nneval.cpp:697](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L697)
+- infer 完成离开 `RunningInfer`
+  - [nneval.cpp:867](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L867)
+- 依赖 slot 转入 `RunningInfer`
+  - [nneval.cpp:886](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L886)
+
+但每个 logical slot 实际上显式拥有：
+
+- `h2dStream`
+- `inferStream`
+- `d2hStream`
+  - [trtbackend.cpp:1201](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L1201)
+
+因此当前这个指标真实表示的是：
+
+- “每 GPU 上 active infer stream 数”
+
+而不是：
+
+- “每 GPU 上所有 cuda stream 的活跃数”
+
+前端标题和提示现在写的是：
+
+- “每 GPU 的 cudaStream 活跃数”
+  - [monitor_page.py:555](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L555)
+- “过去 1 秒不同活跃 stream 数的时间占比”
+  - [monitor_page.py:556](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L556)
+
+这在 overlap 改造后已经偏误更大，因为：
+
+- H2D / D2H stream 故意被拆出来了
+- 但图上完全没算进去
+
+更准确的标题应改成：
+
+- `每 GPU 的 infer stream 并发数`
+
+#### 4. “GPU Batch 分布”仍可用，但现在更像 ETA 加权的近似分布，不是严格 measured GPU time share
+
+当前聚合方式是按 `sample.inferMs` 给 batchSize 加权：
+
+- [globalperf.cpp:741](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L741)
+- [globalperf.cpp:824](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L824)
+
+而 scheduler 路径下写入的 `inferMs` 是：
+
+- `accumulatedEquivalentWorkMs` 或回退到 `plannedWorkMs`
+  - [nneval.cpp:894](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L894)
+
+所以这张图现在的真实语义更接近：
+
+- “按 ETA / equivalent work 加权的 batchSize 占比”
+
+前端标题只写：
+
+- “GPU Batch 分布”
+  - [monitor_page.py:550](/home/wangyize/.katago/KataGomo_fork/python/monitor_page.py#L550)
+
+这不算完全错误，但已经不再是“严格 measured GPU 时间占比”。
+
+#### 5. 仍然基本成立的项
+
+下面这些目前仍然可以认为语义基本成立：
+
+- `totals.nn_eval / nn_batches / avg_batch_size`
+  - batch 完成时仍然逐 batch 正确累加
+  - [globalperf.cpp:808](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L808)
+- `window1s.nn_eval_per_s / nn_batches_per_s / avg_batch_size`
+  - [globalperf.cpp:817](/home/wangyize/.katago/KataGomo_fork/cpp/core/globalperf.cpp#L817)
+- 搜索侧：
+  - `search_threads`
+  - `search_loop`
+  - `search_depth_histogram`
+  - `queue_length_time_share`
+  它们主要来自 search 线程本身，没有被 single-scheduler 改坏
+
+#### 6. 实际修正优先级建议
+
+第一优先级：
+
+- 把 `thread` 全部改名成 `slot`
+- 前端面板标题同步改
+
+第二优先级：
+
+- 给前端 “推理阶段耗时” 面板加醒目的 backend note
+- 或在 scheduler 路径下直接隐藏那 5 个零值 phase
+
+第三优先级：
+
+- 决定 `cuda_stream_active_time_share_by_gpu` 究竟要：
+  - 继续表示 infer stream 并发
+  - 还是补齐 H2D / D2H 之后，真的表示所有 stream 活跃数
