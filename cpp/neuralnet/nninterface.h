@@ -43,6 +43,7 @@ enum class TrtTilingOptimizationLevel {
 // TensorRT-specific knobs threaded through generic NN interfaces.
 struct TRTConfigs {
   bool trtUseCudaGraph = false;
+  bool trtUseBF16 = false;
   CudaSyncMode trtCudaSyncMode = CudaSyncMode::Blocking;
   int trtBuilderOptimizationLevel = -1;
   int trtMaxAuxStreams = -1;

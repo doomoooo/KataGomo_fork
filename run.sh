@@ -12,6 +12,7 @@ DEFAULT_TRT_CUDA_STREAMS=2
 DEFAULT_TRT_DEVICE_ID=0
 DEFAULT_TRT_USE_CUDA_GRAPH=true
 DEFAULT_TRT_CUDA_SYNC_MODE=blocking
+DEFAULT_TRT_USE_BF16=false
 DEFAULT_TRT_BUILDER_OPTIMIZATION_LEVEL=-1
 DEFAULT_TRT_MAX_AUX_STREAMS=-1
 DEFAULT_TRT_AVG_TIMING_ITERATIONS=-1
@@ -36,6 +37,7 @@ NUM_SEARCH_THREADS="${DEFAULT_NUM_SEARCH_THREADS}"
 TRT_CUDA_STREAMS="${DEFAULT_TRT_CUDA_STREAMS}"
 BENCH_VISITS="${DEFAULT_BENCH_VISITS}"
 TRT_USE_CUDA_GRAPH="${DEFAULT_TRT_USE_CUDA_GRAPH}"
+TRT_USE_BF16="${DEFAULT_TRT_USE_BF16}"
 TRT_CUDA_SYNC_MODE="${DEFAULT_TRT_CUDA_SYNC_MODE}"
 TRT_BUILDER_OPTIMIZATION_LEVEL="${DEFAULT_TRT_BUILDER_OPTIMIZATION_LEVEL}"
 TRT_MAX_AUX_STREAMS="${DEFAULT_TRT_MAX_AUX_STREAMS}"
@@ -65,6 +67,8 @@ Options:
   --trt-device-id VAL          Device id list, e.g. "0" or "0,1" (default: ${TRT_DEVICE_ID_RAW})
   --trt-use-cuda-graph         Set trtUseCudaGraph=true
   --no-trt-use-cuda-graph      Set trtUseCudaGraph=false
+  --trt-use-bf16               Set trtUseBF16=true
+  --no-trt-use-bf16            Set trtUseBF16=false
   --trt-cuda-sync-mode MODE    Set trtCudaSyncMode=spin|blocking|yield|auto
   --trt-builder-optimization-level N
                                Set trtBuilderOptimizationLevel=-1..5
@@ -144,6 +148,14 @@ parse_args() {
         ;;
       --no-trt-use-cuda-graph)
         TRT_USE_CUDA_GRAPH=false
+        shift
+        ;;
+      --trt-use-bf16)
+        TRT_USE_BF16=true
+        shift
+        ;;
+      --no-trt-use-bf16)
+        TRT_USE_BF16=false
         shift
         ;;
       --trt-cuda-sync-mode)
@@ -238,6 +250,11 @@ if [[ "${TRT_USE_CUDA_GRAPH}" != "true" && "${TRT_USE_CUDA_GRAPH}" != "false" ]]
   exit 1
 fi
 
+if [[ "${TRT_USE_BF16}" != "true" && "${TRT_USE_BF16}" != "false" ]]; then
+  echo "TRT_USE_BF16 must be true/false, got: ${TRT_USE_BF16}" >&2
+  exit 1
+fi
+
 case "${TRT_CUDA_SYNC_MODE}" in
   spin|blocking|yield|auto)
     ;;
@@ -281,6 +298,7 @@ done
 
 OVERRIDE_CONFIG+=",numSearchThreads=${NUM_SEARCH_THREADS}"
 OVERRIDE_CONFIG+=",trtUseCudaGraph=${TRT_USE_CUDA_GRAPH}"
+OVERRIDE_CONFIG+=",trtUseBF16=${TRT_USE_BF16}"
 OVERRIDE_CONFIG+=",trtCudaSyncMode=${TRT_CUDA_SYNC_MODE}"
 OVERRIDE_CONFIG+=",trtBuilderOptimizationLevel=${TRT_BUILDER_OPTIMIZATION_LEVEL}"
 OVERRIDE_CONFIG+=",trtMaxAuxStreams=${TRT_MAX_AUX_STREAMS}"

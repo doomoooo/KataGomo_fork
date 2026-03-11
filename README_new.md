@@ -57,6 +57,17 @@ Run GTP mode:
 ./run.sh
 ```
 
+### Precision selection
+
+TensorRT now supports an explicit BF16 precision toggle in addition to the existing FP16 path.
+
+- Config file override: `trtUseBF16=true`
+- Helper script flag: `./run.sh --trt-use-bf16`
+- Do not enable `trtUseBF16=true` together with `useFP16=true`
+
+This is useful for ONNX models that are unstable in FP16 but run correctly in BF16. For example, on this machine
+`b24tf.onnx` reproduces non-finite outputs in FP16 and runs successfully in BF16.
+
 You can inspect all optional runtime overrides with:
 
 ```bash

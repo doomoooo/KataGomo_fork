@@ -317,6 +317,15 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       useNHWCMode = cfg.getEnabled("useNHWC");
 
     TRTConfigs trtConfigs;
+    if(cfg.contains(backendPrefix+"UseBF16-"+idxStr))
+      trtConfigs.trtUseBF16 = cfg.getBool(backendPrefix+"UseBF16-"+idxStr);
+    else if(cfg.contains("trtUseBF16-"+idxStr))
+      trtConfigs.trtUseBF16 = cfg.getBool("trtUseBF16-"+idxStr);
+    else if(cfg.contains(backendPrefix+"UseBF16"))
+      trtConfigs.trtUseBF16 = cfg.getBool(backendPrefix+"UseBF16");
+    else if(cfg.contains("trtUseBF16"))
+      trtConfigs.trtUseBF16 = cfg.getBool("trtUseBF16");
+
     if(cfg.contains(backendPrefix+"UseCudaGraph-"+idxStr))
       trtConfigs.trtUseCudaGraph = cfg.getBool(backendPrefix+"UseCudaGraph-"+idxStr);
     else if(cfg.contains("trtUseCudaGraph-"+idxStr))
@@ -383,6 +392,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       "After dedups: nnModelFile" + idxStr + " = " + nnModelFile
       + " useFP16 " + useFP16Mode.toString()
       + " useNHWC " + useNHWCMode.toString()
+      + " trtUseBF16 " + Global::boolToString(trtConfigs.trtUseBF16)
       + " trtUseCudaGraph " + Global::boolToString(trtConfigs.trtUseCudaGraph)
       + " trtBuilderOptimizationLevel " + trtOptionalIntSettingToString(trtConfigs.trtBuilderOptimizationLevel)
       + " trtMaxAuxStreams " + trtOptionalIntSettingToString(trtConfigs.trtMaxAuxStreams)

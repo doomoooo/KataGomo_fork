@@ -61,6 +61,20 @@ namespace {
     ASSERT_UNREACHABLE;
   }
 
+  static bool cudaDeviceSupportsBF16(const cudaDeviceProp* prop) {
+    return prop->major >= 8;
+  }
+
+  static string trtPrecisionModeToString(bool usingFP16, bool usingBF16) {
+    if(usingBF16) {
+      assert(!usingFP16);
+      return "bf16";
+    }
+    if(usingFP16)
+      return "fp16";
+    return "fp32";
+  }
+
   struct LaunchIntervalGpuState {
     std::mutex mutex;
     bool hasLastLaunchNanos = false;
@@ -107,6 +121,7 @@ struct ComputeContext {
   int nnXLen;
   int nnYLen;
   enabled_t useFP16Mode;
+  bool trtUseBF16;
   bool trtUseCudaGraph;
   CudaSyncMode trtCudaSyncMode;
   int trtBuilderOptimizationLevel;
@@ -178,6 +193,7 @@ ComputeContext* NeuralNet::createComputeContext(
   context->nnXLen = nnXLen;
   context->nnYLen = nnYLen;
   context->useFP16Mode = useFP16Mode;
+  context->trtUseBF16 = trtConfigs.trtUseBF16;
   context->trtUseCudaGraph = trtConfigs.trtUseCudaGraph;
   context->trtCudaSyncMode = trtConfigs.trtCudaSyncMode;
   context->trtBuilderOptimizationLevel = trtConfigs.trtBuilderOptimizationLevel;
@@ -1180,6 +1196,7 @@ struct ComputeHandle {
   std::shared_ptr<LaunchIntervalGpuState> launchIntervalGpuState;
 
   bool usingFP16;
+  bool usingBF16;
   int maxBatchSize;
   int modelVersion;
   vector<pair<string, string>> debugOutputs;
@@ -1252,7 +1269,18 @@ struct ComputeHandle {
     }
 
     usingFP16 = false;
-    if(builder->platformHasFastFp16()) {
+    usingBF16 = false;
+    if(ctx->trtUseBF16) {
+      if(ctx->useFP16Mode == enabled_t::True) {
+        throw StringError("TensorRT backend: useFP16=true and trtUseBF16=true cannot both be enabled");
+      }
+      if(!cudaDeviceSupportsBF16(prop)) {
+        throw StringError("CUDA device does not support trtUseBF16=true");
+      }
+      config->setFlag(BuilderFlag::kBF16);
+      usingBF16 = true;
+    }
+    else if(builder->platformHasFastFp16()) {
       if(ctx->useFP16Mode == enabled_t::True || ctx->useFP16Mode == enabled_t::Auto) {
         config->setFlag(BuilderFlag::kFP16);
         usingFP16 = true;
@@ -1387,6 +1415,7 @@ struct ComputeHandle {
 
 #ifdef CACHE_TENSORRT_PLAN
       string modelHashStr;
+      string precisionMode = trtPrecisionModeToString(usingFP16, usingBF16);
       if (ctx->isOnnx) {
          string tmp;
          FileUtils::loadFileIntoString(ctx->onnxModelPath, "", tmp, &modelHashStr);
@@ -1402,7 +1431,7 @@ struct ComputeHandle {
 
         string olvStr = ctx->trtBuilderOptimizationLevel < 0 ? "def" : Global::intToString(ctx->trtBuilderOptimizationLevel);
         planCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_olv-%s_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-onnx-%d_olv-%s_gpu-%s_net-%s_%d_%s%dx%d_batch%d_prec-%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           olvStr.c_str(),
@@ -1413,9 +1442,9 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
-        string paramStr = Global::strprintf(
-          "_%d_%s_%d_%s_%d_%d_%d_%d",
+          precisionMode.c_str());
+        paramStr = Global::strprintf(
+          "_%d_%s_%d_%s_%d_%d_%d_%s",
           getInferLibVersion(),
           deviceIdent,
           ModelParser::tuneSalt,
@@ -1423,12 +1452,12 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precisionMode.c_str());
       }
       else {
         string olvStr = ctx->trtBuilderOptimizationLevel < 0 ? "def" : Global::intToString(ctx->trtBuilderOptimizationLevel);
         planCacheFile = Global::strprintf(
-          "%s/trt-%d_olv-%s_gpu-%s_net-%s_%d_%s%dx%d_batch%d_fp%d",
+          "%s/trt-%d_olv-%s_gpu-%s_net-%s_%d_%s%dx%d_batch%d_prec-%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           olvStr.c_str(),
@@ -1439,9 +1468,9 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
-        string paramStr = Global::strprintf(
-          "_%d_%s_%d_%s_%d_%d_%d_%d",
+          precisionMode.c_str());
+        paramStr = Global::strprintf(
+          "_%d_%s_%d_%s_%d_%d_%d_%s",
           getInferLibVersion(),
           deviceIdent,
           ModelParser::tuneSalt,
@@ -1449,7 +1478,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precisionMode.c_str());
       }
 
       try {
@@ -1512,11 +1541,12 @@ struct ComputeHandle {
       }
 #else
       string timingCacheFile = "";
+      string precisionMode = trtPrecisionModeToString(usingFP16, usingBF16);
 
       if (ctx->isOnnx) {
         
         timingCacheFile = Global::strprintf(
-          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_fp%d_%d%d%d",
+          "%s/trt-onnx-%d_gpu-%s_mc-%s_ts-%d_%s%dx%d_batch%d_prec-%s_%d%d%d",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1526,7 +1556,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32,
+          precisionMode.c_str(),
           loadedModel->modelDesc.onnxHeader.is_qat ? 1 : 0,
           loadedModel->modelDesc.onnxHeader.is_simplified ? 1 : 0,
           loadedModel->modelDesc.onnxHeader.is_int8 ? 1 : 0
@@ -1541,7 +1571,7 @@ struct ComputeHandle {
         }
         tuneIdent[sizeof(tuneIdent) - 1] = 0;
         timingCacheFile = Global::strprintf(
-          "%s/trt-%d_gpu-%s_tune-%s_%s%dx%d_batch%d_fp%d",
+          "%s/trt-%d_gpu-%s_tune-%s_%s%dx%d_batch%d_prec-%s",
           cacheDir.c_str(),
           getInferLibVersion(),
           deviceIdent,
@@ -1550,7 +1580,7 @@ struct ComputeHandle {
           ctx->nnYLen,
           ctx->nnXLen,
           maxBatchSize,
-          usingFP16 ? 16 : 32);
+          precisionMode.c_str());
       }
 
 
@@ -1563,7 +1593,7 @@ struct ComputeHandle {
       if(timingCacheBlob.size() > 0)
         logger->write("Using existing timing cache at " + timingCacheFile);
       else
-        logger->write("Creating new timing cache (usingFP16=" + Global::boolToString(usingFP16) + " " + Global::intToString(ctx->nnXLen) + "x" + Global::intToString(ctx->nnYLen) + " maxBatchSizeLimit=" + Global::intToString(maxBatchSize) + ")");
+        logger->write("Creating new timing cache (precision=" + precisionMode + " " + Global::intToString(ctx->nnXLen) + "x" + Global::intToString(ctx->nnYLen) + " maxBatchSizeLimit=" + Global::intToString(maxBatchSize) + ")");
 
       auto timingCache =
         unique_ptr<ITimingCache>(config->createTimingCache(timingCacheBlob.data(), timingCacheBlob.size()));
@@ -1922,7 +1952,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
     logger->write(
       "TensorRT backend thread " + Global::intToString(serverThreadIdx) + ": Model version " +
       Global::intToString(loadedModel->modelDesc.modelVersion) +
-      " useFP16 = " + Global::boolToString(handle->usingFP16));
+      " useFP16 = " + Global::boolToString(handle->usingFP16) +
+      " useBF16 = " + Global::boolToString(handle->usingBF16));
     logger->write(
       "TensorRT backend thread " + Global::intToString(serverThreadIdx) +
       ": Model name: " + loadedModel->modelDesc.name);
