@@ -2060,6 +2060,7 @@ TIMELINE_PAGE = """<!doctype html>
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
     const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
+    const minTimelineSpanNs = 1e3;
     const timelineUiState = {
       spanNs: 50e6,
       centerNs: null,
@@ -2079,11 +2080,18 @@ TIMELINE_PAGE = """<!doctype html>
     }
 
     function timelineTickStepNs(spanNs) {
-      const candidates = [1e6, 2e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6];
+      const candidates = [1e2, 2e2, 5e2, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5, 2e5, 5e5, 1e6, 2e6, 5e6, 1e7, 2e7, 5e7, 1e8, 2e8, 5e8];
       for (const candidate of candidates) {
         if (spanNs / candidate <= 9) return candidate;
       }
       return 1000e6;
+    }
+
+    function fmtTimelineNs(ns) {
+      const absNs = Math.abs(Number(ns || 0));
+      if (absNs >= 1e6) return `${fmtFloat(ns / 1e6, absNs >= 10e6 ? 1 : 3)}ms`;
+      if (absNs >= 1e3) return `${fmtFloat(ns / 1e3, absNs >= 10e3 ? 1 : 3)}us`;
+      return `${fmtFloat(ns, 0)}ns`;
     }
 
     function decodeTimelineSpan(rawSpan, slotInfoBySlot, rangeStartNs) {
@@ -2163,7 +2171,7 @@ TIMELINE_PAGE = """<!doctype html>
       const dataSpanNs = Math.max(latestRangeEndNs - latestRangeStartNs, 20e6);
       timelineUiState.latestRangeStartNs = latestRangeStartNs;
       timelineUiState.latestRangeEndNs = latestRangeEndNs;
-      timelineUiState.spanNs = clamp(timelineUiState.spanNs, 5e6, dataSpanNs);
+      timelineUiState.spanNs = clamp(timelineUiState.spanNs, minTimelineSpanNs, dataSpanNs);
       if (timelineUiState.followLatest || timelineUiState.centerNs === null) {
         timelineUiState.centerNs = latestRangeEndNs - timelineUiState.spanNs / 2;
       }
@@ -2265,10 +2273,10 @@ TIMELINE_PAGE = """<!doctype html>
       for (let tickNs = tickStartNs; tickNs <= viewEndNs + 1; tickNs += tickStepNs) {
         const x = xForNs(tickNs);
         if (x < leftPad || x > width - rightPad) continue;
-        const relMs = (tickNs - latestRangeEndNs) / 1e6;
+        const relNs = tickNs - latestRangeEndNs;
         tickSvgs.push(`
           <line class="timeline-grid" x1="${x.toFixed(1)}" y1="${topPad - 10}" x2="${x.toFixed(1)}" y2="${(height - bottomPad + 6).toFixed(1)}"></line>
-          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle">${fmtFloat(relMs, 1)}ms</text>
+          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 8).toFixed(1)}" text-anchor="middle">${fmtTimelineNs(relNs)}</text>
         `);
       }
 
@@ -2281,18 +2289,18 @@ TIMELINE_PAGE = """<!doctype html>
       }).join('');
 
       const axisLine = `<line class="timeline-axis" x1="${leftPad}" y1="${(height - bottomPad + 1).toFixed(1)}" x2="${(width - rightPad).toFixed(1)}" y2="${(height - bottomPad + 1).toFixed(1)}"></line>`;
-      const relStartMs = (viewStartNs - latestRangeEndNs) / 1e6;
-      const relEndMs = (viewEndNs - latestRangeEndNs) / 1e6;
+      const relStartNs = viewStartNs - latestRangeEndNs;
+      const relEndNs = viewEndNs - latestRangeEndNs;
       const droppedSpans = Number(timeline.dropped_spans || 0);
       const droppedSuffix = droppedSpans > 0 ? ` | clipped ${fmtInt(droppedSpans)}` : '';
       summary.innerHTML = `
         <span><strong>${fmtInt(orderedSlots.length)} 个 slot 全部展开</strong></span>
-        <span>窗口 ${fmtFloat(timelineUiState.spanNs / 1e6, 1)} ms</span>
-        <span>相对最新 ${fmtFloat(relStartMs, 1)} .. ${fmtFloat(relEndMs, 1)} ms</span>
-        <span>样本范围 ${fmtFloat((latestRangeEndNs - latestRangeStartNs) / 1e6, 1)} ms</span>
+        <span>窗口 ${fmtTimelineNs(timelineUiState.spanNs)}</span>
+        <span>相对最新 ${fmtTimelineNs(relStartNs)} .. ${fmtTimelineNs(relEndNs)}</span>
+        <span>样本范围 ${fmtTimelineNs(latestRangeEndNs - latestRangeStartNs)}</span>
         <span>${timelineUiState.paused ? '已暂停自动刷新' : '自动跟随最新样本中'}</span>
         <span>${droppedSuffix || '未截断 span'}</span>
-        <span class="hint">Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 仍是 enqueue proxy。</span>
+        <span class="hint">Scheduler/Pre/Post 来自 CPU 时钟；H2D/Infer/D2H 时长来自 cudaEvent timing，位置按依赖关系回填。</span>
       `;
 
       view.innerHTML = `
@@ -2386,8 +2394,8 @@ TIMELINE_PAGE = """<!doctype html>
       const focusRatio = clamp((localX - timelineUiState.chartLeftPx) / timelineUiState.chartWidthPx, 0, 1);
       const focusNs = timelineUiState.viewStartNs + focusRatio * timelineUiState.spanNs;
       const dataSpanNs = Math.max(timelineUiState.latestRangeEndNs - timelineUiState.latestRangeStartNs, 20e6);
-      const zoomFactor = event.deltaY > 0 ? 1.18 : 0.84;
-      const newSpanNs = clamp(timelineUiState.spanNs * zoomFactor, 5e6, dataSpanNs);
+      const zoomFactor = event.deltaY > 0 ? 1.12 : 0.89;
+      const newSpanNs = clamp(timelineUiState.spanNs * zoomFactor, minTimelineSpanNs, dataSpanNs);
       const newStartNs = focusNs - focusRatio * newSpanNs;
       timelineUiState.spanNs = newSpanNs;
       timelineUiState.centerNs = newStartNs + newSpanNs / 2;

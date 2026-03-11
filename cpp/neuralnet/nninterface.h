@@ -183,6 +183,9 @@ namespace NeuralNet {
     int batchSize
   );
   bool trtQueryOutputCopiesDone(ComputeHandle* computeHandle);
+  double trtGetLastInputRowCopyElapsedMs(ComputeHandle* computeHandle, int rowIdx);
+  double trtGetLastInferenceElapsedMs(ComputeHandle* computeHandle);
+  double trtGetLastOutputCopiesElapsedMs(ComputeHandle* computeHandle);
   void trtUnpackOutputRow(
     InputBuffers* buffers,
     const NNResultBuf* inputBuf,

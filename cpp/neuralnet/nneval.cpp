@@ -30,6 +30,18 @@ static vector<int> deriveLogicalSlotGpuIdxs(const vector<int>& gpuIdxByServerThr
 }
 
 struct SchedulerState {
+  struct PendingH2DSpan {
+    int rowIdx;
+    uint64_t preprocessSpanId;
+    int64_t enqueueStartNs;
+
+    PendingH2DSpan()
+      : rowIdx(-1),
+        preprocessSpanId(0),
+        enqueueStartNs(0)
+    {}
+  };
+
   enum class SlotStage {
     Idle,
     Filling,
@@ -57,6 +69,8 @@ struct SchedulerState {
     uint64_t d2hSpanId;
     int64_t inferStartNs;
     int64_t inferEndNs;
+    int64_t lastH2DEndNs;
+    std::vector<PendingH2DSpan> pendingH2DSpans;
     std::vector<NNResultBuf*> requests;
     std::vector<NNOutput*> outputs;
     bool isUsingFP16;
@@ -81,6 +95,8 @@ struct SchedulerState {
         d2hSpanId(0),
         inferStartNs(0),
         inferEndNs(0),
+        lastH2DEndNs(0),
+        pendingH2DSpans(),
         requests(),
         outputs(),
         isUsingFP16(false)
@@ -114,6 +130,7 @@ struct SchedulerState {
     int markerSlotIdx;
     uint64_t batchUid;
     uint64_t lastH2DSpanId;
+    std::vector<PendingH2DSpan> pendingH2DSpans;
     std::vector<NNResultBuf*> requests;
 
     OpenBatchState()
@@ -123,6 +140,7 @@ struct SchedulerState {
         markerSlotIdx(-1),
         batchUid(0),
         lastH2DSpanId(0),
+        pendingH2DSpans(),
         requests()
     {}
   };
@@ -538,6 +556,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     state->openBatch.markerSlotIdx = -1;
     state->openBatch.batchUid = 0;
     state->openBatch.lastH2DSpanId = 0;
+    state->openBatch.pendingH2DSpans.clear();
     state->openBatch.requests.clear();
   };
 
@@ -560,6 +579,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     slot.d2hSpanId = 0;
     slot.inferStartNs = 0;
     slot.inferEndNs = 0;
+    slot.lastH2DEndNs = 0;
+    slot.pendingH2DSpans.clear();
   };
 
   auto timelineNowNs = [&]() {
@@ -647,6 +668,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       state->openBatch.markerSlotIdx = -1;
       state->openBatch.batchUid = state->nextBatchUid++;
       state->openBatch.lastH2DSpanId = 0;
+      state->openBatch.pendingH2DSpans.clear();
       state->openBatch.requests.clear();
       GlobalPerfProfile::changeInferenceThreadActiveCount(emptySlotIdx,1);
       return true;
@@ -681,6 +703,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       state->openBatch.markerSlotIdx = bestMarkerSlotIdx;
       state->openBatch.batchUid = state->nextBatchUid++;
       state->openBatch.lastH2DSpanId = 0;
+      state->openBatch.pendingH2DSpans.clear();
       state->openBatch.requests.clear();
       GlobalPerfProfile::changeInferenceThreadActiveCount(bestSlotIdx,1);
       return true;
@@ -733,6 +756,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     slot.d2hSpanId = 0;
     slot.inferStartNs = 0;
     slot.inferEndNs = 0;
+    slot.lastH2DEndNs = 0;
+    slot.pendingH2DSpans = state->openBatch.pendingH2DSpans;
 
     allocateOutputsForSlot(slot);
 
@@ -925,6 +950,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     auto handleInferCompletion = [&](SchedulerState::SlotState& slot, int64_t nowNs) {
       SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
       uint64_t completedInferSpanId = 0;
+      int64_t recordedInferEndNs = nowNs;
       if(slot.stage == SchedulerState::SlotStage::LaunchQueued && slot.inferStarted) {
         GlobalPerfProfile::changeGpuStreamActiveCount(slot.slotIdx, slot.gpuIdx, -1);
         if(device.activeInferCount > 0)
@@ -934,8 +960,52 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           measuredWorkMs = slot.plannedWorkMs;
         recordBatchSample(device, slot.batchSize, measuredWorkMs);
 
-        const int64_t inferStartNs = slot.inferStartNs > 0 ? slot.inferStartNs : nowNs;
-        if(shouldCaptureTimelineSpan(inferStartNs, nowNs)) {
+        uint64_t previousH2DSpanId = 0;
+        int64_t previousH2DEndNs = 0;
+        slot.lastH2DSpanId = 0;
+        slot.lastH2DEndNs = 0;
+        for(const SchedulerState::PendingH2DSpan& pendingH2D: slot.pendingH2DSpans) {
+          double h2dElapsedMs = NeuralNet::trtGetLastInputRowCopyElapsedMs(slot.gpuHandle, pendingH2D.rowIdx);
+          int64_t h2dDurationNs = h2dElapsedMs > 0.0 ? (int64_t)(h2dElapsedMs * 1e6 + 0.5) : 0;
+          int64_t recordedH2DStartNs = pendingH2D.enqueueStartNs > 0 ? pendingH2D.enqueueStartNs : nowNs;
+          if(recordedH2DStartNs < previousH2DEndNs)
+            recordedH2DStartNs = previousH2DEndNs;
+          int64_t recordedH2DEndNs = h2dDurationNs > 0 ? recordedH2DStartNs + h2dDurationNs : recordedH2DStartNs;
+          uint64_t h2dSpanId = 0;
+          if(shouldCaptureTimelineSpan(recordedH2DStartNs, recordedH2DEndNs)) {
+            h2dSpanId = nextTimelineSpanId();
+            GlobalPerfProfile::recordRealtimeTimelineSpan(
+              slot.slotIdx,
+              slot.gpuIdx,
+              GlobalPerfProfile::TimelineLane::H2DStream,
+              GlobalPerfProfile::TimelineStage::H2D,
+              h2dSpanId,
+              pendingH2D.preprocessSpanId,
+              previousH2DSpanId,
+              slot.batchUid,
+              pendingH2D.rowIdx,
+              recordedH2DStartNs,
+              recordedH2DEndNs
+            );
+          }
+          previousH2DSpanId = h2dSpanId;
+          previousH2DEndNs = recordedH2DEndNs;
+          slot.lastH2DSpanId = h2dSpanId;
+          slot.lastH2DEndNs = recordedH2DEndNs;
+        }
+        slot.pendingH2DSpans.clear();
+
+        double inferElapsedMs = NeuralNet::trtGetLastInferenceElapsedMs(slot.gpuHandle);
+        int64_t inferDurationNs = inferElapsedMs > 0.0 ? (int64_t)(inferElapsedMs * 1e6 + 0.5) : 0;
+        int64_t inferReadyNs = slot.inferStartNs > 0 ? slot.inferStartNs : nowNs;
+        if(slot.lastH2DEndNs > inferReadyNs)
+          inferReadyNs = slot.lastH2DEndNs;
+        int64_t inferredStartNs = inferDurationNs > 0 ? nowNs - inferDurationNs : inferReadyNs;
+        if(inferredStartNs < inferReadyNs)
+          inferredStartNs = inferReadyNs;
+        const int64_t inferStartNs = inferredStartNs;
+        recordedInferEndNs = inferDurationNs > 0 ? std::min(nowNs, inferStartNs + inferDurationNs) : nowNs;
+        if(shouldCaptureTimelineSpan(inferStartNs, recordedInferEndNs)) {
           completedInferSpanId = nextTimelineSpanId();
           GlobalPerfProfile::recordRealtimeTimelineSpan(
             slot.slotIdx,
@@ -948,13 +1018,13 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             slot.batchUid,
             -1,
             inferStartNs,
-            nowNs
+            recordedInferEndNs
           );
         }
       }
       slot.inferStarted = false;
       slot.inferSpanId = completedInferSpanId;
-      slot.inferEndNs = nowNs;
+      slot.inferEndNs = recordedInferEndNs;
       slot.stage = SchedulerState::SlotStage::D2HPending;
       slot.remainingWorkMs = 0.0;
 
@@ -964,7 +1034,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             !dependentSlot.inferStarted &&
             dependentSlot.markerSlotIdx == slot.slotIdx) {
           dependentSlot.inferStarted = true;
-          dependentSlot.inferStartNs = nowNs;
+          dependentSlot.inferStartNs = slot.inferEndNs > 0 ? slot.inferEndNs : nowNs;
           dependentSlot.remainingWorkMs = dependentSlot.plannedWorkMs;
           dependentSlot.accumulatedEquivalentWorkMs = 0.0;
           dependentSlot.inferDependencySpanId = completedInferSpanId;
@@ -979,8 +1049,11 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       const int completedBatchSize = slot.batchSize;
       const double completedInferMs = slot.accumulatedEquivalentWorkMs > 0.0 ? slot.accumulatedEquivalentWorkMs : slot.plannedWorkMs;
       uint64_t d2hSpanId = 0;
+      double d2hElapsedMs = NeuralNet::trtGetLastOutputCopiesElapsedMs(slot.gpuHandle);
+      int64_t d2hDurationNs = d2hElapsedMs > 0.0 ? (int64_t)(d2hElapsedMs * 1e6 + 0.5) : 0;
       const int64_t d2hStartNs = slot.inferEndNs > 0 ? slot.inferEndNs : d2hDoneNs;
-      if(shouldCaptureTimelineSpan(d2hStartNs, d2hDoneNs)) {
+      const int64_t recordedD2HEndNs = (d2hDurationNs > 0 && d2hStartNs <= d2hDoneNs) ? std::min(d2hDoneNs, d2hStartNs + d2hDurationNs) : d2hDoneNs;
+      if(shouldCaptureTimelineSpan(d2hStartNs, recordedD2HEndNs)) {
         d2hSpanId = nextTimelineSpanId();
         GlobalPerfProfile::recordRealtimeTimelineSpan(
           slot.slotIdx,
@@ -993,12 +1066,12 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           slot.batchUid,
           -1,
           d2hStartNs,
-          d2hDoneNs
+          recordedD2HEndNs
         );
       }
       slot.d2hSpanId = d2hSpanId;
 
-      const int64_t postprocessStartNs = timelineNowNs();
+      const int64_t postprocessStartNs = std::max(recordedD2HEndNs, timelineNowNs());
       for(int row = 0; row < completedBatchSize; row++) {
         NeuralNet::trtUnpackOutputRow(slot.serverBuf->inputBuffers, slot.requests[row], slot.outputs[row], row, slot.gpuHandle);
       }
@@ -1057,6 +1130,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       slot.d2hSpanId = 0;
       slot.inferStartNs = 0;
       slot.inferEndNs = 0;
+      slot.lastH2DEndNs = 0;
+      slot.pendingH2DSpans.clear();
       GlobalPerfProfile::changeInferenceThreadActiveCount(slot.slotIdx,-1);
 
       unique_lock<std::mutex> lock(bufferMutex);
@@ -1142,28 +1217,12 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
 
           int64_t h2dStartNs = timelineNowNs();
           NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, slot.serverBuf->inputBuffers, rowIdx);
-          int64_t h2dEndNs = timelineNowNs();
-          const int64_t minH2DDurationNs = 2000;
-          if(h2dEndNs < h2dStartNs + minH2DDurationNs)
-            h2dEndNs = h2dStartNs + minH2DDurationNs;
-          uint64_t h2dSpanId = 0;
-          if(shouldCaptureTimelineSpan(h2dStartNs, h2dEndNs)) {
-            h2dSpanId = nextTimelineSpanId();
-            GlobalPerfProfile::recordRealtimeTimelineSpan(
-              slot.slotIdx,
-              slot.gpuIdx,
-              GlobalPerfProfile::TimelineLane::H2DStream,
-              GlobalPerfProfile::TimelineStage::H2D,
-              h2dSpanId,
-              preprocessSpanId,
-              0,
-              state->openBatch.batchUid,
-              rowIdx,
-              h2dStartNs,
-              h2dEndNs
-            );
-          }
-          state->openBatch.lastH2DSpanId = h2dSpanId;
+          SchedulerState::PendingH2DSpan pendingH2D;
+          pendingH2D.rowIdx = rowIdx;
+          pendingH2D.preprocessSpanId = preprocessSpanId;
+          pendingH2D.enqueueStartNs = h2dStartNs;
+          state->openBatch.pendingH2DSpans.push_back(pendingH2D);
+          state->openBatch.lastH2DSpanId = 0;
           state->openBatch.requests.push_back(request);
           didWork = true;
           if(maybeLaunchOpenBatch())

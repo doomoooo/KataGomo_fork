@@ -2087,3 +2087,69 @@ legacy worker-thread 路径仍然保留旧面板。
     - `bucket=2 -> 0.999960247`
 
 这说明当前单卡 `TRT_CUDA_STREAMS=2` 的 steady-state 已经重新回到“绝大多数时间 2 条 infer stream 同时在跑”的目标行为。
+
+### 2026-03-11: timeline 改成 cudaEvent 时长 + 依赖回填，不能再把 CPU launch 当成 infer 起点
+
+这轮继续修 timeline，核心结论是：
+
+- `cudaEventElapsedTime()` 只能给出 **两个 CUDA event 之间的设备侧相对时长**
+- 它**不能**直接给出和 host `steady_clock` 对齐的绝对 GPU 时间戳
+- 所以时间线上的 GPU span 不能简单画成：
+  - `start = CPU 调用 cudaGraphLaunch 的时刻`
+  - `end = start + cudaEvent duration`
+
+这样会把 infer 明显画早，尤其在 infer stream 前面还挂着：
+
+- H2D 完成依赖
+- marker infer 完成依赖
+
+时，图上就会出现明显错误：
+
+- infer span 起点贴着 CPU launch，而不是贴着真正可运行的依赖完成点
+- `D2H -> Postprocess` 依赖箭头会被拉成长距离假箭头，看起来像横跨十几毫秒、甚至跨过后续几个 infer
+
+这轮的修正方式：
+
+- H2D / Infer / D2H 的**时长**全部改用 `cudaEventElapsedTime()`
+- 但 **位置** 不再用“CPU launch 直接当起点”，而是按依赖关系回填：
+  - row-level H2D:
+    - enqueue 时只记 `rowIdx + preprocessSpanId + enqueueStartNs`
+    - 等 infer 完成时再统一回填 H2D spans
+    - 同一 slot 的多次 H2D 在时间线上强制串接，后一条 H2D 不得早于前一条 H2D 的结束
+  - infer:
+    - 结束时刻仍以 scheduler 发现 `inferDoneEvent` 完成的时刻为上界
+    - 起点用 `now - cudaEventDuration` 倒推
+    - 再 clamp 到：
+      - `slot.inferStartNs`
+      - `slot.lastH2DEndNs`
+      的较晚者
+    - 这样 infer span 至少不会早于：
+      - CPU 真正把 launch 排进 stream 的时刻
+      - 最后一个 H2D 完成的时刻
+  - D2H:
+    - 时长也用 `cudaEventElapsedTime()`
+    - 起点继续锚在 infer 结束之后
+
+当前这版不是“绝对 GPU 时间戳真值”，但已经满足：
+
+- infer 不会再错误地贴着 CPU `cudaGraphLaunch()` 时刻起跑
+- H2D / infer / D2H 的相对顺序与依赖关系一致
+- 同 batch 内的依赖箭头不再被错误拉成长跨越
+
+本轮直接复查 `/api/state` 的结果：
+
+- `Postprocess` 依赖的 `dep0`
+  - 全部指向同 batch 的 `D2H`
+  - 没有跨 batch 依赖
+  - 没有 `> 1000 us` 的异常大 gap
+- `Infer`
+  - 没有任何一条开始在其依赖的最后一个 H2D 结束之前
+
+前端同步更新：
+
+- `/timeline` 页面已经支持把横向视窗缩到 `1 us`
+- 时间轴标签按 `ms / us / ns` 自适应显示
+- 页面说明也改成：
+  - `Scheduler/Pre/Post` 来自 CPU 时钟
+  - `H2D/Infer/D2H` 时长来自 `cudaEvent timing`
+  - 位置按依赖关系回填
