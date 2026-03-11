@@ -1204,6 +1204,9 @@ struct ComputeHandle {
   vector<BatchGraphState> batchGraphStates;
   cudaEvent_t h2dDoneEvent;
   cudaEvent_t inferDoneEvent;
+  cudaEvent_t d2hDoneEvent;
+  bool inferPending;
+  bool d2hPending;
   cudaEvent_t perfH2DStartEvent;
   cudaEvent_t perfH2DEndEvent;
   cudaEvent_t perfInferenceDoneEvent;
@@ -1235,12 +1238,16 @@ struct ComputeHandle {
     batchGraphStates.resize(maxBatchSize + 1);
     h2dDoneEvent = nullptr;
     inferDoneEvent = nullptr;
+    d2hDoneEvent = nullptr;
+    inferPending = false;
+    d2hPending = false;
     perfH2DStartEvent = nullptr;
     perfH2DEndEvent = nullptr;
     perfInferenceDoneEvent = nullptr;
     perfD2HEndEvent = nullptr;
     CUDA_ERR("ComputeHandle", cudaEventCreateWithFlags(&h2dDoneEvent, cudaEventDisableTiming));
     CUDA_ERR("ComputeHandle", cudaEventCreateWithFlags(&inferDoneEvent, cudaEventDisableTiming));
+    CUDA_ERR("ComputeHandle", cudaEventCreateWithFlags(&d2hDoneEvent, cudaEventDisableTiming));
     if(perfProfileEnabled) {
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfH2DStartEvent));
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfH2DEndEvent));
@@ -1673,6 +1680,8 @@ struct ComputeHandle {
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfH2DEndEvent));
     if(perfH2DStartEvent != nullptr)
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfH2DStartEvent));
+    if(d2hDoneEvent != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaEventDestroy(d2hDoneEvent));
     if(inferDoneEvent != nullptr)
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(inferDoneEvent));
     if(h2dDoneEvent != nullptr)
@@ -1739,6 +1748,10 @@ struct ComputeHandle {
     } else {
       throw StringError(Global::strprintf("ComputeHandle: unknown tensor name %s", name));
     }
+  }
+
+  size_t getBufferRowBytes(const char* name) {
+    return getBufferRowElts(name) * sizeof(float);
   }
 
   Dims getBufferDynamicShape(const char* name, int batchSize) {
@@ -2239,6 +2252,81 @@ static void packInputRow(
   std::copy(rowSpatialInput, rowSpatialInput + inputBuffers->singleMaskElts, rowMaskInput);
 }
 
+static void enqueueInputRowCopy(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int rowIdx
+) {
+  cudaStream_t h2dStream = gpuHandle->h2dStream;
+  if(gpuHandle->ctx->isOnnx) {
+    CUDA_ERR(
+      "trtEnqueueInputRowCopy",
+      cudaMemcpyAsync(
+        static_cast<char*>(gpuHandle->getBuffer("input_spatial")) + rowIdx * gpuHandle->getBufferRowBytes("input_spatial"),
+        inputBuffers->spatialInputs.get() + rowIdx * inputBuffers->singleInputElts,
+        inputBuffers->singleInputBytes,
+        cudaMemcpyHostToDevice,
+        h2dStream
+      )
+    );
+    CUDA_ERR(
+      "trtEnqueueInputRowCopy",
+      cudaMemcpyAsync(
+        static_cast<char*>(gpuHandle->getBuffer("input_global")) + rowIdx * gpuHandle->getBufferRowBytes("input_global"),
+        inputBuffers->globalInputs.get() + rowIdx * inputBuffers->singleInputGlobalElts,
+        inputBuffers->singleInputGlobalBytes,
+        cudaMemcpyHostToDevice,
+        h2dStream
+      )
+    );
+  }
+  else {
+    CUDA_ERR(
+      "trtEnqueueInputRowCopy",
+      cudaMemcpyAsync(
+        static_cast<char*>(gpuHandle->getBuffer("InputMask")) + rowIdx * gpuHandle->getBufferRowBytes("InputMask"),
+        inputBuffers->maskInputs.get() + rowIdx * inputBuffers->singleMaskElts,
+        inputBuffers->singleMaskBytes,
+        cudaMemcpyHostToDevice,
+        h2dStream
+      )
+    );
+    CUDA_ERR(
+      "trtEnqueueInputRowCopy",
+      cudaMemcpyAsync(
+        static_cast<char*>(gpuHandle->getBuffer("InputSpatial")) + rowIdx * gpuHandle->getBufferRowBytes("InputSpatial"),
+        inputBuffers->spatialInputs.get() + rowIdx * inputBuffers->singleInputElts,
+        inputBuffers->singleInputBytes,
+        cudaMemcpyHostToDevice,
+        h2dStream
+      )
+    );
+    CUDA_ERR(
+      "trtEnqueueInputRowCopy",
+      cudaMemcpyAsync(
+        static_cast<char*>(gpuHandle->getBuffer("InputGlobal")) + rowIdx * gpuHandle->getBufferRowBytes("InputGlobal"),
+        inputBuffers->globalInputs.get() + rowIdx * inputBuffers->singleInputGlobalElts,
+        inputBuffers->singleInputGlobalBytes,
+        cudaMemcpyHostToDevice,
+        h2dStream
+      )
+    );
+    if(inputBuffers->singleInputMetaElts > 0) {
+      CUDA_ERR(
+        "trtEnqueueInputRowCopy",
+        cudaMemcpyAsync(
+          static_cast<char*>(gpuHandle->getBuffer("InputMeta")) + rowIdx * gpuHandle->getBufferRowBytes("InputMeta"),
+          inputBuffers->metaInputs.get() + rowIdx * inputBuffers->singleInputMetaElts,
+          inputBuffers->singleInputMetaBytes,
+          cudaMemcpyHostToDevice,
+          h2dStream
+        )
+      );
+    }
+  }
+  CUDA_ERR("trtEnqueueInputRowCopy", cudaEventRecord(gpuHandle->h2dDoneEvent, h2dStream));
+}
+
 static void enqueueInputCopies(
   ComputeHandle* gpuHandle,
   InputBuffers* inputBuffers,
@@ -2574,6 +2662,122 @@ void NeuralNet::getOutput(
   else if(perfInfo != NULL) {
     perfInfo->gpuIdx = gpuHandle->gpuIdxForHandle;
   }
+}
+
+static bool queryCudaEvent(const char* opName, cudaEvent_t event) {
+  cudaError_t status = cudaEventQuery(event);
+  if(status == cudaSuccess)
+    return true;
+  if(status == cudaErrorNotReady)
+    return false;
+  throw StringError(string(opName) + ": " + cudaGetErrorString(status));
+}
+
+void NeuralNet::trtPackInputRow(
+  InputBuffers* buffers,
+  const NNResultBuf* inputBuf,
+  int rowIdx,
+  ComputeHandle* computeHandle
+) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtPackInputRow: rowIdx out of bounds");
+
+  const int modelVersion = computeHandle->modelVersion;
+  const int nnXLen = computeHandle->ctx->nnXLen;
+  const int nnYLen = computeHandle->ctx->nnYLen;
+  const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
+  const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
+  const int numMetaFeatures = buffers->singleInputMetaElts;
+  packInputRow(buffers, inputBuf, rowIdx, numSpatialFeatures, numGlobalFeatures, numMetaFeatures, nnXLen, nnYLen);
+}
+
+void NeuralNet::trtEnqueueInputRowCopy(
+  ComputeHandle* computeHandle,
+  InputBuffers* buffers,
+  int rowIdx
+) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtEnqueueInputRowCopy: rowIdx out of bounds");
+  computeHandle->setDevice("trtEnqueueInputRowCopy");
+  enqueueInputRowCopy(computeHandle, buffers, rowIdx);
+}
+
+void NeuralNet::trtLaunchInferenceAsync(
+  ComputeHandle* computeHandle,
+  InputBuffers* buffers,
+  int batchSize,
+  const ComputeHandle* dependencyHandle
+) {
+  if(batchSize <= 0 || batchSize > buffers->maxBatchSize)
+    throw StringError("trtLaunchInferenceAsync: invalid batch size");
+  computeHandle->setDevice("trtLaunchInferenceAsync");
+  computeHandle->setInputShapesForBatch(batchSize);
+  CUDA_ERR("trtLaunchInferenceAsync", cudaStreamWaitEvent(computeHandle->inferStream, computeHandle->h2dDoneEvent, 0));
+  if(dependencyHandle != nullptr)
+    CUDA_ERR("trtLaunchInferenceAsync", cudaStreamWaitEvent(computeHandle->inferStream, dependencyHandle->inferDoneEvent, 0));
+  computeHandle->maybeRecordLaunchInterval();
+  computeHandle->enqueueWithOptionalCudaGraph(batchSize);
+  CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(computeHandle->inferDoneEvent, computeHandle->inferStream));
+  computeHandle->inferPending = true;
+  computeHandle->d2hPending = false;
+}
+
+bool NeuralNet::trtQueryInferenceDone(ComputeHandle* computeHandle) {
+  computeHandle->setDevice("trtQueryInferenceDone");
+  if(!computeHandle->inferPending)
+    return false;
+  bool done = queryCudaEvent("trtQueryInferenceDone", computeHandle->inferDoneEvent);
+  if(done)
+    computeHandle->inferPending = false;
+  return done;
+}
+
+void NeuralNet::trtEnqueueOutputCopiesAsync(
+  ComputeHandle* computeHandle,
+  InputBuffers* buffers,
+  int batchSize
+) {
+  if(batchSize <= 0 || batchSize > buffers->maxBatchSize)
+    throw StringError("trtEnqueueOutputCopiesAsync: invalid batch size");
+  computeHandle->setDevice("trtEnqueueOutputCopiesAsync");
+  CUDA_ERR("trtEnqueueOutputCopiesAsync", cudaStreamWaitEvent(computeHandle->d2hStream, computeHandle->inferDoneEvent, 0));
+  enqueueOutputCopies(computeHandle, buffers, batchSize, computeHandle->d2hStream);
+  CUDA_ERR("trtEnqueueOutputCopiesAsync", cudaEventRecord(computeHandle->d2hDoneEvent, computeHandle->d2hStream));
+  computeHandle->d2hPending = true;
+}
+
+bool NeuralNet::trtQueryOutputCopiesDone(ComputeHandle* computeHandle) {
+  computeHandle->setDevice("trtQueryOutputCopiesDone");
+  if(!computeHandle->d2hPending)
+    return false;
+  bool done = queryCudaEvent("trtQueryOutputCopiesDone", computeHandle->d2hDoneEvent);
+  if(done)
+    computeHandle->d2hPending = false;
+  return done;
+}
+
+void NeuralNet::trtUnpackOutputRow(
+  InputBuffers* buffers,
+  const NNResultBuf* inputBuf,
+  NNOutput* output,
+  int rowIdx,
+  ComputeHandle* computeHandle
+) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtUnpackOutputRow: rowIdx out of bounds");
+  float policyProbsTmp[NNPos::MAX_NN_POLICY_SIZE];
+  unpackOutputRow(
+    buffers,
+    inputBuf,
+    output,
+    rowIdx,
+    computeHandle->ctx->nnXLen,
+    computeHandle->ctx->nnYLen,
+    computeHandle->modelVersion,
+    computeHandle->ctx->isOnnx,
+    buffers->singlePolicyPassResultElts,
+    policyProbsTmp
+  );
 }
 
 bool NeuralNet::testEvaluateConv(

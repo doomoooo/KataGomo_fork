@@ -1522,3 +1522,135 @@ while (!isKilled) {
 - 或开始在 `nneval.cpp` 里引入单 scheduler 所需的 slot/open-batch 状态对象
 
 在我看来，更合理的是先做前者，因为 `nneval.cpp` 的状态机必须建立在 backend 已经能暴露异步阶段边界的前提上。
+
+### 2026-03-11: TRT backend 已补齐 slot 级异步接口
+
+这一层已经落地到代码，不再只是设计稿。
+
+新增的 TRT-only async helper 现在由 `nninterface.h` 暴露，`trtbackend.cpp` 实现：
+
+- `trtPackInputRow(...)`
+- `trtEnqueueInputRowCopy(...)`
+- `trtLaunchInferenceAsync(...)`
+- `trtQueryInferenceDone(...)`
+- `trtEnqueueOutputCopiesAsync(...)`
+- `trtQueryOutputCopiesDone(...)`
+- `trtUnpackOutputRow(...)`
+
+对应语义：
+
+- scheduler 可以按请求把单 row 预处理结果写进 slot 自己的 pinned host buffer
+- scheduler 可以立刻发 row-level H2D
+- infer 和 D2H 已拆成两个独立异步阶段
+- 完成后再按 row unpack 回 `NNOutput`
+
+`ComputeHandle` 这一层也已经补了状态：
+
+- 独立 `h2dDoneEvent / inferDoneEvent / d2hDoneEvent`
+- `inferPending / d2hPending`
+- 显式 `h2dStream / inferStream / d2hStream`
+
+这一步的意义是：
+
+- backend 终于能暴露 single-scheduler 需要的 submit / poll / finish 边界
+- `nneval.cpp` 不必再强行围绕同步 `getOutput()` 设计状态机
+
+### 2026-03-11: `nneval.cpp` 已切到单 scheduler + logical slot 模型
+
+当前已实现的运行模型：
+
+- TRT 路径下只启动 1 个真实 scheduler thread
+- 旧配置 `trtDeviceToUseThread*` 仍然保留输入兼容
+- 逻辑 slot 数改为：
+  - 原有每卡 `s`
+  - 再额外追加每卡 `+1`
+- 也就是 `gpuIdxByLogicalSlot = old slots + one extra slot per unique gpu`
+
+新增的核心状态对象：
+
+- `SchedulerState`
+- `DeviceState`
+- `SlotState`
+- `OpenBatchState`
+
+当前已落地的关键调度规则：
+
+- 全局唯一 `open batch`
+- open batch 创建时立即绑定 `target slot`
+- 按请求做：
+  - row pack
+  - row-level H2D
+- 空卡立刻发 partial batch
+- 非空卡等 exact batch
+- slot 在 `D2H + output unpack + notify` 完成前不会复用
+- device 内部 slot 选择暂时按 round robin
+
+ETA 维护也已经接上代码：
+
+- 每张卡维护 `activeInferCount`
+- 每个 running slot 维护：
+  - `plannedWorkMs`
+  - `remainingWorkMs`
+  - `accumulatedEquivalentWorkMs`
+- 调度循环每轮按 `dt / activeInferCount` 推进 running slot 的剩余工作量
+
+### 2026-03-11: 启动期 batch 基线测量已实现
+
+之前 `baseWorkMsByBatch` 只是占位默认值。
+现在启动 scheduler 时，会真实为每张卡建立初始 batch 耗时表。
+
+当前实现：
+
+- 每张卡只拿该卡第一个 logical slot 做启动期基线测量
+- 使用一个合法的 19x19 空棋盘输入生成 row buffer
+- 对每个 `batchSize in [1, maxBatchSize]`：
+  - 先做一次 warmup launch
+  - 再做 10 次 measured launch
+- 测的是 infer completion 墙钟时间
+- 不把 H2D 计入这张初始表
+
+这样做的目标是：
+
+- 让 scheduler 从第一个真实请求开始就有可用 ETA
+- 不必等线上跑出几批后才摆脱 “全 1ms 默认值”
+
+### 2026-03-11: 启动/退出/perf 接线已完成
+
+`spawnServerThreads()` / `killServerThreads()` 现在已经区分两条路径：
+
+- TRT + 非 `debugSkipNeuralNet`
+  - 走 single scheduler
+- 其他情况
+  - 继续走旧的 one-thread-per-handle 路径
+
+同时已补上的兼容点：
+
+- realtime perf 的 inference slot 配置在 TRT 路径下改用 `gpuIdxByLogicalSlot`
+- `serverThreadsIsUsingFP16` 在 TRT 路径下按 logical slot 填充
+- scheduler 启动失败会把错误带回 `spawnServerThreads()`
+- `killServerThreads()` 会释放 `schedulerState`
+
+### 2026-03-11: 当前验证结果
+
+已完成验证：
+
+- 增量编译通过
+  - `cmake --build cpp/build --parallel 8 --target katago`
+- 真实 raw-NN smoke 通过
+  - `source ./env.sh && ./cpp/build/katago evalsgf -config ~/.katago/configs/gtp.cfg -model ~/.katago/weights/b24tf.onnx -m 2 -raw-nn /tmp/katago_trt_scheduler_smoke.sgf`
+
+smoke 观察到的关键现象：
+
+- TRT 路径现在会创建 2 个 logical slot
+  - 原配置只有 GPU0 的 1 个旧 slot
+  - scheduler 自动补出每卡额外 `+1` slot
+- 第一个 slot 建 plan
+- 第二个 slot 直接复用现有 plan cache
+- 整个 raw NN 请求能正常完成并返回 policy/value
+
+已知仍未做的事：
+
+- pre/post 线程池隔离
+- “让搜索线程自己接手 pre/post” 的宽边界方案
+- 更精细的 perf 分阶段计时
+- 对 queued infer 的 ETA 仍是近似模型，不是精确重建 GPU 内部调度
