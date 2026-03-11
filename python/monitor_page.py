@@ -2007,9 +2007,19 @@ TIMELINE_PAGE = """<!doctype html>
       font-size: 13px;
       font-weight: 700;
     }
+    .timeline-block-group {
+      cursor: pointer;
+    }
     .timeline-block {
       stroke: rgba(23,32,42,0.18);
       stroke-width: 1;
+      transition: fill-opacity 120ms ease, stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
+    }
+    .timeline-block-group:hover .timeline-block {
+      stroke: rgba(15,23,42,0.72);
+      stroke-width: 2.2;
+      fill-opacity: 1;
+      filter: brightness(1.08) saturate(1.12) drop-shadow(0 0 9px rgba(15,23,42,0.18));
     }
     .timeline-block-label {
       fill: rgba(255,255,255,0.96);
@@ -2017,11 +2027,27 @@ TIMELINE_PAGE = """<!doctype html>
       font-family: var(--mono);
       pointer-events: none;
     }
+    .timeline-arrow-group {
+      cursor: pointer;
+    }
+    .timeline-arrow-hit {
+      fill: none;
+      stroke: rgba(0,0,0,0);
+      stroke-width: 12;
+      pointer-events: stroke;
+    }
     .timeline-arrow {
       fill: none;
       stroke: rgba(23,32,42,0.42);
       stroke-width: 1.3;
       stroke-linecap: round;
+      transition: stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
+      pointer-events: none;
+    }
+    .timeline-arrow-group:hover .timeline-arrow {
+      stroke: rgba(194,65,12,0.95);
+      stroke-width: 2.8;
+      filter: drop-shadow(0 0 7px rgba(194,65,12,0.28));
     }
     .timeline-legend {
       position: absolute;
@@ -2377,7 +2403,7 @@ TIMELINE_PAGE = """<!doctype html>
           const label = rectWidth >= 58 ? timelineSpanLabel(span) : '';
           const slotPrefix = lane.laneName === 'scheduler' ? `s${span.slot} ` : '';
           allBlockSvgs.push(`
-            <g>
+            <g class="timeline-block-group">
               <rect class="timeline-block" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${rectWidth.toFixed(1)}" height="${blockHeight.toFixed(1)}" rx="6" fill="${color}" fill-opacity="${opacity}">
                 <title>${timelineSpanTitle(span, null)}</title>
               </rect>
@@ -2403,9 +2429,12 @@ TIMELINE_PAGE = """<!doctype html>
           const fromLabel = `${from.span.stage}#${from.span.id}`;
           const toLabel = `${span.stage}#${span.id}`;
           arrowSvgs.push(`
-            <path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)">
-              <title>${fromLabel} -> ${toLabel}\\ngap=${fmtTimelineDurationUs(gapNs)}</title>
-            </path>
+            <g class="timeline-arrow-group">
+              <path class="timeline-arrow-hit" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}">
+                <title>${fromLabel} -> ${toLabel}\\ngap=${fmtTimelineDurationUs(gapNs)}</title>
+              </path>
+              <path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 18).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)"></path>
+            </g>
           `);
         }
       }
