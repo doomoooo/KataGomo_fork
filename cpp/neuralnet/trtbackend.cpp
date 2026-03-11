@@ -2193,6 +2193,110 @@ void NeuralNet::freeInputBuffers(InputBuffers* inputBuffers) {
   delete inputBuffers;
 }
 
+static void packInputRow(
+  InputBuffers* inputBuffers,
+  const NNResultBuf* inputBuf,
+  int rowIdx,
+  int numSpatialFeatures,
+  int numGlobalFeatures,
+  int numMetaFeatures,
+  int nnXLen,
+  int nnYLen
+) {
+  float* rowMaskInput = &inputBuffers->maskInputs[inputBuffers->singleMaskElts * rowIdx];
+  float* rowSpatialInput = &inputBuffers->spatialInputs[inputBuffers->singleInputElts * rowIdx];
+  float* rowGlobalInput = &inputBuffers->globalInputs[inputBuffers->singleInputGlobalElts * rowIdx];
+  float* rowMetaInput = &inputBuffers->metaInputs[inputBuffers->singleInputMetaElts * rowIdx];
+
+  const float* rowGlobal = inputBuf->rowGlobalBuf.data();
+  const float* rowSpatial = inputBuf->rowSpatialBuf.data();
+  const float* rowMeta = inputBuf->rowMetaBuf.data();
+  const bool hasRowMeta = inputBuf->hasRowMeta;
+
+  std::copy(rowGlobal, rowGlobal + numGlobalFeatures, rowGlobalInput);
+  if(numMetaFeatures > 0) {
+    testAssert(rowMeta != NULL);
+    testAssert(hasRowMeta);
+    std::copy(rowMeta, rowMeta + numMetaFeatures, rowMetaInput);
+  }
+  else {
+    testAssert(!hasRowMeta);
+  }
+  SymmetryHelpers::copyInputsWithSymmetry(
+    rowSpatial, rowSpatialInput, 1, nnYLen, nnXLen, numSpatialFeatures, false, inputBuf->symmetry);
+  std::copy(rowSpatialInput, rowSpatialInput + inputBuffers->singleMaskElts, rowMaskInput);
+}
+
+static void enqueueInputCopies(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  int numMetaFeatures,
+  cudaStream_t h2dStream
+) {
+  if(gpuHandle->ctx->isOnnx) {
+    assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("input_spatial"));
+    assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("input_global"));
+
+    CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+    CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+
+    auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
+    auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
+    gpuHandle->exec->setInputShape("input_spatial", spatialInputDims);
+    gpuHandle->exec->setInputShape("input_global", globalInputDims);
+    return;
+  }
+
+  assert(inputBuffers->singleMaskElts == gpuHandle->getBufferRowElts("InputMask"));
+  assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("InputSpatial"));
+  assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("InputGlobal"));
+  if(numMetaFeatures > 0)
+    assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
+
+  CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+  if(numMetaFeatures > 0) {
+    CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+  }
+
+  auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
+  auto spatialInputDims = gpuHandle->getBufferDynamicShape("InputSpatial", batchSize);
+  auto globalInputDims = gpuHandle->getBufferDynamicShape("InputGlobal", batchSize);
+
+  gpuHandle->exec->setInputShape("InputMask", maskInputDims);
+  gpuHandle->exec->setInputShape("InputSpatial", spatialInputDims);
+  gpuHandle->exec->setInputShape("InputGlobal", globalInputDims);
+
+  if(numMetaFeatures > 0) {
+    auto metaInputDims = gpuHandle->getBufferDynamicShape("InputMeta", batchSize);
+    gpuHandle->exec->setInputShape("InputMeta", metaInputDims);
+  }
+}
+
+static void enqueueOutputCopies(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  cudaStream_t d2hStream
+) {
+  if(gpuHandle->ctx->isOnnx) {
+    CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+    CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+    CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+    CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+    CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+    return;
+  }
+
+  CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+  CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+}
+
 void NeuralNet::getOutput(
   ComputeHandle* gpuHandle,
   InputBuffers* inputBuffers,
@@ -2224,30 +2328,8 @@ void NeuralNet::getOutput(
   assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
   assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
 
-  for(int nIdx = 0; nIdx < batchSize; nIdx++) {
-    float* rowMaskInput = &inputBuffers->maskInputs[inputBuffers->singleMaskElts * nIdx];
-    float* rowSpatialInput = &inputBuffers->spatialInputs[inputBuffers->singleInputElts * nIdx];
-    float* rowGlobalInput = &inputBuffers->globalInputs[inputBuffers->singleInputGlobalElts * nIdx];
-    float* rowMetaInput = &inputBuffers->metaInputs[inputBuffers->singleInputMetaElts * nIdx];
-
-    const float* rowGlobal = inputBufs[nIdx]->rowGlobalBuf.data();
-    const float* rowSpatial = inputBufs[nIdx]->rowSpatialBuf.data();
-    const float* rowMeta = inputBufs[nIdx]->rowMetaBuf.data();
-    const bool hasRowMeta = inputBufs[nIdx]->hasRowMeta;
-    copy(rowGlobal, rowGlobal + numGlobalFeatures, rowGlobalInput);
-    std::copy(rowGlobal,rowGlobal+numGlobalFeatures,rowGlobalInput);
-    if(numMetaFeatures > 0) {
-      testAssert(rowMeta != NULL);
-      testAssert(hasRowMeta);
-      std::copy(rowMeta,rowMeta+numMetaFeatures,rowMetaInput);
-    }
-    else {
-      testAssert(!hasRowMeta);
-    }
-    SymmetryHelpers::copyInputsWithSymmetry(
-      rowSpatial, rowSpatialInput, 1, nnYLen, nnXLen, numSpatialFeatures, false, inputBufs[nIdx]->symmetry);
-    copy(rowSpatialInput, rowSpatialInput + inputBuffers->singleMaskElts, rowMaskInput);
-  }
+  for(int nIdx = 0; nIdx < batchSize; nIdx++)
+    packInputRow(inputBuffers, inputBufs[nIdx], nIdx, numSpatialFeatures, numGlobalFeatures, numMetaFeatures, nnXLen, nnYLen);
   if(perfEnabled) {
     preprocessMs = elapsedMilliseconds(preprocessStart);
     CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DStartEvent, h2dStream));
@@ -2272,41 +2354,7 @@ void NeuralNet::getOutput(
       if(numMetaFeatures > 0)
         assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
 
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      if(numMetaFeatures > 0) {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, stream));
-      }
-
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-
-      gpuHandle->exec->setInputShape("InputMask", maskInputDims);
-      gpuHandle->exec->setInputShape("InputSpatial", spatialInputDims);
-      gpuHandle->exec->setInputShape("InputGlobal", globalInputDims);
-
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-        if(numMetaFeatures > 0) {
-          CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
-        }
-
-  gpuHandle->maybeRecordLaunchInterval();
-  gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
-  if(perfEnabled)
-    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfInferenceDoneEvent, stream));
-
-        gpuHandle->exec->setInputShape("InputMask", maskInputDims);
-        gpuHandle->exec->setInputShape("InputSpatial", spatialInputDims);
-        gpuHandle->exec->setInputShape("InputGlobal", globalInputDims);
-
-        if(numMetaFeatures > 0) {
-          auto metaInputDims = gpuHandle->getBufferDynamicShape("InputMeta", batchSize);
-          gpuHandle->exec->setInputShape("InputMeta", metaInputDims);
-        }
-    }
+    enqueueInputCopies(gpuHandle, inputBuffers, batchSize, numMetaFeatures, h2dStream);
     if(perfEnabled)
       CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DEndEvent, h2dStream));
     CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->h2dDoneEvent, h2dStream));
@@ -2319,20 +2367,7 @@ void NeuralNet::getOutput(
     CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->inferDoneEvent, inferStream));
     CUDA_ERR("getOutput", cudaStreamWaitEvent(d2hStream, gpuHandle->inferDoneEvent, 0));
 
-    // Get outputs
-    if (isOnnx) {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-    } else {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
-    }
+    enqueueOutputCopies(gpuHandle, inputBuffers, batchSize, d2hStream);
     if(perfEnabled)
       CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfD2HEndEvent, d2hStream));
     CUDA_ERR("getOutput", cudaStreamSynchronize(d2hStream));
