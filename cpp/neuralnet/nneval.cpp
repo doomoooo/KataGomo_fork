@@ -2,6 +2,16 @@
 #include "../neuralnet/modelversion.h"
 #include "../core/globalperf.h"
 
+#ifdef __linux__
+#include <errno.h>
+#include <pthread.h>
+#include <sched.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 using namespace std;
 
 namespace {
@@ -12,6 +22,117 @@ static int canonicalGpuIdxForScheduling(int gpuIdx) {
 static vector<int> deriveLogicalSlotGpuIdxs(const vector<int>& gpuIdxByServerThread) {
   return gpuIdxByServerThread;
 }
+
+#ifdef __linux__
+static void logSchedulerThreadOsConfig(Logger* logger, const string& message) {
+  if(logger != NULL)
+    logger->write(message);
+}
+
+static vector<int> getCurrentThreadAffinityCpus() {
+  vector<int> cpus;
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  if(sched_getaffinity(0, sizeof(mask), &mask) != 0)
+    return cpus;
+  for(int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+    if(CPU_ISSET(cpu, &mask))
+      cpus.push_back(cpu);
+  }
+  return cpus;
+}
+
+static int chooseDedicatedSchedulerCpu() {
+  vector<int> cpus = getCurrentThreadAffinityCpus();
+  if(cpus.empty())
+    return -1;
+  return cpus.back();
+}
+
+static void excludeDedicatedSchedulerCpuFromCurrentThread(Logger* logger, int dedicatedCpu) {
+  if(dedicatedCpu < 0)
+    return;
+  vector<int> cpus = getCurrentThreadAffinityCpus();
+  if(cpus.size() <= 1)
+    return;
+
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  bool keptAnyCpu = false;
+  for(int cpu: cpus) {
+    if(cpu == dedicatedCpu)
+      continue;
+    CPU_SET(cpu, &mask);
+    keptAnyCpu = true;
+  }
+  if(!keptAnyCpu)
+    return;
+
+  if(sched_setaffinity(0, sizeof(mask), &mask) != 0) {
+    logSchedulerThreadOsConfig(
+      logger,
+      "Warning: failed to exclude scheduler CPU " + Global::intToString(dedicatedCpu) +
+      " from spawning thread affinity: " + string(strerror(errno))
+    );
+  }
+}
+
+static void configureCurrentThreadForScheduler(Logger* logger, int dedicatedCpu) {
+  pthread_setname_np(pthread_self(), "katago-nnsched");
+
+  if(dedicatedCpu >= 0) {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(dedicatedCpu, &mask);
+    int err = pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
+    if(err != 0) {
+      logSchedulerThreadOsConfig(
+        logger,
+        "Warning: failed to pin scheduler thread to CPU " + Global::intToString(dedicatedCpu) +
+        ": " + string(strerror(err))
+      );
+    }
+    else {
+      logSchedulerThreadOsConfig(
+        logger,
+        "Pinned TRT scheduler thread to dedicated CPU " + Global::intToString(dedicatedCpu)
+      );
+    }
+  }
+
+  int fifoPriority = sched_get_priority_max(SCHED_FIFO);
+  if(fifoPriority > 0) {
+    sched_param param;
+    param.sched_priority = std::max(1, fifoPriority - 1);
+    int err = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+    if(err == 0) {
+      logSchedulerThreadOsConfig(
+        logger,
+        "Raised TRT scheduler thread to SCHED_FIFO priority " + Global::intToString(param.sched_priority)
+      );
+      return;
+    }
+    logSchedulerThreadOsConfig(
+      logger,
+      "Warning: failed to raise TRT scheduler thread to SCHED_FIFO: " + string(strerror(err))
+    );
+  }
+
+  errno = 0;
+  id_t tid = (id_t)syscall(SYS_gettid);
+  if(setpriority(PRIO_PROCESS, tid, -20) == 0) {
+    logSchedulerThreadOsConfig(
+      logger,
+      "Raised TRT scheduler thread nice to -20"
+    );
+    return;
+  }
+  logSchedulerThreadOsConfig(
+    logger,
+    "Warning: failed to raise TRT scheduler thread nice: " + string(strerror(errno))
+  );
+}
+#endif
 }
 
 struct SchedulerState {
@@ -877,14 +998,14 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           NeuralNet::trtPackInputRow(buffer.serverBuf->inputBuffers, &benchmarkRequests[row], row, slot.gpuHandle);
           NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, buffer.serverBuf->inputBuffers, row);
         }
-        while(!NeuralNet::trtQueryInputCopiesDone(buffer.serverBuf->inputBuffers))
-          std::this_thread::yield();
+        while(!NeuralNet::trtQueryInputCopiesDone(buffer.serverBuf->inputBuffers)) {
+        }
 
         auto measureOnceMs = [&]() {
           auto startTime = std::chrono::steady_clock::now();
           NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, batchSize);
-          while(!NeuralNet::trtQueryInferenceDone(buffer.serverBuf->inputBuffers))
-            std::this_thread::yield();
+          while(!NeuralNet::trtQueryInferenceDone(buffer.serverBuf->inputBuffers)) {
+          }
           auto endTime = std::chrono::steady_clock::now();
           return std::chrono::duration<double,std::milli>(endTime - startTime).count();
         };
@@ -981,8 +1102,6 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     startupComplete = true;
 
     NNResultBuf* deferredRequest = nullptr;
-    int idleSpinIterations = 0;
-
     auto handleInferCompletion = [&](SchedulerState::SlotState& slot, SchedulerState::BufferState& buffer, int64_t nowNs) {
       SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
       uint64_t completedInferSpanId = 0;
@@ -1280,14 +1399,6 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       if(queryQueue.isReadOnly() && deferredRequest == nullptr && !state->openBatch.exists && allSlotsIdle && allBuffersFree)
         break;
 
-      if(!didWork) {
-        idleSpinIterations += 1;
-        if((idleSpinIterations & 0x3FF) == 0)
-          std::this_thread::yield();
-      }
-      else {
-        idleSpinIterations = 0;
-      }
     }
   }
   catch(const std::exception& e) {
@@ -1377,7 +1488,27 @@ void NNEvaluator::spawnServerThreads() {
     numServerThreadsStartingUp = 1;
     string randSeedThisThread = randSeed + ":NNEvalScheduler:" + Global::intToString(numServerThreadsEverSpawned);
     numServerThreadsEverSpawned++;
-    std::thread* thread = new std::thread(&NNEvaluator::serveTrtScheduler, this, randSeedThisThread);
+    int dedicatedSchedulerCpu = -1;
+#ifdef __linux__
+    dedicatedSchedulerCpu = chooseDedicatedSchedulerCpu();
+    if(dedicatedSchedulerCpu >= 0 && logger != NULL) {
+      logger->write(
+        "Preparing dedicated CPU " + Global::intToString(dedicatedSchedulerCpu) +
+        " for TRT scheduler thread"
+      );
+    }
+#endif
+    std::thread* thread = new std::thread(
+      [this, randSeedThisThread, dedicatedSchedulerCpu]() {
+#ifdef __linux__
+        configureCurrentThreadForScheduler(logger, dedicatedSchedulerCpu);
+#endif
+        serveTrtScheduler(randSeedThisThread);
+      }
+    );
+#ifdef __linux__
+    excludeDedicatedSchedulerCpuFromCurrentThread(logger, dedicatedSchedulerCpu);
+#endif
     serverThreads.push_back(thread);
   }
   else {
