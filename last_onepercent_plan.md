@@ -2489,6 +2489,24 @@ legacy worker-thread 路径仍然保留旧面板。
   - `nnBatches/s = 281.38`
   - `avgBatchSize = 6.99`
 
+#### 2026-03-11: benchmark 复核，先清空 GPU 占用
+
+- 上面这组 `3023.44 visits/s` 的 benchmark 后来确认是 **脏结果**。
+- 原因不是 shared-buffer scheduler 本身，而是验证时 GPU 上还残留着先前开启的 GTP 进程：
+  - `/home/wangyize/.katago/build/katago`
+- 在杀掉残留进程并确认 `nvidia-smi --query-compute-apps` 为空后，重新运行：
+  - `./run.sh --benchmark`
+- 干净环境下的新结果是：
+  - `visits/s = 6351.72`
+  - `nnEvals/s = 4242.28`
+  - `nnBatches/s = 607.06`
+  - `avgBatchSize = 6.99`
+- 这基本回到了本分支前面几次 benchmark 的量级，因此目前 **不能** 再把 shared-buffer 改造视作“已确认存在明显吞吐回退”。
+- 后续所有性能验证前，都应该先做：
+  - 检查 `nvidia-smi --query-compute-apps`
+  - 杀掉残留的 `run.sh/katago` 会话
+  - 再跑 benchmark 或 timeline 观察
+
 #### 当前 perf/spec 对齐状态
 
 - 这次 v2 shared-buffer 改造之后，旧的若干 `globalPerfProfile` 口径已经不再可信，至少包括：
