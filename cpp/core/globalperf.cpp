@@ -37,7 +37,7 @@ namespace {
   static constexpr size_t INFERENCE_EVENT_RING_CAPACITY = 4096;
   static constexpr size_t QUEUE_LENGTH_RING_CAPACITY = 4096;
   static constexpr size_t TIMELINE_SPAN_RING_CAPACITY = 8192;
-  static constexpr int64_t TIMELINE_WINDOW_NS = 100 * ONE_MILLISECOND_NS;
+  static constexpr int64_t TIMELINE_WINDOW_NS = 50 * ONE_MILLISECOND_NS;
   static constexpr size_t TIMELINE_SNAPSHOT_MAX_SPANS = 1024;
 
   struct CountDurationSegment {
@@ -212,6 +212,8 @@ namespace {
     atomic<int64_t> currentSearchStartNs;
     atomic<int> activeSearchCount;
     atomic<int64_t> sessionStartNs;
+    atomic<int64_t> timelineCaptureStartNs;
+    atomic<int64_t> timelineCaptureEndNs;
 
     mutex publisherMutex;
     condition_variable publisherCv;
@@ -244,6 +246,8 @@ namespace {
         currentSearchStartNs(0),
         activeSearchCount(0),
         sessionStartNs(0),
+        timelineCaptureStartNs(0),
+        timelineCaptureEndNs(0),
         publisherMutex(),
         publisherCv(),
         publisherThread(),
@@ -517,6 +521,8 @@ namespace {
     state.currentSearchStartNs.store(0, std::memory_order_relaxed);
     state.activeSearchCount.store(0, std::memory_order_relaxed);
     state.sessionStartNs.store(nowSteadyNs(), std::memory_order_relaxed);
+    state.timelineCaptureStartNs.store(0, std::memory_order_relaxed);
+    state.timelineCaptureEndNs.store(0, std::memory_order_relaxed);
     state.sendErrorCount.store(0, std::memory_order_relaxed);
     state.lastSendError.clear();
     state.lastErrorLogNs = 0;
@@ -562,6 +568,20 @@ namespace {
       if(value.compare_exchange_weak(current, next, std::memory_order_relaxed, std::memory_order_relaxed))
         return next;
     }
+  }
+
+  static void scheduleNextTimelineCaptureWindow(int64_t captureEndNs) {
+    RealtimeState& state = g_realtimeState;
+    const int64_t captureStartNs = captureEndNs - TIMELINE_WINDOW_NS;
+    state.timelineCaptureStartNs.store(captureStartNs, std::memory_order_relaxed);
+    state.timelineCaptureEndNs.store(captureEndNs, std::memory_order_relaxed);
+  }
+
+  static bool loadTimelineCaptureWindow(int64_t& captureStartNs, int64_t& captureEndNs) {
+    RealtimeState& state = g_realtimeState;
+    captureStartNs = state.timelineCaptureStartNs.load(std::memory_order_relaxed);
+    captureEndNs = state.timelineCaptureEndNs.load(std::memory_order_relaxed);
+    return captureEndNs > captureStartNs && captureEndNs > 0;
   }
 
   static json bucketArrayJson(const vector<double>& values, bool normalize) {
@@ -680,7 +700,12 @@ namespace {
     RealtimeState& state = g_realtimeState;
     const int64_t nowNs = nowSteadyNs();
     const int64_t windowStartNs = nowNs - ONE_SECOND_NS;
-    const int64_t timelineStartNs = nowNs - TIMELINE_WINDOW_NS;
+    int64_t timelineStartNs = nowNs;
+    int64_t timelineEndNs = nowNs;
+    if(!loadTimelineCaptureWindow(timelineStartNs, timelineEndNs)) {
+      timelineStartNs = nowNs;
+      timelineEndNs = nowNs;
+    }
     const int64_t unixMs = nowUnixMs();
     const int currentQueueLengthAtSnapshot = state.currentQueueLength.load(std::memory_order_relaxed);
     const int currentInferenceThreadActiveCountAtSnapshot =
@@ -793,7 +818,7 @@ namespace {
       }
 
       forEachRingSample(state.timelineSpans, [&](const TimelineSpanRealtimeSample& sample) {
-        if(sample.endNs < timelineStartNs || sample.startNs > nowNs)
+        if(sample.endNs < timelineStartNs || sample.startNs > timelineEndNs)
           return;
         timelineSpans.push_back(sample);
       });
@@ -925,7 +950,7 @@ namespace {
     snapshot["timeline"] = {
       {"encoding", "compact_v1"},
       {"range_start_ns", effectiveTimelineStartNs},
-      {"range_end_ns", nowNs},
+      {"range_end_ns", timelineEndNs},
       {"max_spans", TIMELINE_SNAPSHOT_MAX_SPANS},
       {"slots", timelineSlots},
       {"spans", timelineSamples},
@@ -1008,6 +1033,10 @@ namespace {
       string payload = snapshot.dump();
       if(fd >= 0)
         sendRealtimeSnapshot(fd, g_realtimeState.publisherSocketPath, payload);
+
+      const int64_t nextCaptureEndNs =
+        nowSteadyNs() + (int64_t)g_realtimeState.publisherIntervalMs * ONE_MILLISECOND_NS;
+      scheduleNextTimelineCaptureWindow(nextCaptureEndNs);
 
       unique_lock<mutex> lock(g_realtimeState.publisherMutex);
       if(g_realtimeState.publisherCv.wait_for(
@@ -1435,6 +1464,10 @@ void GlobalPerfProfile::recordRealtimeTimelineSpan(
     return;
   if(inferenceSlotIdx < 0 || spanId == 0)
     return;
+  int64_t captureStartNs = 0;
+  int64_t captureEndNs = 0;
+  if(!loadTimelineCaptureWindow(captureStartNs, captureEndNs))
+    return;
   InferenceRealtimeSlot* slot = getInferenceSlotOrNull(inferenceSlotIdx);
   if(slot == nullptr)
     return;
@@ -1442,6 +1475,12 @@ void GlobalPerfProfile::recordRealtimeTimelineSpan(
     startNs = nowSteadyNs();
   if(endNs < startNs)
     endNs = startNs;
+  if(endNs < captureStartNs || startNs > captureEndNs)
+    return;
+  if(startNs < captureStartNs)
+    startNs = captureStartNs;
+  if(endNs > captureEndNs)
+    endNs = captureEndNs;
   writeRingSample(g_realtimeState.timelineSpans, TimelineSpanRealtimeSample{
     0,
     spanId,
@@ -1456,6 +1495,20 @@ void GlobalPerfProfile::recordRealtimeTimelineSpan(
     batchUid,
     rowIdx
   });
+}
+
+bool GlobalPerfProfile::wantsRealtimeTimelineSpan(int64_t startNs, int64_t endNs) {
+  if(!isRealtimeRunning())
+    return false;
+  if(startNs <= 0)
+    startNs = nowSteadyNs();
+  if(endNs < startNs)
+    endNs = startNs;
+  int64_t captureStartNs = 0;
+  int64_t captureEndNs = 0;
+  if(!loadTimelineCaptureWindow(captureStartNs, captureEndNs))
+    return false;
+  return !(endNs < captureStartNs || startNs > captureEndNs);
 }
 
 void GlobalPerfProfile::changeGpuStreamActiveCount(int inferenceThreadIdx, int gpuIdx, int delta) {

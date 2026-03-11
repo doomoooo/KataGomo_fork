@@ -97,6 +97,7 @@ namespace GlobalPerfProfile {
     int64_t startNs,
     int64_t endNs
   );
+  bool wantsRealtimeTimelineSpan(int64_t startNs, int64_t endNs);
   void changeGpuStreamActiveCount(int inferenceThreadIdx, int gpuIdx, int delta);
   void recordInferenceLaunchInterval(double launchIntervalMs);
 

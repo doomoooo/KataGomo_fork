@@ -677,7 +677,7 @@ HTML_PAGE = """<!doctype html>
       <div class="timeline-top">
         <div class="timeline-titlebox">
           <h2>调度线程 / CUDA Stream 时间线</h2>
-          <p id="timeline-hint" class="hint">最近约 100ms 内的 completed spans。默认聚焦最近 80ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。</p>
+          <p id="timeline-hint" class="hint">每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。</p>
         </div>
         <div class="timeline-controls">
           <label>
@@ -793,7 +793,7 @@ HTML_PAGE = """<!doctype html>
     const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
     const timelineUiState = {
       selectedSlotKey: null,
-      spanNs: 80e6,
+      spanNs: 50e6,
       centerNs: null,
       followLatest: true,
       drag: null,
@@ -917,7 +917,7 @@ HTML_PAGE = """<!doctype html>
         ? '过去 1 秒不同 active infer graph 数的时间占比，不含 H2D / D2H stream'
         : '过去 1 秒不同活跃 stream 数的时间占比';
       document.getElementById('timeline-hint').textContent = single
-        ? '最近约 100ms 内的 completed spans。默认聚焦最近 80ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
+        ? '每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
         : 'timeline 当前主要服务于 TRT single-scheduler 路径；其他后端暂未接线。';
     }
 

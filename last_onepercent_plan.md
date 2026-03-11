@@ -1896,7 +1896,7 @@ legacy worker-thread 路径仍然保留旧面板。
   - 其他 slot 降低透明度
 - H2D / Infer / D2H lane 只显示当前选中 slot
 
-#### 4. backend 为 timeline 发布最近约 100ms 的 completed spans
+#### 4. backend 为 timeline 发布每秒 1 个约 50ms 的 sampled 窗口
 
 `globalPerfProfile` 的 realtime 快照新增 `timeline`：
 
@@ -1907,19 +1907,12 @@ legacy worker-thread 路径仍然保留旧面板。
 - `slots`
 - `spans`
 
-每条 span 带：
+当前最终编码是 `compact_v1`：
 
-- `id`
-- `slot`
-- `gpu`
-- `lane`
-- `stage`
-- `batch_uid`
-- `row`
-- `start_ns`
-- `end_ns`
-- `dep0`
-- `dep1`
+- 每条 span 不再发带重复键名的 object
+- 改成 `[id, slot, lane, stage, batchUid, row, startOffsetNs, endOffsetNs, dep0, dep1]`
+- `start/end` 都相对 `timeline.range_start_ns`
+- 前端在 `monitor_page.py` 里解码回可视化对象
 
 当前采样点如下：
 
@@ -1977,19 +1970,19 @@ legacy worker-thread 路径仍然保留旧面板。
 - `/api/state` 里保留的是搜索前的 startup 快照
 - 新的活跃搜索快照没有成功替换它
 
-因此 realtime timeline 的传输策略收紧为：
+因此 realtime timeline 的最终策略改成：
 
-- 只发送最近约 `100ms`
-- timeline 改成 `compact_v1` 编码
-  - 每个 span 不再是带重复键名的 JSON object
-  - 改成 `[id, slot, lane, stage, batchUid, row, startOffsetNs, endOffsetNs, dep0, dep1]`
-  - `start/end` 相对 `timeline.range_start_ns` 编码，前端在 `monitor_page.py` 里解码
-- 每次 snapshot 最多保留 `1024` 条最新 span
-- `timeline.range_start_ns` 改成实际保留下来的最早 span 起点
-- 快照里新增 `timeline.encoding` / `timeline.max_spans` / `timeline.dropped_spans`
-- 页面 summary 会显示 `clipped N`，用于提示当前视窗是否触发截断
+- 1 秒常规统计照常发
+- timeline 只在每个 1 秒周期的末尾打开一个约 `50ms` 的 capture window
+- 只有落在这个 window 内、或与它相交的 span 才会进入 realtime ring
+- `nneval.cpp` 在生成 span id 前会先问 `GlobalPerfProfile::wantsRealtimeTimelineSpan(startNs, endNs)`
+  - window 外不再持续写 timeline ring
+  - window 外也不再无条件生成 row-level preprocess / H2D span id
+- timeline 继续使用 `compact_v1` 编码
+- 每次 snapshot 最多保留 `1024` 条 span
+- 快照里带 `timeline.encoding` / `timeline.max_spans` / `timeline.dropped_spans`
 
-这样做的目的不是“进一步减少可视信息”，而是把相同的 100ms timeline 信息压进一个稳定可发送的单包里。
+这样就把 timeline 从“持续 tracing”收成了“1Hz 指标 + 每秒一个短时样本窗口”。
 
 #### 7. 当前已知限制
 
@@ -2001,9 +1994,9 @@ legacy worker-thread 路径仍然保留旧面板。
 
 #### 8. 2026-03-11 晚间复测结果
 
-第一次把窗口收紧到 `100ms` 但仍沿用 object JSON 时，realtime 已经恢复，但在活跃搜索下 timeline 仍会被裁得过短。
+第一次把窗口收紧到 `100ms` 并切到 `compact_v1` 之后，realtime 已经恢复，但这仍然是持续 timeline 记录，不符合“每秒附带一个短时快照”的目标。
 
-随后切到 `compact_v1` 之后，用实际链路复跑：
+最终版再加上 1 秒周期内的 `50ms` capture window 之后，用实际链路复跑：
 
 - `python3 python/monitor_page.py --host 127.0.0.1 --port 8765`
 - `./run.sh --gtp --katago-bin ./cpp/build/katago`
@@ -2012,7 +2005,7 @@ legacy worker-thread 路径仍然保留旧面板。
   - `clear_board`
   - `kata-analyze 100`
 - 用 Playwright 抓页：
-  - `npx playwright screenshot --device="Desktop Chrome" http://127.0.0.1:8765 /tmp/monitor_compact.png`
+  - `npx playwright screenshot --device="Desktop Chrome" http://127.0.0.1:8765 /tmp/monitor_sampled.png`
 
 这轮端到端结果已经正常：
 
@@ -2022,12 +2015,14 @@ legacy worker-thread 路径仍然保留旧面板。
 - 实时搜索指标正常
   - `visits/s ~= 3982`
   - `nnBatches/s ~= 503`
-- timeline 保住了完整 `100.0 ms` 视窗
+- timeline 现在是单独的 `50.0 ms` sampled window
   - `timeline.encoding = compact_v1`
-  - `len(timeline.spans) = 851`
+  - `len(timeline.spans) = 437`
   - `timeline.dropped_spans = 0`
   - `timeline.max_spans = 1024`
-- Playwright 截图确认页面能正确解码 compact spans，并把时间线渲染成完整的约 `80ms` 默认视窗
+- HTTP 实际 `Content-Length = 41027`
+  - 说明这份 sampled snapshot 已经稳定压回约 `41 KB`
+- Playwright 截图确认页面能正确解码 compact spans，并把时间线渲染成完整的 `50ms` 默认视窗
 
 #### 9. 本轮验证
 
