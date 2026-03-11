@@ -141,6 +141,46 @@ namespace NeuralNet {
     std::vector<NNOutput*>& outputs
   );
 
+#ifdef USE_TENSORRT_BACKEND
+  // TensorRT-only async slot helpers used by the overlapping scheduler design.
+  // These preserve the existing buffer ownership model:
+  // - scheduler packs one request row into a slot's pinned host buffers
+  // - scheduler may enqueue row-level H2D copies incrementally
+  // - scheduler launches infer and D2H as separate async phases
+  // - scheduler later unpacks completed rows back into NNOutput
+  void trtPackInputRow(
+    InputBuffers* buffers,
+    const NNResultBuf* inputBuf,
+    int rowIdx,
+    ComputeHandle* computeHandle
+  );
+  void trtEnqueueInputRowCopy(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int rowIdx
+  );
+  void trtLaunchInferenceAsync(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int batchSize,
+    const ComputeHandle* dependencyHandle
+  );
+  bool trtQueryInferenceDone(ComputeHandle* computeHandle);
+  void trtEnqueueOutputCopiesAsync(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int batchSize
+  );
+  bool trtQueryOutputCopiesDone(ComputeHandle* computeHandle);
+  void trtUnpackOutputRow(
+    InputBuffers* buffers,
+    const NNResultBuf* inputBuf,
+    NNOutput* output,
+    int rowIdx,
+    ComputeHandle* computeHandle
+  );
+#endif
+
 
   //FOR TESTING -----------------------------------------------------------------------
   //For all of the below, the input buffers must have exactly the size expected of the input for the operation.
