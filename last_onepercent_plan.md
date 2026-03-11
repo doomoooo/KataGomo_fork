@@ -1840,3 +1840,200 @@ scheduler 路径下只在 infer graph 真正 running 时加减：
 - 决定 `cuda_stream_active_time_share_by_gpu` 究竟要：
   - 继续表示 infer stream 并发
   - 还是补齐 H2D / D2H 之后，真的表示所有 stream 活跃数
+
+### 2026-03-11: single-scheduler 监控重建 v1
+
+这轮把 single-scheduler 路径的监控重新接起来了，目标不是“把旧线程时代的图勉强继续用”，而是明确切到新的 spec。
+
+#### 1. realtime 快照现在显式暴露推理模式
+
+- `globalPerfProfile` 的 realtime `status` 新增：
+  - `inference_mode = "single_scheduler_slots"` 或 `"legacy_worker_threads"`
+- `spawnServerThreads()` 在决定是否启用 TRT scheduler 后，会立刻调用：
+  - `GlobalPerfProfile::configureInferenceMode(useTrtScheduler)`
+
+这样前端不需要再猜“当前图表应该按 thread 语义解释，还是按 logical slot 语义解释”。
+
+#### 2. `monitor_page.py` 已按新语义切换标题和卡片
+
+single-scheduler 下：
+
+- “活跃推理线程数” 改成：
+  - `占用推理槽位数`
+- “每 GPU 的 cudaStream 活跃数” 改成：
+  - `每 GPU 的运行中推理图数`
+- “GPU Batch 分布” 改成：
+  - `按推理工作量加权的 GPU Batch 分布`
+- “推理阶段耗时” 面板不再假装 6 个 phase 都有效：
+  - 只显示 `infer_ms`
+  - 并明确标注它是 scheduler 的 `equivalent work / ETA` 近似，不是 CUDA event 实测
+
+legacy worker-thread 路径仍然保留旧面板。
+
+#### 3. 新增一个 nsight 风格的短时 timeline 面板
+
+前端新增了一整行 timeline 面板，用来观察：
+
+- `Scheduler Thread`
+- 选中 slot 的 `H2D`
+- 选中 slot 的 `Infer`
+- 选中 slot 的 `D2H`
+
+交互：
+
+- 默认跟随最近 `80ms`
+- 支持 slot 选择
+- 支持鼠标拖拽左右平移
+- 支持滚轮水平缩放
+- `回到最新` 可以重新跟随尾部
+
+显示风格：
+
+- 阶段用色块表示
+- 依赖用箭头表示
+- scheduler lane 会显示所有 slot 的 preprocess / postprocess
+  - 当前选中 slot 高亮
+  - 其他 slot 降低透明度
+- H2D / Infer / D2H lane 只显示当前选中 slot
+
+#### 4. backend 为 timeline 发布最近约 100ms 的 completed spans
+
+`globalPerfProfile` 的 realtime 快照新增 `timeline`：
+
+- `range_start_ns`
+- `range_end_ns`
+- `max_spans`
+- `dropped_spans`
+- `slots`
+- `spans`
+
+每条 span 带：
+
+- `id`
+- `slot`
+- `gpu`
+- `lane`
+- `stage`
+- `batch_uid`
+- `row`
+- `start_ns`
+- `end_ns`
+- `dep0`
+- `dep1`
+
+当前采样点如下：
+
+- `preprocess`
+  - scheduler thread 上围绕 `symmetry` 决策 + `trtPackInputRow()` 的真实 CPU span
+- `h2d`
+  - row-level `trtEnqueueInputRowCopy()` 的 enqueue proxy
+  - 目前没有为每个 row 单独创建 completion event
+  - 所以这条 lane 的 block 主要用于表达顺序和大致占用，不是严格 copy-engine 实测
+- `infer`
+  - 从 slot 真正进入 `RunningInfer` 到 `trtQueryInferenceDone()` 发现完成
+- `d2h`
+  - 从 infer 完成时刻到 `trtQueryOutputCopiesDone()` 发现完成
+- `postprocess`
+  - scheduler thread 上围绕 `trtUnpackOutputRow()` + notify 的真实 CPU span
+
+#### 5. 依赖箭头的当前语义
+
+目前会画这些依赖：
+
+- `preprocess -> h2d`
+- `last h2d -> infer`
+- `marker infer -> dependent infer`
+  - 只有当 source / target span 都在当前视窗内时才会画出来
+- `infer -> d2h`
+- `d2h -> postprocess`
+
+这已经足够看清：
+
+- scheduler thread 是否被 preprocess / postprocess 撞击关键路径
+- H2D 是否在 infer 之前被平滑铺开
+- 某个 slot 的 infer 是否在等 marker slot
+- 单 slot 的 `H2D -> Infer -> D2H -> Postprocess` 顺序是否符合设计
+
+#### 6. 2026-03-11 晚间修正：timeline realtime payload 不能继续按 3 秒发送
+
+在实际用 `run.sh --gtp` + `kata-analyze 100` + Playwright 看页时，前端本身工作正常，但页面停在搜索开始前的全 0 旧快照。
+
+这更像 realtime sender 的 payload 失效，而不是前端渲染或搜索线程没有记账：
+
+- `globalPerfProfile` 的 realtime 传输是单个 Unix datagram JSON snapshot
+- 当 single-scheduler timeline 打开后，`preprocess/h2d` 是按 row 记 span，`infer/d2h/postprocess` 是按 batch 记 span
+- 旧实现发“最近 3 秒”窗口，`TIMELINE_SPAN_RING_CAPACITY` 还是 `8192`
+- 一个 timeline span 的 JSON 大约在 `~156 bytes`
+- 只算 timeline 部分，`8192 * 156 ~= 1.28 MB`
+
+这已经远大于 Unix datagram 在工程上可承受的单包体积，结果大概率会变成：
+
+- `sendto()` 因 payload 过大直接失败，监控页停留在旧快照
+- 或者接收端拿到截断包，JSON 解析失败
+
+这和实际现象一致：
+
+- 页面能打开
+- `/api/state` 里保留的是搜索前的 startup 快照
+- 新的活跃搜索快照没有成功替换它
+
+因此 realtime timeline 的传输策略收紧为：
+
+- 只发送最近约 `100ms`
+- timeline 改成 `compact_v1` 编码
+  - 每个 span 不再是带重复键名的 JSON object
+  - 改成 `[id, slot, lane, stage, batchUid, row, startOffsetNs, endOffsetNs, dep0, dep1]`
+  - `start/end` 相对 `timeline.range_start_ns` 编码，前端在 `monitor_page.py` 里解码
+- 每次 snapshot 最多保留 `1024` 条最新 span
+- `timeline.range_start_ns` 改成实际保留下来的最早 span 起点
+- 快照里新增 `timeline.encoding` / `timeline.max_spans` / `timeline.dropped_spans`
+- 页面 summary 会显示 `clipped N`，用于提示当前视窗是否触发截断
+
+这样做的目的不是“进一步减少可视信息”，而是把相同的 100ms timeline 信息压进一个稳定可发送的单包里。
+
+#### 7. 当前已知限制
+
+- row-level H2D 仍然是 enqueue proxy，不是严格 GPU completion span
+- timeline 只对 TRT single-scheduler 路径接线
+- 单页上显示的是“一个 scheduler thread + 一个选中 slot 的 3 条 stream”
+  - 不是全卡全 slot 同时展开
+- 如果依赖源 span 不在当前时间窗里，箭头不会跨窗显示
+
+#### 8. 2026-03-11 晚间复测结果
+
+第一次把窗口收紧到 `100ms` 但仍沿用 object JSON 时，realtime 已经恢复，但在活跃搜索下 timeline 仍会被裁得过短。
+
+随后切到 `compact_v1` 之后，用实际链路复跑：
+
+- `python3 python/monitor_page.py --host 127.0.0.1 --port 8765`
+- `./run.sh --gtp --katago-bin ./cpp/build/katago`
+- 向 GTP stdin 发送：
+  - `boardsize 19`
+  - `clear_board`
+  - `kata-analyze 100`
+- 用 Playwright 抓页：
+  - `npx playwright screenshot --device="Desktop Chrome" http://127.0.0.1:8765 /tmp/monitor_compact.png`
+
+这轮端到端结果已经正常：
+
+- `/api/state` 连续刷新
+  - `receiver.received_count = 33`
+  - `latest.sequence = 33`
+- 实时搜索指标正常
+  - `visits/s ~= 3982`
+  - `nnBatches/s ~= 503`
+- timeline 保住了完整 `100.0 ms` 视窗
+  - `timeline.encoding = compact_v1`
+  - `len(timeline.spans) = 851`
+  - `timeline.dropped_spans = 0`
+  - `timeline.max_spans = 1024`
+- Playwright 截图确认页面能正确解码 compact spans，并把时间线渲染成完整的约 `80ms` 默认视窗
+
+#### 9. 本轮验证
+
+- `cmake --build cpp/build --parallel 8 --target katago`
+  - 通过
+- `python3 -m py_compile python/monitor_page.py`
+  - 通过
+- `run.sh --gtp` + `kata-analyze 100` + Playwright screenshot
+  - 已完成，页面和 `/api/state` 均正常更新

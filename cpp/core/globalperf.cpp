@@ -36,6 +36,9 @@ namespace {
   static constexpr size_t INFERENCE_BATCH_RING_CAPACITY = 2048;
   static constexpr size_t INFERENCE_EVENT_RING_CAPACITY = 4096;
   static constexpr size_t QUEUE_LENGTH_RING_CAPACITY = 4096;
+  static constexpr size_t TIMELINE_SPAN_RING_CAPACITY = 8192;
+  static constexpr int64_t TIMELINE_WINDOW_NS = 100 * ONE_MILLISECOND_NS;
+  static constexpr size_t TIMELINE_SNAPSHOT_MAX_SPANS = 1024;
 
   struct CountDurationSegment {
     double durationSeconds;
@@ -143,6 +146,21 @@ namespace {
     double postprocessMs = 0.0;
   };
 
+  struct TimelineSpanRealtimeSample {
+    uint64_t sequence = 0;
+    uint64_t spanId = 0;
+    int64_t startNs = 0;
+    int64_t endNs = 0;
+    int inferenceSlotIdx = -1;
+    int gpuIdx = -1;
+    int lane = 0;
+    int stage = 0;
+    uint64_t dependencySpanId0 = 0;
+    uint64_t dependencySpanId1 = 0;
+    uint64_t batchUid = 0;
+    int rowIdx = -1;
+  };
+
   struct SearchRealtimeSlot {
     std::atomic<uint64_t> totalVisits;
     VersionedRingBuffer<SearchLoopRealtimeSample, SEARCH_LOOP_RING_CAPACITY> searchLoops;
@@ -178,6 +196,7 @@ namespace {
     vector<unique_ptr<InferenceRealtimeSlot>> inferenceSlots;
     vector<pair<int, shared_ptr<std::atomic<int>>>> gpuStreamCounts;
     VersionedRingBuffer<DeltaEventSample, QUEUE_LENGTH_RING_CAPACITY> queueLengthEvents;
+    VersionedRingBuffer<TimelineSpanRealtimeSample, TIMELINE_SPAN_RING_CAPACITY> timelineSpans;
 
     atomic<uint64_t> retiredSearchVisits;
     atomic<uint64_t> retiredInferenceRows;
@@ -187,6 +206,7 @@ namespace {
     atomic<int> currentSearchThreadCount;
     atomic<int> currentQueueLength;
     atomic<int> currentInferenceThreadActiveCount;
+    bool inferenceSingleSchedulerMode;
 
     atomic<int64_t> totalCompletedSearchNs;
     atomic<int64_t> currentSearchStartNs;
@@ -211,6 +231,7 @@ namespace {
         inferenceSlots(),
         gpuStreamCounts(),
         queueLengthEvents(),
+        timelineSpans(),
         retiredSearchVisits(0),
         retiredInferenceRows(0),
         retiredInferenceBatches(0),
@@ -218,6 +239,7 @@ namespace {
         currentSearchThreadCount(0),
         currentQueueLength(0),
         currentInferenceThreadActiveCount(0),
+        inferenceSingleSchedulerMode(false),
         totalCompletedSearchNs(0),
         currentSearchStartNs(0),
         activeSearchCount(0),
@@ -482,6 +504,7 @@ namespace {
     state.inferenceSlots.clear();
     state.gpuStreamCounts.clear();
     resetRing(state.queueLengthEvents);
+    resetRing(state.timelineSpans);
     state.retiredSearchVisits.store(0, std::memory_order_relaxed);
     state.retiredInferenceRows.store(0, std::memory_order_relaxed);
     state.retiredInferenceBatches.store(0, std::memory_order_relaxed);
@@ -489,6 +512,7 @@ namespace {
     state.currentSearchThreadCount.store(0, std::memory_order_relaxed);
     state.currentQueueLength.store(0, std::memory_order_relaxed);
     state.currentInferenceThreadActiveCount.store(0, std::memory_order_relaxed);
+    state.inferenceSingleSchedulerMode = false;
     state.totalCompletedSearchNs.store(0, std::memory_order_relaxed);
     state.currentSearchStartNs.store(0, std::memory_order_relaxed);
     state.activeSearchCount.store(0, std::memory_order_relaxed);
@@ -656,6 +680,7 @@ namespace {
     RealtimeState& state = g_realtimeState;
     const int64_t nowNs = nowSteadyNs();
     const int64_t windowStartNs = nowNs - ONE_SECOND_NS;
+    const int64_t timelineStartNs = nowNs - TIMELINE_WINDOW_NS;
     const int64_t unixMs = nowUnixMs();
     const int currentQueueLengthAtSnapshot = state.currentQueueLength.load(std::memory_order_relaxed);
     const int currentInferenceThreadActiveCountAtSnapshot =
@@ -685,9 +710,11 @@ namespace {
     uint64_t windowBatches = 0;
     uint64_t windowBatchSizeSum = 0;
     vector<pair<int, shared_ptr<std::atomic<int>>>> gpuCounters;
+    vector<pair<int,int>> inferenceSlotConfigs;
     vector<int> gpuStreamCountsAtSnapshot;
     vector<vector<DeltaEventSample>> streamEventsByGpu;
     vector<vector<double>> gpuBatchTimeBySizeByGpu;
+    vector<TimelineSpanRealtimeSample> timelineSpans;
 
     {
       lock_guard<mutex> lock(state.configMutex);
@@ -723,6 +750,7 @@ namespace {
       });
 
       for(const unique_ptr<InferenceRealtimeSlot>& slot: state.inferenceSlots) {
+        inferenceSlotConfigs.push_back(make_pair(slot->gpuIdx, (int)inferenceSlotConfigs.size()));
         totalRows += slot->totalRows.load(std::memory_order_relaxed);
         totalBatches += slot->totalBatches.load(std::memory_order_relaxed);
         totalBatchSizeSum += slot->totalBatchSizeSum.load(std::memory_order_relaxed);
@@ -763,6 +791,12 @@ namespace {
           }
         });
       }
+
+      forEachRingSample(state.timelineSpans, [&](const TimelineSpanRealtimeSample& sample) {
+        if(sample.endNs < timelineStartNs || sample.startNs > nowNs)
+          return;
+        timelineSpans.push_back(sample);
+      });
     }
 
     queueTimeShareBuckets = computeTimeShareBuckets(
@@ -846,8 +880,57 @@ namespace {
     status["interval_ms"] = state.publisherIntervalMs;
     status["send_error_count"] = state.sendErrorCount.load(std::memory_order_relaxed);
     status["last_send_error"] = state.lastSendError;
+    status["inference_mode"] = state.inferenceSingleSchedulerMode ? "single_scheduler_slots" : "legacy_worker_threads";
     status["session_age_s"] = (double)(nowNs - state.sessionStartNs.load(std::memory_order_relaxed)) / 1e9;
     snapshot["status"] = status;
+
+    sort(timelineSpans.begin(), timelineSpans.end(), [](const TimelineSpanRealtimeSample& a, const TimelineSpanRealtimeSample& b) {
+      if(a.startNs != b.startNs)
+        return a.startNs < b.startNs;
+      return a.spanId < b.spanId;
+    });
+    size_t droppedTimelineSpans = 0;
+    if(timelineSpans.size() > TIMELINE_SNAPSHOT_MAX_SPANS) {
+      droppedTimelineSpans = timelineSpans.size() - TIMELINE_SNAPSHOT_MAX_SPANS;
+      timelineSpans.erase(
+        timelineSpans.begin(),
+        timelineSpans.begin() + (ptrdiff_t)droppedTimelineSpans
+      );
+    }
+    int64_t effectiveTimelineStartNs = timelineStartNs;
+    if(!timelineSpans.empty())
+      effectiveTimelineStartNs = std::max(timelineStartNs, timelineSpans.front().startNs);
+    json timelineSlots = json::array();
+    for(size_t slotIdx = 0; slotIdx < inferenceSlotConfigs.size(); slotIdx++) {
+      timelineSlots.push_back({
+        {"slot", (int)slotIdx},
+        {"gpu", inferenceSlotConfigs[slotIdx].first}
+      });
+    }
+    json timelineSamples = json::array();
+    for(const TimelineSpanRealtimeSample& sample: timelineSpans) {
+      timelineSamples.push_back(json::array({
+        sample.spanId,
+        sample.inferenceSlotIdx,
+        sample.lane,
+        sample.stage,
+        sample.batchUid,
+        sample.rowIdx,
+        sample.startNs - effectiveTimelineStartNs,
+        sample.endNs - effectiveTimelineStartNs,
+        sample.dependencySpanId0,
+        sample.dependencySpanId1
+      }));
+    }
+    snapshot["timeline"] = {
+      {"encoding", "compact_v1"},
+      {"range_start_ns", effectiveTimelineStartNs},
+      {"range_end_ns", nowNs},
+      {"max_spans", TIMELINE_SNAPSHOT_MAX_SPANS},
+      {"slots", timelineSlots},
+      {"spans", timelineSamples},
+      {"dropped_spans", droppedTimelineSpans}
+    };
     return snapshot;
   }
 
@@ -1026,6 +1109,11 @@ void GlobalPerfProfile::configureSearchSlots(int numThreads) {
   g_realtimeState.searchSlots.reserve((size_t)numThreads);
   for(int i = 0; i < numThreads; i++)
     g_realtimeState.searchSlots.push_back(std::make_unique<SearchRealtimeSlot>());
+}
+
+void GlobalPerfProfile::configureInferenceMode(bool singleSchedulerLogicalSlots) {
+  lock_guard<mutex> lock(g_realtimeState.configMutex);
+  g_realtimeState.inferenceSingleSchedulerMode = singleSchedulerLogicalSlots;
 }
 
 void GlobalPerfProfile::configureInferenceSlots(const vector<int>& gpuIdxByServerThread) {
@@ -1327,6 +1415,46 @@ void GlobalPerfProfile::recordRealtimeInferenceBatch(
     inferMs,
     d2hMs,
     postprocessMs
+  });
+}
+
+void GlobalPerfProfile::recordRealtimeTimelineSpan(
+  int inferenceSlotIdx,
+  int gpuIdx,
+  TimelineLane lane,
+  TimelineStage stage,
+  uint64_t spanId,
+  uint64_t dependencySpanId0,
+  uint64_t dependencySpanId1,
+  uint64_t batchUid,
+  int rowIdx,
+  int64_t startNs,
+  int64_t endNs
+) {
+  if(!isRealtimeRunning())
+    return;
+  if(inferenceSlotIdx < 0 || spanId == 0)
+    return;
+  InferenceRealtimeSlot* slot = getInferenceSlotOrNull(inferenceSlotIdx);
+  if(slot == nullptr)
+    return;
+  if(startNs <= 0)
+    startNs = nowSteadyNs();
+  if(endNs < startNs)
+    endNs = startNs;
+  writeRingSample(g_realtimeState.timelineSpans, TimelineSpanRealtimeSample{
+    0,
+    spanId,
+    startNs,
+    endNs,
+    inferenceSlotIdx,
+    gpuIdx < 0 ? slot->gpuIdx : gpuIdx,
+    (int)lane,
+    (int)stage,
+    dependencySpanId0,
+    dependencySpanId1,
+    batchUid,
+    rowIdx
   });
 }
 

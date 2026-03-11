@@ -57,7 +57,7 @@ HTML_PAGE = """<!doctype html>
       height: 100vh;
       padding: 10px;
       display: grid;
-      grid-template-rows: 72px 86px minmax(0, 1fr);
+      grid-template-rows: 72px 86px 220px minmax(0, 1fr);
       gap: 10px;
     }
     .topbar {
@@ -113,7 +113,7 @@ HTML_PAGE = """<!doctype html>
     }
     .status-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 6px;
       height: 100%;
     }
@@ -167,6 +167,143 @@ HTML_PAGE = """<!doctype html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .timeline-shell {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .timeline-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      margin-bottom: 8px;
+    }
+    .timeline-titlebox .hint {
+      margin-bottom: 0;
+      min-height: auto;
+    }
+    .timeline-controls {
+      display: grid;
+      grid-auto-flow: column;
+      gap: 8px;
+      align-items: center;
+      justify-content: end;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .timeline-controls label {
+      display: grid;
+      gap: 4px;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .timeline-controls select, .timeline-controls button {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 9px;
+      padding: 6px 8px;
+    }
+    .timeline-controls button {
+      cursor: pointer;
+    }
+    .timeline-summary {
+      min-width: 172px;
+      text-align: right;
+      font-family: var(--mono);
+      color: var(--muted);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .timeline-view {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.58)),
+        linear-gradient(90deg, rgba(15,118,110,0.04), rgba(29,78,216,0.04));
+      overflow: hidden;
+      position: relative;
+      cursor: grab;
+    }
+    .timeline-view.dragging {
+      cursor: grabbing;
+    }
+    .timeline-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      user-select: none;
+    }
+    .timeline-axis {
+      stroke: rgba(23,32,42,0.18);
+      stroke-width: 1;
+    }
+    .timeline-grid {
+      stroke: rgba(23,32,42,0.12);
+      stroke-width: 1;
+      stroke-dasharray: 3 4;
+    }
+    .timeline-lane-divider {
+      stroke: rgba(23,32,42,0.08);
+      stroke-width: 1;
+    }
+    .timeline-label {
+      fill: var(--muted);
+      font-size: 10px;
+      font-family: var(--mono);
+    }
+    .timeline-lane-label {
+      fill: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .timeline-block {
+      stroke: rgba(23,32,42,0.18);
+      stroke-width: 1;
+    }
+    .timeline-block-label {
+      fill: rgba(255,255,255,0.94);
+      font-size: 9px;
+      font-family: var(--mono);
+      pointer-events: none;
+    }
+    .timeline-arrow {
+      fill: none;
+      stroke: rgba(23,32,42,0.42);
+      stroke-width: 1.2;
+      stroke-linecap: round;
+    }
+    .timeline-legend {
+      position: absolute;
+      right: 10px;
+      top: 8px;
+      display: flex;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.74);
+      border: 1px solid rgba(23,32,42,0.08);
+      font-size: 9px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .timeline-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .timeline-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
     }
     .dashboard {
       display: grid;
@@ -349,6 +486,22 @@ HTML_PAGE = """<!doctype html>
       gap: 6px;
       min-height: 0;
     }
+    .panel-stack {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 6px;
+      min-height: 0;
+      height: 100%;
+    }
+    .panel-note {
+      padding: 7px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.68);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.35;
+    }
     .pdf-card {
       padding: 7px 8px;
       border-radius: 10px;
@@ -491,7 +644,7 @@ HTML_PAGE = """<!doctype html>
     }
     @media (max-width: 1500px) {
       .wrap {
-        grid-template-rows: 68px 78px minmax(0, 1fr);
+        grid-template-rows: 68px 78px 206px minmax(0, 1fr);
         gap: 8px;
         padding: 8px;
       }
@@ -520,6 +673,24 @@ HTML_PAGE = """<!doctype html>
 
     <section id="metrics" class="metric-grid"></section>
 
+    <section class="panel timeline-shell">
+      <div class="timeline-top">
+        <div class="timeline-titlebox">
+          <h2>调度线程 / CUDA Stream 时间线</h2>
+          <p id="timeline-hint" class="hint">最近约 100ms 内的 completed spans。默认聚焦最近 80ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。</p>
+        </div>
+        <div class="timeline-controls">
+          <label>
+            观察 Slot
+            <select id="timeline-slot-select"></select>
+          </label>
+          <button id="timeline-latest-btn" type="button">回到最新</button>
+          <div id="timeline-summary" class="timeline-summary">等待数据</div>
+        </div>
+      </div>
+      <div id="timeline-view" class="timeline-view"></div>
+    </section>
+
     <section class="dashboard">
       <div class="panel tile-trend">
         <h2>近 60 秒趋势</h2>
@@ -537,23 +708,23 @@ HTML_PAGE = """<!doctype html>
         <div id="search-loop" class="chart-body"></div>
       </div>
       <div class="panel tile-infer">
-        <h2>推理阶段耗时</h2>
-        <p class="hint">等待提交 / 预处理 / H2D / 推理 / D2H / 后处理，全部按分位数重建为 PDF 轮廓</p>
+        <h2 id="inference-panel-title">推理执行概况</h2>
+        <p id="inference-panel-hint" class="hint">按当前后端模式展示推理侧可解释指标；single-scheduler 模式会切换成保守视图。</p>
         <div id="inference-phases" class="chart-body"></div>
       </div>
       <div class="panel tile-queue">
-        <h2>活跃推理线程数</h2>
-        <p class="hint">过去 1 秒时间占比</p>
+        <h2 id="activity-panel-title">推理资源占用</h2>
+        <p id="activity-panel-hint" class="hint">过去 1 秒时间占比</p>
         <div id="queue-and-active" class="chart-body"></div>
       </div>
       <div class="panel tile-batch">
-        <h2>GPU Batch 分布</h2>
-        <p class="hint">全 GPU 汇总；多卡时保持单屏，不逐卡展开</p>
+        <h2 id="batch-panel-title">GPU Batch 分布</h2>
+        <p id="batch-panel-hint" class="hint">按当前后端语义汇总；多卡时保持单屏，不逐卡展开</p>
         <div id="gpu-batches" class="chart-body"></div>
       </div>
       <div class="panel tile-streams">
-        <h2>每 GPU 的 cudaStream 活跃数</h2>
-        <p class="hint">过去 1 秒不同活跃 stream 数的时间占比</p>
+        <h2 id="streams-panel-title">每 GPU 的推理并发数</h2>
+        <p id="streams-panel-hint" class="hint">过去 1 秒不同运行中推理图数的时间占比</p>
         <div id="gpu-streams" class="chart-body"></div>
       </div>
     </section>
@@ -578,6 +749,12 @@ HTML_PAGE = """<!doctype html>
     const fmtIso = (unixMs) => {
       if (!unixMs) return '等待数据';
       return new Date(unixMs).toLocaleString('zh-CN', { hour12: false });
+    };
+    const inferenceModeOf = (latest) => latest?.status?.inference_mode || 'legacy_worker_threads';
+    const isSingleSchedulerMode = (latest) => inferenceModeOf(latest) === 'single_scheduler_slots';
+    const inferenceModeLabel = (mode) => {
+      if (mode === 'single_scheduler_slots') return '单调度 slot';
+      return '传统 worker';
     };
     const histogramColumns = (count) => {
       if (count > 24) return 4;
@@ -605,6 +782,32 @@ HTML_PAGE = """<!doctype html>
       'depth': { minMax: 40, step: 10, formatter: fmtInt, shrinkRatio: 0.62, shrinkVotes: 8 },
       'queue': { fixedMax: 1.0, formatter: fmtPercent },
     };
+    const timelineStageColors = {
+      preprocess: '#0f766e',
+      h2d: '#1d4ed8',
+      infer: '#c2410c',
+      d2h: '#16a34a',
+      postprocess: '#7c3aed',
+    };
+    const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
+    const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
+    const timelineUiState = {
+      selectedSlotKey: null,
+      spanNs: 80e6,
+      centerNs: null,
+      followLatest: true,
+      drag: null,
+      chartLeftPx: 0,
+      chartWidthPx: 1,
+      viewStartNs: 0,
+      latestRangeEndNs: 0,
+      latestRangeStartNs: 0,
+    };
+    let latestRealtimeState = null;
+
+    function clamp(value, minValue, maxValue) {
+      return Math.min(Math.max(value, minValue), maxValue);
+    }
 
     function rememberAxisMax(key, desired, step, minMax) {
       const safeDesired = Math.max(Number(desired || 0), Number(minMax || 0), 1e-9);
@@ -676,9 +879,11 @@ HTML_PAGE = """<!doctype html>
       const latest = state.latest;
       const status = latest?.status || {};
       const receiver = state.receiver || {};
+      const mode = inferenceModeOf(latest);
       const errorText = status.last_send_error || receiver.last_error || '无';
       const items = [
         ['最新快照', fmtIso(latest?.timestamp_unix_ms)],
+        ['推理模式', inferenceModeLabel(mode)],
         ['Socket', status.socket_path || '未配置'],
         ['发送错误', fmtInt(status.send_error_count)],
         ['运行时长', fmtSeconds(status.session_age_s || 0)],
@@ -691,6 +896,29 @@ HTML_PAGE = """<!doctype html>
           <strong class="${label === 'Socket' ? 'mono' : ''}">${value}</strong>
         </div>
       `).join('');
+    }
+
+    function updatePanelLabels(latest) {
+      const single = isSingleSchedulerMode(latest);
+      document.getElementById('inference-panel-title').textContent = single ? '推理工作量概况' : '推理阶段耗时';
+      document.getElementById('inference-panel-hint').textContent = single
+        ? '单 scheduler / logical slot 模式下仅 infer_ms 为近似有效值；wait_task_submit / preprocess / H2D / D2H / postprocess 仍未重新接线。'
+        : '等待提交 / 预处理 / H2D / 推理 / D2H / 后处理，全部按分位数重建为 PDF 轮廓';
+      document.getElementById('activity-panel-title').textContent = single ? '占用推理槽位数' : '活跃推理线程数';
+      document.getElementById('activity-panel-hint').textContent = single
+        ? '过去 1 秒 non-idle slot 数的时间占比'
+        : '过去 1 秒时间占比';
+      document.getElementById('batch-panel-title').textContent = single ? '按推理工作量加权的 GPU Batch 分布' : 'GPU Batch 分布';
+      document.getElementById('batch-panel-hint').textContent = single
+        ? '按 infer_ms / 等效工作量近似加权；多卡时保持单屏，不逐卡展开'
+        : '全 GPU 汇总；多卡时保持单屏，不逐卡展开';
+      document.getElementById('streams-panel-title').textContent = single ? '每 GPU 的运行中推理图数' : '每 GPU 的 cudaStream 活跃数';
+      document.getElementById('streams-panel-hint').textContent = single
+        ? '过去 1 秒不同 active infer graph 数的时间占比，不含 H2D / D2H stream'
+        : '过去 1 秒不同活跃 stream 数的时间占比';
+      document.getElementById('timeline-hint').textContent = single
+        ? '最近约 100ms 内的 completed spans。默认聚焦最近 80ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
+        : 'timeline 当前主要服务于 TRT single-scheduler 路径；其他后端暂未接线。';
     }
 
     function renderMetricCards(state) {
@@ -995,11 +1223,38 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('depth-and-queue').innerHTML = `<div class="dock-stack">${depthHtml}${queueHtml}</div>`;
     }
 
-    function renderQueueAndActive(win) {
+    function renderInferencePhases(win, singleScheduler) {
+      if (!singleScheduler) {
+        renderPdfBlock('inference-phases', [
+          { key: 'infer.wait_task_submit_ms', label: '等待任务提交', stat: win.inference?.wait_task_submit_ms },
+          { key: 'infer.preprocess_ms', label: '预处理', stat: win.inference?.preprocess_ms },
+          { key: 'infer.h2d_ms', label: 'H2D', stat: win.inference?.h2d_ms },
+          { key: 'infer.infer_ms', label: '推理', stat: win.inference?.infer_ms },
+          { key: 'infer.d2h_ms', label: 'D2H', stat: win.inference?.d2h_ms },
+          { key: 'infer.postprocess_ms', label: '后处理', stat: win.inference?.postprocess_ms },
+        ], 2);
+        return;
+      }
+
+      const inferStat = win.inference?.infer_ms;
+      const body = inferStat?.has_data
+        ? `<div class="pdf-grid" style="grid-template-columns:repeat(1, minmax(0, 1fr));">${pdfCardHtml('infer.infer_ms', '推理工作量(近似)', inferStat)}</div>`
+        : '<div class="waiting">过去 1 秒没有推理样本</div>';
+      document.getElementById('inference-phases').innerHTML = `
+        <div class="panel-stack">
+          <div class="panel-note">当前 TRT overlapping 路径下，realtime 监控只保留了 infer_ms 的近似值。它来自 scheduler 的等效工作量 / ETA 记账，不是 CUDA event 实测；其余 phase 目前仍是占位零值，所以这里不再展示。</div>
+          ${body}
+        </div>
+      `;
+    }
+
+    function renderQueueAndActive(win, singleScheduler) {
+      const title = singleScheduler ? '占用推理槽位数' : '活跃推理线程数';
+      const emptyText = singleScheduler ? '暂无 slot 占用时间占比' : '暂无线程活跃占比';
       document.getElementById('queue-and-active').innerHTML = `
         <div class="mini-card" style="height:100%">
-          <h3>活跃推理线程数</h3>
-          ${histogramHtml(win.inference_thread_active_time_share, fmtPercent, true, '暂无线程活跃占比')}
+          <h3>${title}</h3>
+          ${histogramHtml(win.inference_thread_active_time_share, fmtPercent, true, emptyText)}
         </div>
       `;
     }
@@ -1022,36 +1277,287 @@ HTML_PAGE = """<!doctype html>
       }).join('')}</div>`;
     }
 
-    function renderGpuBatches(win) {
+    function renderGpuBatches(win, singleScheduler) {
       const overall = histogramHtml(win.gpu_batch_time_share, fmtPercent, false, '暂无 batch 分布');
       const perGpu = win.gpu_batch_time_share_by_gpu || [];
       const overallBuckets = [...(win.gpu_batch_time_share || [])];
       const dominant = overallBuckets.sort((a, b) => Number(b.value || 0) - Number(a.value || 0))[0];
       document.getElementById('gpu-batches').innerHTML = `
         <div class="mini-card" style="height:100%">
-          <h3>总体 BatchSize 分布</h3>
+          <h3>${singleScheduler ? '按推理工作量加权的 BatchSize 分布' : '总体 BatchSize 分布'}</h3>
           ${overall}
           <div class="plot-footer" style="margin-top:8px">
             <span>活跃 GPU <strong>${fmtInt(perGpu.length)}</strong></span>
-            <span>主 batch <strong>${dominant ? dominant.bucket : 'N/A'}</strong></span>
+            <span>${singleScheduler ? '主 batch(近似)' : '主 batch'} <strong>${dominant ? dominant.bucket : 'N/A'}</strong></span>
           </div>
         </div>
       `;
     }
 
-    function renderGpuStreams(win) {
+    function renderGpuStreams(win, singleScheduler) {
       const items = win.cuda_stream_active_time_share_by_gpu || [];
       if (items.length === 0) {
-        document.getElementById('gpu-streams').innerHTML = '<div class="waiting">当前后端未提供 GPU stream 活跃样本</div>';
+        document.getElementById('gpu-streams').innerHTML = singleScheduler
+          ? '<div class="waiting">当前后端未提供 infer graph 并发样本</div>'
+          : '<div class="waiting">当前后端未提供 GPU stream 活跃样本</div>';
         return;
       }
       const gridClass = items.length > 1 ? 'gpu-grid two-col' : 'gpu-grid';
       document.getElementById('gpu-streams').innerHTML = `<div class="${gridClass}">${items.map((item) => `
         <div class="gpu-card">
           <h3>GPU ${item.gpu}</h3>
-          ${histogramHtml(item.buckets, fmtPercent, false, '暂无 stream 活跃数据')}
+          ${histogramHtml(item.buckets, fmtPercent, false, singleScheduler ? '暂无 infer graph 并发数据' : '暂无 stream 活跃数据')}
         </div>
       `).join('')}</div>`;
+    }
+
+    function timelineSlotKey(slot) {
+      return `${slot.gpu}:${slot.slot}`;
+    }
+
+    function timelineTickStepNs(spanNs) {
+      const candidates = [1e6, 2e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 500e6];
+      for (const candidate of candidates) {
+        if (spanNs / candidate <= 9) return candidate;
+      }
+      return 1000e6;
+    }
+
+    function decodeTimelineSpan(rawSpan, slotInfoBySlot, rangeStartNs) {
+      if (!Array.isArray(rawSpan)) return rawSpan;
+      const slot = Number(rawSpan[1] ?? -1);
+      const slotInfo = slotInfoBySlot.get(slot) || { gpu: -1, slot };
+      return {
+        id: Number(rawSpan[0] ?? 0),
+        slot,
+        gpu: Number(slotInfo.gpu ?? -1),
+        lane: timelineLaneNames[Number(rawSpan[2] ?? -1)] || 'unknown',
+        stage: timelineStageNames[Number(rawSpan[3] ?? -1)] || 'unknown',
+        batch_uid: Number(rawSpan[4] ?? 0),
+        row: Number(rawSpan[5] ?? -1),
+        start_ns: rangeStartNs + Number(rawSpan[6] ?? 0),
+        end_ns: rangeStartNs + Number(rawSpan[7] ?? 0),
+        dep0: Number(rawSpan[8] ?? 0),
+        dep1: Number(rawSpan[9] ?? 0),
+      };
+    }
+
+    function timelineSpanLabel(span) {
+      if (span.stage === 'preprocess') return `prep r${span.row}`;
+      if (span.stage === 'h2d') return `h2d r${span.row}`;
+      if (span.stage === 'infer') return `infer b${span.batch_uid}`;
+      if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
+      if (span.stage === 'postprocess') return `post b${span.batch_uid}`;
+      return span.stage || 'event';
+    }
+
+    function timelineSpanTitle(span, selectedSlot) {
+      const slotText = `GPU ${span.gpu} / Slot ${span.slot}`;
+      const batchText = span.batch_uid ? `batch=${span.batch_uid}` : 'batch=n/a';
+      const rowText = span.row >= 0 ? `row=${span.row}` : 'row=-';
+      const laneText = span.lane || 'unknown';
+      const selectedText = selectedSlot && Number(span.slot) === Number(selectedSlot.slot) ? 'selected' : 'other-slot';
+      return `${slotText}\n${laneText} / ${span.stage}\n${batchText} ${rowText}\n${selectedText}`;
+    }
+
+    function updateTimelineSlotSelect(slots) {
+      const select = document.getElementById('timeline-slot-select');
+      const renderedKeys = slots.map((slot) => timelineSlotKey(slot)).join('|');
+      if (select.dataset.renderedKeys === renderedKeys) {
+        if (timelineUiState.selectedSlotKey) select.value = timelineUiState.selectedSlotKey;
+        return;
+      }
+      select.dataset.renderedKeys = renderedKeys;
+      select.innerHTML = slots.map((slot) => {
+        const key = timelineSlotKey(slot);
+        return `<option value="${key}">GPU ${slot.gpu} / Slot ${slot.slot}</option>`;
+      }).join('');
+      if (timelineUiState.selectedSlotKey) select.value = timelineUiState.selectedSlotKey;
+    }
+
+    function renderTimeline(latest) {
+      const view = document.getElementById('timeline-view');
+      const summary = document.getElementById('timeline-summary');
+      const timeline = latest?.timeline;
+      if (!latest || !timeline || !Array.isArray(timeline.slots) || !Array.isArray(timeline.spans) || !isSingleSchedulerMode(latest)) {
+        view.innerHTML = '<div class="waiting">当前只对 TRT single-scheduler 路径提供 timeline；等待可视化样本。</div>';
+        summary.textContent = '等待数据';
+        document.getElementById('timeline-slot-select').innerHTML = '';
+        return;
+      }
+
+      const slots = timeline.slots || [];
+      if (slots.length === 0) {
+        view.innerHTML = '<div class="waiting">当前没有可观察的 logical slot</div>';
+        summary.textContent = '暂无 slot';
+        document.getElementById('timeline-slot-select').innerHTML = '';
+        return;
+      }
+
+      if (!slots.some((slot) => timelineSlotKey(slot) === timelineUiState.selectedSlotKey)) {
+        const defaultSlot = [...slots].sort((a, b) => Number(a.gpu) - Number(b.gpu) || Number(a.slot) - Number(b.slot))[0];
+        timelineUiState.selectedSlotKey = timelineSlotKey(defaultSlot);
+        timelineUiState.followLatest = true;
+      }
+      updateTimelineSlotSelect(slots);
+
+      const selectedSlot = slots.find((slot) => timelineSlotKey(slot) === timelineUiState.selectedSlotKey) || slots[0];
+      const latestRangeStartNs = Number(timeline.range_start_ns || 0);
+      const latestRangeEndNs = Number(timeline.range_end_ns || 0);
+      const slotInfoBySlot = new Map(slots.map((slot) => [Number(slot.slot), slot]));
+      const decodedSpans = (timeline.spans || []).map((span) => decodeTimelineSpan(span, slotInfoBySlot, latestRangeStartNs));
+      const dataSpanNs = Math.max(latestRangeEndNs - latestRangeStartNs, 20e6);
+      timelineUiState.latestRangeStartNs = latestRangeStartNs;
+      timelineUiState.latestRangeEndNs = latestRangeEndNs;
+      timelineUiState.spanNs = clamp(timelineUiState.spanNs, 5e6, dataSpanNs);
+      if (timelineUiState.followLatest || timelineUiState.centerNs === null) {
+        timelineUiState.centerNs = latestRangeEndNs - timelineUiState.spanNs / 2;
+      }
+
+      const maxViewStartNs = Math.max(latestRangeStartNs, latestRangeEndNs - timelineUiState.spanNs);
+      const viewStartNs = clamp(timelineUiState.centerNs - timelineUiState.spanNs / 2, latestRangeStartNs, maxViewStartNs);
+      const viewEndNs = viewStartNs + timelineUiState.spanNs;
+      timelineUiState.viewStartNs = viewStartNs;
+      timelineUiState.centerNs = viewStartNs + timelineUiState.spanNs / 2;
+
+      const width = Math.max(view.clientWidth || 960, 960);
+      const height = Math.max(view.clientHeight || 168, 168);
+      const leftPad = 152;
+      const rightPad = 16;
+      const topPad = 22;
+      const bottomPad = 22;
+      const laneGap = 12;
+      const lanes = [
+        { id: 'scheduler', label: 'Scheduler Thread' },
+        { id: 'h2d', label: `GPU ${selectedSlot.gpu} / Slot ${selectedSlot.slot} H2D` },
+        { id: 'infer', label: `GPU ${selectedSlot.gpu} / Slot ${selectedSlot.slot} Infer` },
+        { id: 'd2h', label: `GPU ${selectedSlot.gpu} / Slot ${selectedSlot.slot} D2H` },
+      ];
+      const chartWidth = Math.max(width - leftPad - rightPad, 200);
+      const laneHeight = Math.max((height - topPad - bottomPad - laneGap * (lanes.length - 1)) / lanes.length, 20);
+      timelineUiState.chartLeftPx = leftPad;
+      timelineUiState.chartWidthPx = chartWidth;
+
+      const xForNs = (ns) => leftPad + (Number(ns || 0) - viewStartNs) / Math.max(timelineUiState.spanNs, 1) * chartWidth;
+      const stageSpans = decodedSpans.filter((span) => Number(span.end_ns || 0) >= viewStartNs && Number(span.start_ns || 0) <= viewEndNs);
+      const schedulerSpans = stageSpans.filter((span) => span.lane === 'scheduler');
+      const selectedSlotSpans = stageSpans.filter((span) => Number(span.slot) === Number(selectedSlot.slot));
+
+      const laneSpans = {
+        scheduler: schedulerSpans,
+        h2d: selectedSlotSpans.filter((span) => span.lane === 'h2d'),
+        infer: selectedSlotSpans.filter((span) => span.lane === 'infer'),
+        d2h: selectedSlotSpans.filter((span) => span.lane === 'd2h'),
+      };
+
+      const visibleRects = new Map();
+      const laneY = new Map();
+      lanes.forEach((lane, idx) => {
+        laneY.set(lane.id, topPad + idx * (laneHeight + laneGap));
+      });
+
+      const allBlockSvgs = [];
+      for (const lane of lanes) {
+        const spans = [...(laneSpans[lane.id] || [])].sort((a, b) => Number(a.start_ns || 0) - Number(b.start_ns || 0));
+        for (const span of spans) {
+          const laneTop = laneY.get(lane.id);
+          const rawStartX = xForNs(span.start_ns);
+          const rawEndX = xForNs(span.end_ns);
+          const x = Math.max(leftPad, Math.min(rawStartX, width - rightPad));
+          const endX = Math.max(x + 2, Math.min(Math.max(rawEndX, rawStartX + 2), width - rightPad));
+          const rectWidth = Math.max(endX - x, 2);
+          const color = timelineStageColors[span.stage] || '#64748b';
+          const selected = Number(span.slot) === Number(selectedSlot.slot);
+          const opacity = lane.id === 'scheduler' && !selected ? 0.34 : 0.92;
+          const y = laneTop + 7;
+          const blockHeight = Math.max(laneHeight - 14, 10);
+          visibleRects.set(Number(span.id), {
+            x,
+            y,
+            w: rectWidth,
+            h: blockHeight,
+            cx: x + rectWidth / 2,
+            cy: y + blockHeight / 2,
+            span,
+          });
+          const label = rectWidth >= 46 ? timelineSpanLabel(span) : '';
+          const slotPrefix = lane.id === 'scheduler' && !selected ? `s${span.slot} ` : '';
+          allBlockSvgs.push(`
+            <g>
+              <rect class="timeline-block" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${rectWidth.toFixed(1)}" height="${blockHeight.toFixed(1)}" rx="4" fill="${color}" fill-opacity="${opacity}">
+                <title>${timelineSpanTitle(span, selectedSlot)}</title>
+              </rect>
+              ${label ? `<text class="timeline-block-label" x="${(x + 6).toFixed(1)}" y="${(y + blockHeight / 2 + 3).toFixed(1)}">${slotPrefix}${label}</text>` : ''}
+            </g>
+          `);
+        }
+      }
+
+      const arrowSvgs = [];
+      for (const rect of visibleRects.values()) {
+        const span = rect.span;
+        const deps = [Number(span.dep0 || 0), Number(span.dep1 || 0)].filter((dep) => dep > 0);
+        for (const dep of deps) {
+          const from = visibleRects.get(dep);
+          if (!from) continue;
+          const startX = from.x + from.w;
+          const startY = from.cy;
+          const endX = rect.x;
+          const endY = rect.cy;
+          const midX = startX + Math.max((endX - startX) * 0.5, 12);
+          arrowSvgs.push(`<path class="timeline-arrow" d="M ${startX.toFixed(1)} ${startY.toFixed(1)} C ${midX.toFixed(1)} ${startY.toFixed(1)}, ${(endX - 14).toFixed(1)} ${endY.toFixed(1)}, ${endX.toFixed(1)} ${endY.toFixed(1)}" marker-end="url(#timeline-arrowhead)"></path>`);
+        }
+      }
+
+      const tickStepNs = timelineTickStepNs(timelineUiState.spanNs);
+      const tickStartNs = Math.ceil(viewStartNs / tickStepNs) * tickStepNs;
+      const tickSvgs = [];
+      for (let tickNs = tickStartNs; tickNs <= viewEndNs + 1; tickNs += tickStepNs) {
+        const x = xForNs(tickNs);
+        if (x < leftPad || x > width - rightPad) continue;
+        const relMs = (tickNs - latestRangeEndNs) / 1e6;
+        tickSvgs.push(`
+          <line class="timeline-grid" x1="${x.toFixed(1)}" y1="${topPad - 6}" x2="${x.toFixed(1)}" y2="${(height - bottomPad + 4).toFixed(1)}"></line>
+          <text class="timeline-label" x="${x.toFixed(1)}" y="${(height - 6).toFixed(1)}" text-anchor="middle">${fmtFloat(relMs, 1)}ms</text>
+        `);
+      }
+
+      const laneLabelSvgs = lanes.map((lane) => {
+        const y = laneY.get(lane.id);
+        return `
+          <text class="timeline-lane-label" x="10" y="${(y + 18).toFixed(1)}">${lane.label}</text>
+          <line class="timeline-lane-divider" x1="0" y1="${(y + laneHeight + 1).toFixed(1)}" x2="${width}" y2="${(y + laneHeight + 1).toFixed(1)}"></line>
+        `;
+      }).join('');
+
+      const axisLine = `<line class="timeline-axis" x1="${leftPad}" y1="${(height - bottomPad + 1).toFixed(1)}" x2="${(width - rightPad).toFixed(1)}" y2="${(height - bottomPad + 1).toFixed(1)}"></line>`;
+      const relStartMs = (viewStartNs - latestRangeEndNs) / 1e6;
+      const relEndMs = (viewEndNs - latestRangeEndNs) / 1e6;
+      const droppedSpans = Number(timeline.dropped_spans || 0);
+      const droppedSuffix = droppedSpans > 0 ? ` | clipped ${fmtInt(droppedSpans)}` : '';
+      summary.textContent = `GPU ${selectedSlot.gpu} / Slot ${selectedSlot.slot} | ${fmtFloat(timelineUiState.spanNs / 1e6, 1)} ms | ${fmtFloat(relStartMs, 1)} .. ${fmtFloat(relEndMs, 1)} ms${droppedSuffix}`;
+
+      view.innerHTML = `
+        <svg class="timeline-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+          <defs>
+            <marker id="timeline-arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(23,32,42,0.42)"></path>
+            </marker>
+          </defs>
+          ${tickSvgs.join('')}
+          ${axisLine}
+          ${laneLabelSvgs}
+          ${arrowSvgs.join('')}
+          ${allBlockSvgs.join('')}
+        </svg>
+        <div class="timeline-legend">
+          <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>Post</span>
+        </div>
+      `;
     }
 
     function buildSparkline(points, stroke) {
@@ -1091,9 +1597,11 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderAll(state) {
+      latestRealtimeState = state;
       renderStatusGrid(state);
       renderMetricCards(state);
       const latest = state.latest;
+      updatePanelLabels(latest);
       if (!latest) {
         document.getElementById('depth-and-queue').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('search-loop').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
@@ -1102,27 +1610,23 @@ HTML_PAGE = """<!doctype html>
         document.getElementById('gpu-batches').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('gpu-streams').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
         document.getElementById('sparklines').innerHTML = '<div class="waiting">等待来自 KataGo 的快照</div>';
+        renderTimeline(null);
         return;
       }
       const win = latest.window1s || {};
+      const singleScheduler = isSingleSchedulerMode(latest);
       renderDepthAndQueue(win);
       renderPdfBlock('search-loop', [
         { key: 'search.total_ms', label: '总循环耗时', stat: win.search_loop?.total_ms },
         { key: 'search.search_ms', label: '搜索耗时', stat: win.search_loop?.search_ms },
         { key: 'search.wait_nn_ms', label: '等待推理耗时', stat: win.search_loop?.wait_nn_ms },
       ], 1);
-      renderPdfBlock('inference-phases', [
-        { key: 'infer.wait_task_submit_ms', label: '等待任务提交', stat: win.inference?.wait_task_submit_ms },
-        { key: 'infer.preprocess_ms', label: '预处理', stat: win.inference?.preprocess_ms },
-        { key: 'infer.h2d_ms', label: 'H2D', stat: win.inference?.h2d_ms },
-        { key: 'infer.infer_ms', label: '推理', stat: win.inference?.infer_ms },
-        { key: 'infer.d2h_ms', label: 'D2H', stat: win.inference?.d2h_ms },
-        { key: 'infer.postprocess_ms', label: '后处理', stat: win.inference?.postprocess_ms },
-      ], 2);
-      renderQueueAndActive(win);
-      renderGpuBatches(win);
-      renderGpuStreams(win);
+      renderInferencePhases(win, singleScheduler);
+      renderQueueAndActive(win, singleScheduler);
+      renderGpuBatches(win, singleScheduler);
+      renderGpuStreams(win, singleScheduler);
       renderSparklines(state.history || []);
+      renderTimeline(latest);
     }
 
     async function fetchState() {
@@ -1139,6 +1643,58 @@ HTML_PAGE = """<!doctype html>
         `;
       }
     }
+
+    document.getElementById('timeline-slot-select').addEventListener('change', (event) => {
+      timelineUiState.selectedSlotKey = event.target.value || null;
+      timelineUiState.followLatest = true;
+      timelineUiState.centerNs = null;
+      renderTimeline(latestRealtimeState?.latest || null);
+    });
+
+    document.getElementById('timeline-latest-btn').addEventListener('click', () => {
+      timelineUiState.followLatest = true;
+      timelineUiState.centerNs = null;
+      renderTimeline(latestRealtimeState?.latest || null);
+    });
+
+    document.getElementById('timeline-view').addEventListener('mousedown', (event) => {
+      if (event.button !== 0 || timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
+      timelineUiState.drag = { startX: event.clientX, centerNs: timelineUiState.centerNs };
+      timelineUiState.followLatest = false;
+      event.currentTarget.classList.add('dragging');
+      event.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (event) => {
+      if (!timelineUiState.drag || timelineUiState.chartWidthPx <= 1) return;
+      const deltaPx = event.clientX - timelineUiState.drag.startX;
+      const deltaNs = deltaPx / timelineUiState.chartWidthPx * timelineUiState.spanNs;
+      timelineUiState.centerNs = timelineUiState.drag.centerNs - deltaNs;
+      renderTimeline(latestRealtimeState?.latest || null);
+    });
+
+    window.addEventListener('mouseup', () => {
+      timelineUiState.drag = null;
+      document.getElementById('timeline-view').classList.remove('dragging');
+    });
+
+    document.getElementById('timeline-view').addEventListener('wheel', (event) => {
+      if (timelineUiState.chartWidthPx <= 1 || !latestRealtimeState?.latest?.timeline) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const localX = event.clientX - rect.left;
+      if (localX < timelineUiState.chartLeftPx) return;
+      event.preventDefault();
+      const focusRatio = clamp((localX - timelineUiState.chartLeftPx) / timelineUiState.chartWidthPx, 0, 1);
+      const focusNs = timelineUiState.viewStartNs + focusRatio * timelineUiState.spanNs;
+      const dataSpanNs = Math.max(timelineUiState.latestRangeEndNs - timelineUiState.latestRangeStartNs, 20e6);
+      const zoomFactor = event.deltaY > 0 ? 1.18 : 0.84;
+      const newSpanNs = clamp(timelineUiState.spanNs * zoomFactor, 5e6, dataSpanNs);
+      const newStartNs = focusNs - focusRatio * newSpanNs;
+      timelineUiState.spanNs = newSpanNs;
+      timelineUiState.centerNs = newStartNs + newSpanNs / 2;
+      timelineUiState.followLatest = false;
+      renderTimeline(latestRealtimeState?.latest || null);
+    }, { passive: false });
 
     fetchState();
     window.setInterval(fetchState, 1000);
