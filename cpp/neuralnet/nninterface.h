@@ -143,11 +143,18 @@ namespace NeuralNet {
 
 #ifdef USE_TENSORRT_BACKEND
   // TensorRT-only async slot helpers used by the overlapping scheduler design.
-  // These preserve the existing buffer ownership model:
-  // - scheduler packs one request row into a slot's pinned host buffers
-  // - scheduler may enqueue row-level H2D copies incrementally
-  // - scheduler launches infer and D2H as separate async phases
-  // - scheduler later unpacks completed rows back into NNOutput
+  // Shared-buffer scheduler model:
+  // - slots own H2D/infer/D2H streams and execution contexts
+  // - buffers own host/device IO storage and H2D/D2H completion events
+  // - scheduler hot-polls completion and explicitly advances phases
+  void trtInitializeSharedBuffer(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers
+  );
+  void trtRegisterSharedBuffer(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers
+  );
   void trtPackInputRow(
     InputBuffers* buffers,
     const NNResultBuf* inputBuf,
@@ -159,11 +166,11 @@ namespace NeuralNet {
     InputBuffers* buffers,
     int rowIdx
   );
+  bool trtQueryInputCopiesDone(InputBuffers* buffers);
   void trtLaunchInferenceAsync(
     ComputeHandle* computeHandle,
     InputBuffers* buffers,
-    int batchSize,
-    const ComputeHandle* dependencyHandle
+    int batchSize
   );
   bool trtQueryInferenceDone(ComputeHandle* computeHandle);
   void trtEnqueueOutputCopiesAsync(
@@ -171,7 +178,10 @@ namespace NeuralNet {
     InputBuffers* buffers,
     int batchSize
   );
-  bool trtQueryOutputCopiesDone(ComputeHandle* computeHandle);
+  bool trtQueryOutputCopiesDone(InputBuffers* buffers);
+  double trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int rowIdx);
+  double trtGetLastInferenceElapsedMs(ComputeHandle* computeHandle);
+  double trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers);
   void trtUnpackOutputRow(
     InputBuffers* buffers,
     const NNResultBuf* inputBuf,
