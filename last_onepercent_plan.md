@@ -2398,3 +2398,118 @@ legacy worker-thread 路径仍然保留旧面板。
 - 本节只是先把新的方向正式写进文档，防止后续实现仍沿着旧语义前进。
 - 下一步文档工作应是：
   - 把状态机、主循环伪代码、TRT helper 接口，全部改写成 v2 shared-buffer 版本。
+
+### 2026-03-11: v2 shared-buffer scheduler 已开始落地
+
+这节记录目前代码已经完成的部分，供后续跨 context 续写和 reviewer 对照。
+
+#### 已落地的结构变化
+
+- [cpp/neuralnet/nneval.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp)
+  - `deriveLogicalSlotGpuIdxs()` 已改为直接保留旧配置映射，不再自动额外补一个 slot。
+  - `SchedulerState` 已从“slot 自带整条 batch 生命周期”改成：
+    - `SlotState` 只跟踪 infer 占用和 ETA/work accounting
+    - `BufferState` 跟踪 `Free/Filling/ReadyToLaunch/InferRunning/D2HPending`
+  - 每个 device 现在维护：
+    - `slotIndices`
+    - `bufferIndices`
+    - `rrBufferCursor`
+  - 启动时每张卡按：
+    - `s` 个 slot
+    - `s+1` 个 shared buffer
+    初始化资源。
+  - `global open batch` 现在只保存：
+    - `targetSlotIdx`
+    - `targetGpuIdx`
+    - `bufferIdx`
+    - `batchUid`
+  - 热路径现在是：
+    - 请求级 preprocess
+    - 请求级 H2D
+    - CPU 轮询 `h2dDone`
+    - CPU 显式发 infer
+    - CPU 轮询 `inferDone`
+    - CPU 显式发 D2H
+    - CPU 轮询 `d2hDone`
+    - postprocess
+  - `slot` 在 infer 完成、D2H 已提交后立即清空重用。
+  - `buffer` 只有 postprocess 完成后才会 `Free`。
+
+- [cpp/neuralnet/nninterface.h](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nninterface.h)
+  - TRT async helper 接口已经改成 shared-buffer 语义：
+    - `trtInitializeSharedBuffer()`
+    - `trtRegisterSharedBuffer()`
+    - `trtQueryInputCopiesDone(InputBuffers*)`
+    - `trtLaunchInferenceAsync(ComputeHandle*, InputBuffers*, int batchSize)`
+    - `trtQueryOutputCopiesDone(InputBuffers*)`
+  - `dependencyHandle` 已从 infer launch 接口删除。
+
+- [cpp/neuralnet/trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp)
+  - `ComputeHandle` 现在为每个 registered shared buffer 创建独立 `IExecutionContext` 和对应的 `batchGraphStates`。
+  - `InputBuffers` 现在持有：
+    - shared device IO buffers
+    - `trtH2DDoneEvent`
+    - `trtD2HDoneEvent`
+    - timeline timing events
+  - 新增 shared-buffer helper：
+    - `trtInitializeSharedBuffer()`
+    - `trtRegisterSharedBuffer()`
+  - 异步 TRT 路径已经改成：
+    - row H2D 直接写 shared buffer device storage
+    - infer launch 直接使用 `(slot, buffer)` 绑定过的 execution context
+    - D2H 由 CPU 在观察到 infer 完成后再显式提交
+  - **scheduler 驱动的异步路径已经不再使用 `cudaStreamWaitEvent()`**。
+
+#### 目前仍保留旧语义的部分
+
+- [cpp/neuralnet/trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp) 里的同步 `getOutput()` 路径仍然保留原实现：
+  - `cudaStreamWaitEvent(inferStream, h2dDoneEvent, 0)`
+  - `cudaStreamWaitEvent(d2hStream, inferDoneEvent, 0)`
+- 这是非 scheduler 的旧同步接口，当前没有一起重写。
+- 因此“代码里完全没有 `cudaStreamWaitEvent`”这句话现在还不成立；准确说法应是：
+  - **TRT shared-buffer scheduler 热路径没有跨 stream wait-event 依赖**
+  - **旧同步 fallback 仍保留 wait-event**
+
+#### 本轮实际修掉的一个运行时 bug
+
+- 初版 shared-buffer scheduler 在 `open batch` 已满、但 H2D 尚未全部完成、infer 还没发出时，仍然继续吞新请求。
+- 这会让 `rowIdx == maxBatchSize`，触发：
+  - `trtPackInputRow: rowIdx out of bounds`
+- 现已修正为：
+  - 当 `open batch` 的 buffer 已满时，新的请求先挂到 `deferredRequest`
+  - 等待 `maybeLaunchOpenBatch()` 把当前 batch 发出去后再继续 intake
+
+#### 当前实测状态
+
+- `./build.sh` 已通过。
+- `./run.sh --benchmark` 已通过。
+- 当前一次实测结果：
+  - `visits/s = 3023.44`
+  - `nnEvals/s = 1966.80`
+  - `nnBatches/s = 281.38`
+  - `avgBatchSize = 6.99`
+
+#### 当前 perf/spec 对齐状态
+
+- 这次 v2 shared-buffer 改造之后，旧的若干 `globalPerfProfile` 口径已经不再可信，至少包括：
+  - `inference_preprocess_ms`
+  - `inference_h2d_ms`
+  - `inference_wait_gpu_ms`
+  - `inference_d2h_ms`
+  - `inference_postprocess_ms`
+- 在当前 benchmark 输出里，这些项已经全部变成 `n/a`。
+- 这符合预期：
+  - 热路径已经不再走旧的“单个同步 `getOutput()` 一次性统计分阶段时间”模型。
+- `inference_thread_time_share: active0=100%` 这项现在也不能直接解读成 scheduler 已退化为单 slot：
+  - 它仍然是旧语义下的指标名和记账口径
+  - 后续需要结合新的 slot/buffer 语义重建，或直接以新的 timeline / GPU running infer graph 指标替代
+
+#### 下一步最需要 reviewer 核对的点
+
+- 实现是否确实满足：
+  - `global open batch`
+  - `s` 个 slot + 每卡 `s+1` 个 shared buffer
+  - slot 在 inferDone + D2H submitted 后即可复用
+  - buffer 仅在 postprocess 结束后复用
+  - scheduler 热路径不依赖 `cudaStreamWaitEvent`
+- 以及哪些旧文档段落还没有完全重写，仍然和当前实现表述不一致。

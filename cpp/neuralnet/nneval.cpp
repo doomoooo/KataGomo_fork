@@ -10,22 +10,7 @@ static int canonicalGpuIdxForScheduling(int gpuIdx) {
 }
 
 static vector<int> deriveLogicalSlotGpuIdxs(const vector<int>& gpuIdxByServerThread) {
-  vector<int> logicalSlots = gpuIdxByServerThread;
-  vector<int> seenGpuIdxs;
-  for(int gpuIdx: gpuIdxByServerThread) {
-    bool found = false;
-    for(int seenGpuIdx: seenGpuIdxs) {
-      if(seenGpuIdx == gpuIdx) {
-        found = true;
-        break;
-      }
-    }
-    if(!found)
-      seenGpuIdxs.push_back(gpuIdx);
-  }
-  for(int gpuIdx: seenGpuIdxs)
-    logicalSlots.push_back(gpuIdx);
-  return logicalSlots;
+  return gpuIdxByServerThread;
 }
 }
 
@@ -42,10 +27,11 @@ struct SchedulerState {
     {}
   };
 
-  enum class SlotStage {
-    Idle,
+  enum class BufferStage {
+    Free,
     Filling,
-    LaunchQueued,
+    ReadyToLaunch,
+    InferRunning,
     D2HPending
   };
 
@@ -53,60 +39,78 @@ struct SchedulerState {
     int slotIdx;
     int gpuIdx;
     int deviceStateIdx;
-    NNServerBuf* serverBuf;
     ComputeHandle* gpuHandle;
-    SlotStage stage;
-    bool inferStarted;
-    int batchSize;
-    int markerSlotIdx;
+    bool inferBusy;
+    int currentBufferIdx;
     double plannedWorkMs;
     double remainingWorkMs;
     double accumulatedEquivalentWorkMs;
-    uint64_t batchUid;
-    uint64_t lastH2DSpanId;
-    uint64_t inferDependencySpanId;
-    uint64_t inferSpanId;
-    uint64_t d2hSpanId;
     int64_t inferStartNs;
-    int64_t inferEndNs;
-    int64_t lastH2DEndNs;
-    std::vector<PendingH2DSpan> pendingH2DSpans;
-    std::vector<NNResultBuf*> requests;
-    std::vector<NNOutput*> outputs;
     bool isUsingFP16;
 
     SlotState()
       : slotIdx(-1),
         gpuIdx(-1),
         deviceStateIdx(-1),
-        serverBuf(nullptr),
         gpuHandle(nullptr),
-        stage(SlotStage::Idle),
-        inferStarted(false),
-        batchSize(0),
-        markerSlotIdx(-1),
+        inferBusy(false),
+        currentBufferIdx(-1),
         plannedWorkMs(0.0),
         remainingWorkMs(0.0),
         accumulatedEquivalentWorkMs(0.0),
+        inferStartNs(0),
+        isUsingFP16(false)
+    {}
+  };
+
+  struct BufferState {
+    int bufferIdx;
+    int gpuIdx;
+    int deviceStateIdx;
+    NNServerBuf* serverBuf;
+    BufferStage stage;
+    bool postDone;
+    int targetSlotIdx;
+    int batchSize;
+    double measuredInferMs;
+    uint64_t batchUid;
+    uint64_t lastH2DSpanId;
+    uint64_t inferSpanId;
+    uint64_t d2hSpanId;
+    int64_t lastH2DEndNs;
+    int64_t inferEndNs;
+    std::vector<PendingH2DSpan> pendingH2DSpans;
+    std::vector<NNResultBuf*> requests;
+    std::vector<NNOutput*> outputs;
+
+    BufferState()
+      : bufferIdx(-1),
+        gpuIdx(-1),
+        deviceStateIdx(-1),
+        serverBuf(nullptr),
+        stage(BufferStage::Free),
+        postDone(true),
+        targetSlotIdx(-1),
+        batchSize(0),
+        measuredInferMs(0.0),
         batchUid(0),
         lastH2DSpanId(0),
-        inferDependencySpanId(0),
         inferSpanId(0),
         d2hSpanId(0),
-        inferStartNs(0),
-        inferEndNs(0),
         lastH2DEndNs(0),
+        inferEndNs(0),
         pendingH2DSpans(),
         requests(),
-        outputs(),
-        isUsingFP16(false)
+        outputs()
     {}
   };
 
   struct DeviceState {
     int gpuIdx;
     std::vector<int> slotIndices;
+    std::vector<int> bufferIndices;
     int rrCursor;
+    int rrBufferCursor;
     int activeInferCount;
     int64_t lastProgressNs;
     std::vector<double> baseWorkMsByBatch;
@@ -115,7 +119,9 @@ struct SchedulerState {
     DeviceState()
       : gpuIdx(-1),
         slotIndices(),
+        bufferIndices(),
         rrCursor(0),
+        rrBufferCursor(0),
         activeInferCount(0),
         lastProgressNs(0),
         baseWorkMsByBatch(),
@@ -127,26 +133,21 @@ struct SchedulerState {
     bool exists;
     int targetSlotIdx;
     int targetGpuIdx;
-    int markerSlotIdx;
+    int bufferIdx;
     uint64_t batchUid;
-    uint64_t lastH2DSpanId;
-    std::vector<PendingH2DSpan> pendingH2DSpans;
-    std::vector<NNResultBuf*> requests;
 
     OpenBatchState()
       : exists(false),
         targetSlotIdx(-1),
         targetGpuIdx(-1),
-        markerSlotIdx(-1),
-        batchUid(0),
-        lastH2DSpanId(0),
-        pendingH2DSpans(),
-        requests()
+        bufferIdx(-1),
+        batchUid(0)
     {}
   };
 
   Rand rand;
   std::vector<SlotState> slots;
+  std::vector<BufferState> buffers;
   std::vector<DeviceState> devices;
   std::map<int,int> deviceStateIdxByGpu;
   OpenBatchState openBatch;
@@ -158,6 +159,7 @@ struct SchedulerState {
   explicit SchedulerState(const std::string& randSeed)
     : rand(randSeed),
       slots(),
+      buffers(),
       devices(),
       deviceStateIdxByGpu(),
       openBatch(),
@@ -553,34 +555,38 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     state->openBatch.exists = false;
     state->openBatch.targetSlotIdx = -1;
     state->openBatch.targetGpuIdx = -1;
-    state->openBatch.markerSlotIdx = -1;
+    state->openBatch.bufferIdx = -1;
     state->openBatch.batchUid = 0;
-    state->openBatch.lastH2DSpanId = 0;
-    state->openBatch.pendingH2DSpans.clear();
-    state->openBatch.requests.clear();
   };
 
   auto clearSlot = [&](SchedulerState::SlotState& slot) {
-    for(NNOutput* output: slot.outputs)
-      delete output;
-    slot.outputs.clear();
-    slot.requests.clear();
-    slot.stage = SchedulerState::SlotStage::Idle;
-    slot.inferStarted = false;
-    slot.batchSize = 0;
-    slot.markerSlotIdx = -1;
+    slot.inferBusy = false;
+    slot.currentBufferIdx = -1;
     slot.plannedWorkMs = 0.0;
     slot.remainingWorkMs = 0.0;
     slot.accumulatedEquivalentWorkMs = 0.0;
-    slot.batchUid = 0;
-    slot.lastH2DSpanId = 0;
-    slot.inferDependencySpanId = 0;
-    slot.inferSpanId = 0;
-    slot.d2hSpanId = 0;
     slot.inferStartNs = 0;
-    slot.inferEndNs = 0;
-    slot.lastH2DEndNs = 0;
-    slot.pendingH2DSpans.clear();
+  };
+
+  auto clearBufferForReuse = [&](SchedulerState::BufferState& buffer, bool deleteOutputs) {
+    if(deleteOutputs) {
+      for(NNOutput* output: buffer.outputs)
+        delete output;
+    }
+    buffer.outputs.clear();
+    buffer.requests.clear();
+    buffer.stage = SchedulerState::BufferStage::Free;
+    buffer.postDone = true;
+    buffer.targetSlotIdx = -1;
+    buffer.batchSize = 0;
+    buffer.measuredInferMs = 0.0;
+    buffer.batchUid = 0;
+    buffer.lastH2DSpanId = 0;
+    buffer.inferSpanId = 0;
+    buffer.d2hSpanId = 0;
+    buffer.lastH2DEndNs = 0;
+    buffer.inferEndNs = 0;
+    buffer.pendingH2DSpans.clear();
   };
 
   auto timelineNowNs = [&]() {
@@ -625,21 +631,21 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     double workAdvanceMs = dtMs / device.activeInferCount;
     for(int slotIdx: device.slotIndices) {
       SchedulerState::SlotState& slot = state->slots[slotIdx];
-      if(slot.stage == SchedulerState::SlotStage::LaunchQueued && slot.inferStarted) {
+      if(slot.inferBusy) {
         slot.remainingWorkMs = std::max(0.0, slot.remainingWorkMs - workAdvanceMs);
         slot.accumulatedEquivalentWorkMs += workAdvanceMs;
       }
     }
   };
 
-  auto findIdleSlotOnDevice = [&](SchedulerState::DeviceState& device) -> int {
+  auto findReadySlotOnDevice = [&](SchedulerState::DeviceState& device) -> int {
     if(device.slotIndices.empty())
       return -1;
     int numSlots = (int)device.slotIndices.size();
     for(int offset = 0; offset < numSlots; offset++) {
       int idx = (device.rrCursor + offset) % numSlots;
       int slotIdx = device.slotIndices[idx];
-      if(state->slots[slotIdx].stage == SchedulerState::SlotStage::Idle) {
+      if(!state->slots[slotIdx].inferBusy) {
         device.rrCursor = (idx + 1) % numSlots;
         return slotIdx;
       }
@@ -647,84 +653,102 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     return -1;
   };
 
+  auto findFreeBufferOnDevice = [&](SchedulerState::DeviceState& device) -> int {
+    if(device.bufferIndices.empty())
+      return -1;
+    int numBuffers = (int)device.bufferIndices.size();
+    for(int offset = 0; offset < numBuffers; offset++) {
+      int idx = (device.rrBufferCursor + offset) % numBuffers;
+      int bufferIdx = device.bufferIndices[idx];
+      const SchedulerState::BufferState& buffer = state->buffers[bufferIdx];
+      if(buffer.stage == SchedulerState::BufferStage::Free && buffer.postDone) {
+        device.rrBufferCursor = (idx + 1) % numBuffers;
+        return bufferIdx;
+      }
+    }
+    return -1;
+  };
+
   auto selectOpenBatchTarget = [&]() -> bool {
     int emptySlotIdx = -1;
+    int emptyBufferIdx = -1;
     for(size_t i = 0; i < state->devices.size(); i++) {
       SchedulerState::DeviceState& device = state->devices[i];
       if(device.activeInferCount == 0) {
-        int slotIdx = findIdleSlotOnDevice(device);
-        if(slotIdx >= 0) {
+        int bufferIdx = findFreeBufferOnDevice(device);
+        int slotIdx = findReadySlotOnDevice(device);
+        if(slotIdx >= 0 && bufferIdx >= 0) {
           emptySlotIdx = slotIdx;
+          emptyBufferIdx = bufferIdx;
           break;
         }
       }
     }
     if(emptySlotIdx >= 0) {
       SchedulerState::SlotState& slot = state->slots[emptySlotIdx];
-      slot.stage = SchedulerState::SlotStage::Filling;
+      SchedulerState::BufferState& buffer = state->buffers[emptyBufferIdx];
+      buffer.stage = SchedulerState::BufferStage::Filling;
+      buffer.postDone = false;
+      buffer.targetSlotIdx = emptySlotIdx;
+      buffer.batchUid = state->nextBatchUid++;
       state->openBatch.exists = true;
       state->openBatch.targetSlotIdx = emptySlotIdx;
       state->openBatch.targetGpuIdx = slot.gpuIdx;
-      state->openBatch.markerSlotIdx = -1;
-      state->openBatch.batchUid = state->nextBatchUid++;
-      state->openBatch.lastH2DSpanId = 0;
-      state->openBatch.pendingH2DSpans.clear();
-      state->openBatch.requests.clear();
-      GlobalPerfProfile::changeInferenceThreadActiveCount(emptySlotIdx,1);
+      state->openBatch.bufferIdx = emptyBufferIdx;
+      state->openBatch.batchUid = buffer.batchUid;
       return true;
     }
 
     double bestRemainingMs = std::numeric_limits<double>::infinity();
     int bestSlotIdx = -1;
-    int bestMarkerSlotIdx = -1;
+    int bestBufferIdx = -1;
     for(size_t i = 0; i < state->devices.size(); i++) {
       SchedulerState::DeviceState& device = state->devices[i];
-      int idleSlotIdx = findIdleSlotOnDevice(device);
-      if(idleSlotIdx < 0)
+      int bufferIdx = findFreeBufferOnDevice(device);
+      if(bufferIdx < 0)
         continue;
-      for(int markerSlotIdx: device.slotIndices) {
-        SchedulerState::SlotState& markerSlot = state->slots[markerSlotIdx];
-        if(markerSlot.stage == SchedulerState::SlotStage::LaunchQueued && markerSlot.inferStarted) {
-          if(markerSlot.remainingWorkMs < bestRemainingMs) {
-            bestRemainingMs = markerSlot.remainingWorkMs;
-            bestSlotIdx = idleSlotIdx;
-            bestMarkerSlotIdx = markerSlotIdx;
-          }
+      for(int slotIdx: device.slotIndices) {
+        const SchedulerState::SlotState& slot = state->slots[slotIdx];
+        double readyMs = slot.inferBusy ? slot.remainingWorkMs : 0.0;
+        if(readyMs < bestRemainingMs) {
+          bestRemainingMs = readyMs;
+          bestSlotIdx = slotIdx;
+          bestBufferIdx = bufferIdx;
         }
       }
     }
 
     if(bestSlotIdx >= 0) {
       SchedulerState::SlotState& slot = state->slots[bestSlotIdx];
-      slot.stage = SchedulerState::SlotStage::Filling;
+      SchedulerState::BufferState& buffer = state->buffers[bestBufferIdx];
+      buffer.stage = SchedulerState::BufferStage::Filling;
+      buffer.postDone = false;
+      buffer.targetSlotIdx = bestSlotIdx;
+      buffer.batchUid = state->nextBatchUid++;
       state->openBatch.exists = true;
       state->openBatch.targetSlotIdx = bestSlotIdx;
       state->openBatch.targetGpuIdx = slot.gpuIdx;
-      state->openBatch.markerSlotIdx = bestMarkerSlotIdx;
-      state->openBatch.batchUid = state->nextBatchUid++;
-      state->openBatch.lastH2DSpanId = 0;
-      state->openBatch.pendingH2DSpans.clear();
-      state->openBatch.requests.clear();
-      GlobalPerfProfile::changeInferenceThreadActiveCount(bestSlotIdx,1);
+      state->openBatch.bufferIdx = bestBufferIdx;
+      state->openBatch.batchUid = buffer.batchUid;
       return true;
     }
     return false;
   };
 
-  auto allocateOutputsForSlot = [&](SchedulerState::SlotState& slot) {
-    for(NNOutput* output: slot.outputs)
+  auto allocateOutputsForBuffer = [&](SchedulerState::BufferState& buffer) {
+    for(NNOutput* output: buffer.outputs)
       delete output;
-    slot.outputs.clear();
-    slot.outputs.reserve(slot.batchSize);
-    for(int row = 0; row < slot.batchSize; row++) {
+    buffer.outputs.clear();
+    buffer.outputs.reserve(buffer.batchSize);
+    for(int row = 0; row < buffer.batchSize; row++) {
       NNOutput* emptyOutput = new NNOutput();
       emptyOutput->nnXLen = nnXLen;
       emptyOutput->nnYLen = nnYLen;
-      if(slot.requests[row]->includeOwnerMap)
+      if(buffer.requests[row]->includeOwnerMap)
         emptyOutput->whiteOwnerMap = new float[nnXLen * nnYLen];
       else
         emptyOutput->whiteOwnerMap = NULL;
-      slot.outputs.push_back(emptyOutput);
+      buffer.outputs.push_back(emptyOutput);
     }
   };
 
@@ -733,55 +757,37 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       return false;
     SchedulerState::SlotState& slot = state->slots[state->openBatch.targetSlotIdx];
     SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
+    SchedulerState::BufferState& buffer = state->buffers[state->openBatch.bufferIdx];
     const int64_t launchNowNs = timelineNowNs();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
     bool shouldLaunch = false;
     if(device.activeInferCount == 0)
       shouldLaunch = true;
-    else if((int)state->openBatch.requests.size() >= desiredBatchSize)
+    else if(buffer.batchSize >= desiredBatchSize)
       shouldLaunch = true;
     if(!shouldLaunch)
       return false;
+    if(buffer.stage == SchedulerState::BufferStage::Filling) {
+      if(!NeuralNet::trtQueryInputCopiesDone(buffer.serverBuf->inputBuffers))
+        return false;
+      buffer.stage = SchedulerState::BufferStage::ReadyToLaunch;
+    }
+    if(buffer.stage != SchedulerState::BufferStage::ReadyToLaunch || slot.inferBusy)
+      return false;
 
-    slot.requests = state->openBatch.requests;
-    slot.batchSize = (int)slot.requests.size();
-    slot.markerSlotIdx = state->openBatch.markerSlotIdx;
-    slot.plannedWorkMs = device.baseWorkMsByBatch[slot.batchSize];
+    buffer.stage = SchedulerState::BufferStage::InferRunning;
+    buffer.batchSize = (int)buffer.requests.size();
+    slot.plannedWorkMs = device.baseWorkMsByBatch[buffer.batchSize];
     slot.remainingWorkMs = slot.plannedWorkMs;
     slot.accumulatedEquivalentWorkMs = 0.0;
-    slot.batchUid = state->openBatch.batchUid;
-    slot.lastH2DSpanId = state->openBatch.lastH2DSpanId;
-    slot.inferDependencySpanId = 0;
-    slot.inferSpanId = 0;
-    slot.d2hSpanId = 0;
     slot.inferStartNs = 0;
-    slot.inferEndNs = 0;
-    slot.lastH2DEndNs = 0;
-    slot.pendingH2DSpans = state->openBatch.pendingH2DSpans;
-
-    allocateOutputsForSlot(slot);
-
-    const ComputeHandle* dependencyHandle = nullptr;
-    bool waitsOnMarker = false;
-    if(slot.markerSlotIdx >= 0) {
-      const SchedulerState::SlotState& markerSlot = state->slots[slot.markerSlotIdx];
-      if(markerSlot.stage == SchedulerState::SlotStage::LaunchQueued)
-        waitsOnMarker = true;
-      else
-        slot.inferDependencySpanId = markerSlot.inferSpanId;
-    }
-    if(waitsOnMarker)
-      dependencyHandle = state->slots[slot.markerSlotIdx].gpuHandle;
-    NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, slot.serverBuf->inputBuffers, slot.batchSize, dependencyHandle);
-    NeuralNet::trtEnqueueOutputCopiesAsync(slot.gpuHandle, slot.serverBuf->inputBuffers, slot.batchSize);
-
-    slot.stage = SchedulerState::SlotStage::LaunchQueued;
-    slot.inferStarted = !waitsOnMarker;
-    if(slot.inferStarted) {
-      slot.inferStartNs = launchNowNs;
-      device.activeInferCount += 1;
-      GlobalPerfProfile::changeGpuStreamActiveCount(slot.slotIdx, slot.gpuIdx, 1);
-    }
+    slot.currentBufferIdx = buffer.bufferIdx;
+    slot.inferBusy = true;
+    allocateOutputsForBuffer(buffer);
+    NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, buffer.batchSize);
+    slot.inferStartNs = launchNowNs;
+    device.activeInferCount += 1;
+    GlobalPerfProfile::changeGpuStreamActiveCount(slot.slotIdx, slot.gpuIdx, 1);
 
     clearOpenBatch();
     return true;
@@ -856,15 +862,18 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       if(device.slotIndices.empty())
         continue;
       SchedulerState::SlotState& slot = state->slots[device.slotIndices[0]];
+      SchedulerState::BufferState& buffer = state->buffers[device.bufferIndices[0]];
       for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
         for(int row = 0; row < batchSize; row++) {
-          NeuralNet::trtPackInputRow(slot.serverBuf->inputBuffers, &benchmarkRequests[row], row, slot.gpuHandle);
-          NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, slot.serverBuf->inputBuffers, row);
+          NeuralNet::trtPackInputRow(buffer.serverBuf->inputBuffers, &benchmarkRequests[row], row, slot.gpuHandle);
+          NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, buffer.serverBuf->inputBuffers, row);
         }
+        while(!NeuralNet::trtQueryInputCopiesDone(buffer.serverBuf->inputBuffers))
+          std::this_thread::yield();
 
         auto measureOnceMs = [&]() {
           auto startTime = std::chrono::steady_clock::now();
-          NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, slot.serverBuf->inputBuffers, batchSize, nullptr);
+          NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, batchSize);
           while(!NeuralNet::trtQueryInferenceDone(slot.gpuHandle))
             std::this_thread::yield();
           auto endTime = std::chrono::steady_clock::now();
@@ -915,7 +924,6 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       slot.slotIdx = (int)i;
       slot.gpuIdx = gpuIdx;
       slot.deviceStateIdx = deviceStateIdx;
-      slot.serverBuf = new NNServerBuf(*this, loadedModel);
       slot.gpuHandle = NeuralNet::createComputeHandle(
         computeContext,
         loadedModel,
@@ -929,6 +937,25 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       );
       slot.isUsingFP16 = NeuralNet::isUsingFP16(slot.gpuHandle);
       state->devices[deviceStateIdx].slotIndices.push_back(slot.slotIdx);
+    }
+
+    for(SchedulerState::DeviceState& device: state->devices) {
+      if(device.slotIndices.empty())
+        continue;
+      SchedulerState::SlotState& referenceSlot = state->slots[device.slotIndices[0]];
+      int bufferCount = (int)device.slotIndices.size() + 1;
+      for(int i = 0; i < bufferCount; i++) {
+        state->buffers.push_back(SchedulerState::BufferState());
+        SchedulerState::BufferState& buffer = state->buffers.back();
+        buffer.bufferIdx = (int)state->buffers.size() - 1;
+        buffer.gpuIdx = device.gpuIdx;
+        buffer.deviceStateIdx = referenceSlot.deviceStateIdx;
+        buffer.serverBuf = new NNServerBuf(*this, loadedModel);
+        NeuralNet::trtInitializeSharedBuffer(referenceSlot.gpuHandle, buffer.serverBuf->inputBuffers);
+        for(int slotIdx: device.slotIndices)
+          NeuralNet::trtRegisterSharedBuffer(state->slots[slotIdx].gpuHandle, buffer.serverBuf->inputBuffers);
+        device.bufferIndices.push_back(buffer.bufferIdx);
+      }
     }
 
     initializeDeviceBaseWorkEstimates();
@@ -949,23 +976,25 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
 
     auto handleInferCompletion = [&](SchedulerState::SlotState& slot, int64_t nowNs) {
       SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
+      SchedulerState::BufferState& buffer = state->buffers[slot.currentBufferIdx];
       uint64_t completedInferSpanId = 0;
       int64_t recordedInferEndNs = nowNs;
-      if(slot.stage == SchedulerState::SlotStage::LaunchQueued && slot.inferStarted) {
+      if(slot.inferBusy) {
         GlobalPerfProfile::changeGpuStreamActiveCount(slot.slotIdx, slot.gpuIdx, -1);
         if(device.activeInferCount > 0)
           device.activeInferCount -= 1;
         double measuredWorkMs = slot.accumulatedEquivalentWorkMs;
         if(measuredWorkMs <= 0.0)
           measuredWorkMs = slot.plannedWorkMs;
-        recordBatchSample(device, slot.batchSize, measuredWorkMs);
+        recordBatchSample(device, buffer.batchSize, measuredWorkMs);
+        buffer.measuredInferMs = measuredWorkMs;
 
         uint64_t previousH2DSpanId = 0;
         int64_t previousH2DEndNs = 0;
-        slot.lastH2DSpanId = 0;
-        slot.lastH2DEndNs = 0;
-        for(const SchedulerState::PendingH2DSpan& pendingH2D: slot.pendingH2DSpans) {
-          double h2dElapsedMs = NeuralNet::trtGetLastInputRowCopyElapsedMs(slot.gpuHandle, pendingH2D.rowIdx);
+        buffer.lastH2DSpanId = 0;
+        buffer.lastH2DEndNs = 0;
+        for(const SchedulerState::PendingH2DSpan& pendingH2D: buffer.pendingH2DSpans) {
+          double h2dElapsedMs = NeuralNet::trtGetLastInputRowCopyElapsedMs(buffer.serverBuf->inputBuffers, pendingH2D.rowIdx);
           int64_t h2dDurationNs = h2dElapsedMs > 0.0 ? (int64_t)(h2dElapsedMs * 1e6 + 0.5) : 0;
           int64_t recordedH2DStartNs = pendingH2D.enqueueStartNs > 0 ? pendingH2D.enqueueStartNs : nowNs;
           if(recordedH2DStartNs < previousH2DEndNs)
@@ -982,7 +1011,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
               h2dSpanId,
               pendingH2D.preprocessSpanId,
               previousH2DSpanId,
-              slot.batchUid,
+              buffer.batchUid,
               pendingH2D.rowIdx,
               recordedH2DStartNs,
               recordedH2DEndNs
@@ -990,16 +1019,16 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           }
           previousH2DSpanId = h2dSpanId;
           previousH2DEndNs = recordedH2DEndNs;
-          slot.lastH2DSpanId = h2dSpanId;
-          slot.lastH2DEndNs = recordedH2DEndNs;
+          buffer.lastH2DSpanId = h2dSpanId;
+          buffer.lastH2DEndNs = recordedH2DEndNs;
         }
-        slot.pendingH2DSpans.clear();
+        buffer.pendingH2DSpans.clear();
 
         double inferElapsedMs = NeuralNet::trtGetLastInferenceElapsedMs(slot.gpuHandle);
         int64_t inferDurationNs = inferElapsedMs > 0.0 ? (int64_t)(inferElapsedMs * 1e6 + 0.5) : 0;
         int64_t inferReadyNs = slot.inferStartNs > 0 ? slot.inferStartNs : nowNs;
-        if(slot.lastH2DEndNs > inferReadyNs)
-          inferReadyNs = slot.lastH2DEndNs;
+        if(buffer.lastH2DEndNs > inferReadyNs)
+          inferReadyNs = buffer.lastH2DEndNs;
         int64_t inferredStartNs = inferDurationNs > 0 ? nowNs - inferDurationNs : inferReadyNs;
         if(inferredStartNs < inferReadyNs)
           inferredStartNs = inferReadyNs;
@@ -1013,79 +1042,66 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             GlobalPerfProfile::TimelineLane::InferStream,
             GlobalPerfProfile::TimelineStage::Infer,
             completedInferSpanId,
-            slot.lastH2DSpanId,
-            slot.inferDependencySpanId,
-            slot.batchUid,
+            buffer.lastH2DSpanId,
+            0,
+            buffer.batchUid,
             -1,
             inferStartNs,
             recordedInferEndNs
           );
         }
       }
-      slot.inferStarted = false;
-      slot.inferSpanId = completedInferSpanId;
-      slot.inferEndNs = recordedInferEndNs;
-      slot.stage = SchedulerState::SlotStage::D2HPending;
-      slot.remainingWorkMs = 0.0;
-
-      for(int dependentSlotIdx: device.slotIndices) {
-        SchedulerState::SlotState& dependentSlot = state->slots[dependentSlotIdx];
-        if(dependentSlot.stage == SchedulerState::SlotStage::LaunchQueued &&
-            !dependentSlot.inferStarted &&
-            dependentSlot.markerSlotIdx == slot.slotIdx) {
-          dependentSlot.inferStarted = true;
-          dependentSlot.inferStartNs = slot.inferEndNs > 0 ? slot.inferEndNs : nowNs;
-          dependentSlot.remainingWorkMs = dependentSlot.plannedWorkMs;
-          dependentSlot.accumulatedEquivalentWorkMs = 0.0;
-          dependentSlot.inferDependencySpanId = completedInferSpanId;
-          device.activeInferCount += 1;
-          GlobalPerfProfile::changeGpuStreamActiveCount(dependentSlot.slotIdx, dependentSlot.gpuIdx, 1);
-        }
-      }
+      buffer.inferSpanId = completedInferSpanId;
+      buffer.inferEndNs = recordedInferEndNs;
+      NeuralNet::trtEnqueueOutputCopiesAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, buffer.batchSize);
+      buffer.stage = SchedulerState::BufferStage::D2HPending;
+      clearSlot(slot);
     };
 
-    auto finalizeCompletedBatch = [&](SchedulerState::SlotState& slot) {
+    auto finalizeCompletedBatch = [&](SchedulerState::BufferState& buffer) {
+      const int slotIdx = buffer.targetSlotIdx;
+      const SchedulerState::SlotState& slot = state->slots[slotIdx];
       const int64_t d2hDoneNs = timelineNowNs();
-      const int completedBatchSize = slot.batchSize;
-      const double completedInferMs = slot.accumulatedEquivalentWorkMs > 0.0 ? slot.accumulatedEquivalentWorkMs : slot.plannedWorkMs;
+      const int completedBatchSize = buffer.batchSize;
+      const double completedInferMs = buffer.measuredInferMs;
       uint64_t d2hSpanId = 0;
-      double d2hElapsedMs = NeuralNet::trtGetLastOutputCopiesElapsedMs(slot.gpuHandle);
+      double d2hElapsedMs = NeuralNet::trtGetLastOutputCopiesElapsedMs(buffer.serverBuf->inputBuffers);
       int64_t d2hDurationNs = d2hElapsedMs > 0.0 ? (int64_t)(d2hElapsedMs * 1e6 + 0.5) : 0;
-      const int64_t d2hStartNs = slot.inferEndNs > 0 ? slot.inferEndNs : d2hDoneNs;
+      const int64_t d2hStartNs = buffer.inferEndNs > 0 ? buffer.inferEndNs : d2hDoneNs;
       const int64_t recordedD2HEndNs = (d2hDurationNs > 0 && d2hStartNs <= d2hDoneNs) ? std::min(d2hDoneNs, d2hStartNs + d2hDurationNs) : d2hDoneNs;
       if(shouldCaptureTimelineSpan(d2hStartNs, recordedD2HEndNs)) {
         d2hSpanId = nextTimelineSpanId();
         GlobalPerfProfile::recordRealtimeTimelineSpan(
-          slot.slotIdx,
+          slotIdx,
           slot.gpuIdx,
           GlobalPerfProfile::TimelineLane::D2HStream,
           GlobalPerfProfile::TimelineStage::D2H,
           d2hSpanId,
-          slot.inferSpanId,
+          buffer.inferSpanId,
           0,
-          slot.batchUid,
+          buffer.batchUid,
           -1,
           d2hStartNs,
           recordedD2HEndNs
         );
       }
-      slot.d2hSpanId = d2hSpanId;
+      buffer.d2hSpanId = d2hSpanId;
 
       const int64_t postprocessStartNs = std::max(recordedD2HEndNs, timelineNowNs());
       for(int row = 0; row < completedBatchSize; row++) {
-        NeuralNet::trtUnpackOutputRow(slot.serverBuf->inputBuffers, slot.requests[row], slot.outputs[row], row, slot.gpuHandle);
+        NeuralNet::trtUnpackOutputRow(buffer.serverBuf->inputBuffers, buffer.requests[row], buffer.outputs[row], row, slot.gpuHandle);
       }
       const int64_t postprocessEndNs = timelineNowNs();
       if(shouldCaptureTimelineSpan(postprocessStartNs, postprocessEndNs)) {
         GlobalPerfProfile::recordRealtimeTimelineSpan(
-          slot.slotIdx,
+          slotIdx,
           slot.gpuIdx,
           GlobalPerfProfile::TimelineLane::SchedulerThread,
           GlobalPerfProfile::TimelineStage::Postprocess,
           nextTimelineSpanId(),
           d2hSpanId,
           0,
-          slot.batchUid,
+          buffer.batchUid,
           -1,
           postprocessStartNs,
           postprocessEndNs
@@ -1095,7 +1111,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       m_numRowsProcessed.fetch_add(completedBatchSize, std::memory_order_relaxed);
       m_numBatchesProcessed.fetch_add(1, std::memory_order_relaxed);
       GlobalPerfProfile::recordRealtimeInferenceBatch(
-        slot.slotIdx,
+        slotIdx,
         slot.gpuIdx,
         completedBatchSize,
         completedBatchSize,
@@ -1108,31 +1124,14 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       );
 
       for(int row = 0; row < completedBatchSize; row++) {
-        NNResultBuf* resultBuf = slot.requests[row];
+        NNResultBuf* resultBuf = buffer.requests[row];
         unique_lock<std::mutex> resultLock(resultBuf->resultMutex);
-        resultBuf->result = std::shared_ptr<NNOutput>(slot.outputs[row]);
+        resultBuf->result = std::shared_ptr<NNOutput>(buffer.outputs[row]);
         resultBuf->hasResult = true;
         resultBuf->clientWaitingForResult.notify_all();
       }
-      slot.outputs.clear();
-      slot.requests.clear();
-      slot.batchSize = 0;
-      slot.stage = SchedulerState::SlotStage::Idle;
-      slot.inferStarted = false;
-      slot.markerSlotIdx = -1;
-      slot.plannedWorkMs = 0.0;
-      slot.remainingWorkMs = 0.0;
-      slot.accumulatedEquivalentWorkMs = 0.0;
-      slot.batchUid = 0;
-      slot.lastH2DSpanId = 0;
-      slot.inferDependencySpanId = 0;
-      slot.inferSpanId = 0;
-      slot.d2hSpanId = 0;
-      slot.inferStartNs = 0;
-      slot.inferEndNs = 0;
-      slot.lastH2DEndNs = 0;
-      slot.pendingH2DSpans.clear();
-      GlobalPerfProfile::changeInferenceThreadActiveCount(slot.slotIdx,-1);
+      buffer.outputs.clear();
+      clearBufferForReuse(buffer, false);
 
       unique_lock<std::mutex> lock(bufferMutex);
       numOngoingEvals -= completedBatchSize;
@@ -1153,17 +1152,16 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       bool didWork = false;
 
       for(SchedulerState::SlotState& slot: state->slots) {
-        if(slot.stage == SchedulerState::SlotStage::LaunchQueued &&
-            NeuralNet::trtQueryInferenceDone(slot.gpuHandle)) {
+        if(slot.inferBusy && NeuralNet::trtQueryInferenceDone(slot.gpuHandle)) {
           handleInferCompletion(slot, nowNs);
           didWork = true;
         }
       }
 
-      for(SchedulerState::SlotState& slot: state->slots) {
-        if(slot.stage == SchedulerState::SlotStage::D2HPending &&
-            NeuralNet::trtQueryOutputCopiesDone(slot.gpuHandle)) {
-          finalizeCompletedBatch(slot);
+      for(SchedulerState::BufferState& buffer: state->buffers) {
+        if(buffer.stage == SchedulerState::BufferStage::D2HPending &&
+            NeuralNet::trtQueryOutputCopiesDone(buffer.serverBuf->inputBuffers)) {
+          finalizeCompletedBatch(buffer);
           didWork = true;
         }
       }
@@ -1185,7 +1183,14 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
         }
         else {
           SchedulerState::SlotState& slot = state->slots[state->openBatch.targetSlotIdx];
-          int rowIdx = (int)state->openBatch.requests.size();
+          SchedulerState::BufferState& buffer = state->buffers[state->openBatch.bufferIdx];
+          if((int)buffer.requests.size() >= maxBatchSize) {
+            deferredRequest = request;
+            if(maybeLaunchOpenBatch())
+              didWork = true;
+          }
+          else {
+          int rowIdx = (int)buffer.requests.size();
           int64_t preprocessStartNs = timelineNowNs();
           bool doRandomize = currentDoRandomize.load(std::memory_order_acquire);
           int defaultSymmetry = currentDefaultSymmetry.load(std::memory_order_acquire);
@@ -1195,7 +1200,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             else
               request->symmetry = defaultSymmetry;
           }
-          NeuralNet::trtPackInputRow(slot.serverBuf->inputBuffers, request, rowIdx, slot.gpuHandle);
+          NeuralNet::trtPackInputRow(buffer.serverBuf->inputBuffers, request, rowIdx, slot.gpuHandle);
           int64_t preprocessEndNs = timelineNowNs();
           uint64_t preprocessSpanId = 0;
           if(shouldCaptureTimelineSpan(preprocessStartNs, preprocessEndNs)) {
@@ -1216,29 +1221,37 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           }
 
           int64_t h2dStartNs = timelineNowNs();
-          NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, slot.serverBuf->inputBuffers, rowIdx);
+          NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, buffer.serverBuf->inputBuffers, rowIdx);
           SchedulerState::PendingH2DSpan pendingH2D;
           pendingH2D.rowIdx = rowIdx;
           pendingH2D.preprocessSpanId = preprocessSpanId;
           pendingH2D.enqueueStartNs = h2dStartNs;
-          state->openBatch.pendingH2DSpans.push_back(pendingH2D);
-          state->openBatch.lastH2DSpanId = 0;
-          state->openBatch.requests.push_back(request);
+          buffer.pendingH2DSpans.push_back(pendingH2D);
+          buffer.requests.push_back(request);
+          buffer.batchSize = (int)buffer.requests.size();
           didWork = true;
           if(maybeLaunchOpenBatch())
             didWork = true;
+          }
         }
       }
 
       bool allSlotsIdle = true;
       for(const SchedulerState::SlotState& slot: state->slots) {
-        if(slot.stage != SchedulerState::SlotStage::Idle) {
+        if(slot.inferBusy) {
           allSlotsIdle = false;
           break;
         }
       }
+      bool allBuffersFree = true;
+      for(const SchedulerState::BufferState& buffer: state->buffers) {
+        if(buffer.stage != SchedulerState::BufferStage::Free) {
+          allBuffersFree = false;
+          break;
+        }
+      }
 
-      if(queryQueue.isReadOnly() && deferredRequest == nullptr && !state->openBatch.exists && allSlotsIdle)
+      if(queryQueue.isReadOnly() && deferredRequest == nullptr && !state->openBatch.exists && allSlotsIdle && allBuffersFree)
         break;
 
       if(!didWork) {
@@ -1270,8 +1283,11 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       NeuralNet::freeComputeHandle(slot.gpuHandle);
       slot.gpuHandle = nullptr;
     }
-    delete slot.serverBuf;
-    slot.serverBuf = nullptr;
+  }
+  for(SchedulerState::BufferState& buffer: state->buffers) {
+    clearBufferForReuse(buffer, true);
+    delete buffer.serverBuf;
+    buffer.serverBuf = nullptr;
   }
 }
 #endif
