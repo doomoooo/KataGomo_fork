@@ -1167,6 +1167,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
         double h2dEndOffsetMs = NeuralNet::trtGetTimelineInputRowEndOffsetMs(buffer.serverBuf->inputBuffers, pendingH2D.rowIdx);
         int64_t recordedH2DStartNs = cudaTimelineBaseNs + (int64_t)(h2dStartOffsetMs * 1e6 + 0.5);
         int64_t recordedH2DEndNs = cudaTimelineBaseNs + (int64_t)(h2dEndOffsetMs * 1e6 + 0.5);
+        if(recordedH2DStartNs < pendingH2D.enqueueStartNs)
+          recordedH2DStartNs = pendingH2D.enqueueStartNs;
         if(recordedH2DStartNs < previousH2DEndNs)
           recordedH2DStartNs = previousH2DEndNs;
         if(recordedH2DEndNs < recordedH2DStartNs)
@@ -1255,6 +1257,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       double d2hStartOffsetMs = NeuralNet::trtGetTimelineOutputCopiesStartOffsetMs(buffer.serverBuf->inputBuffers);
       double d2hEndOffsetMs = NeuralNet::trtGetTimelineOutputCopiesEndOffsetMs(buffer.serverBuf->inputBuffers);
       int64_t d2hStartNs = cudaTimelineBaseNs + (int64_t)(d2hStartOffsetMs * 1e6 + 0.5);
+      if(d2hStartNs < buffer.d2hEnqueueNs)
+        d2hStartNs = buffer.d2hEnqueueNs;
       if(slot.lastRecordedD2HEndNs > d2hStartNs)
         d2hStartNs = slot.lastRecordedD2HEndNs;
       int64_t recordedD2HEndNs = cudaTimelineBaseNs + (int64_t)(d2hEndOffsetMs * 1e6 + 0.5);

@@ -2913,3 +2913,12 @@ reviewer 额外指出了一条中等严重度的问题：
   - 依赖关系为 `Infer(GPU) -> D2H CPU -> D2H(GPU) -> Postprocess`
 
 这样 timeline 上不再把 CPU 发起 CUDA call 的那一小段压成“空白”。
+
+补充：
+
+- `H2D/D2H GPU` 的绝对位置仍然是“CPU wall clock 基准 + CUDA event offset”重建出来的
+- 因此会有亚微秒级 mixed-clock 偏差，可能出现视觉上的 `GPU start < CPU call start`
+- 当前已对 display 做保守钳位：
+  - `H2D GPU start >= H2D CPU start`
+  - `D2H GPU start >= D2H CPU start`
+- 这不改变时长，只是去掉不符合因果关系的显示伪像
