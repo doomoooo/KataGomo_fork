@@ -1297,3 +1297,44 @@ while (!isKilled) {
 - blocker 2 也部分落地：
   - `ComputeHandle` 自身的 slot-level TRT helper 已经开始显式 `cudaSetDevice(gpuIdxForHandle)`
   - 后续继续拆异步接口时，应沿用这个 ownership 方向，而不是把 `cudaSetDevice()` 重新散落到高层调度逻辑里
+
+### 2026-03-11: `getOutput()` 已拆成内部三段流
+
+继续做了一层仍然保持外部同步语义的准备性重构。
+
+当前 `ComputeHandle` 内部资源已经变成：
+
+- `h2dStream`
+- `inferStream`
+- `d2hStream`
+- `h2dDoneEvent`
+- `inferDoneEvent`
+
+现在 `getOutput()` 的实际数据流已经是：
+
+1. CPU 预处理把 row 填进 pinned host buffers
+2. H2D 在 `h2dStream`
+3. `cudaEventRecord(h2dDoneEvent, h2dStream)`
+4. `cudaStreamWaitEvent(inferStream, h2dDoneEvent, 0)`
+5. `enqueueV3` 或 `cudaGraphLaunch` 在 `inferStream`
+6. `cudaEventRecord(inferDoneEvent, inferStream)`
+7. `cudaStreamWaitEvent(d2hStream, inferDoneEvent, 0)`
+8. D2H 在 `d2hStream`
+9. 末尾仍然 `cudaStreamSynchronize(d2hStream)`，所以对外仍是同步 `getOutput()`
+
+这层改动的意义：
+
+- 已经把最终 overlap 设计最核心的 GPU-side 依赖表达方式写进实际代码路径
+- 以后 scheduler 只需要决定“什么时候在某个 slot 上发 H2D / infer / D2H”，而不是再先推翻单 stream 结构
+- 这也验证了“event gate + graph launch”这条官方建议路径在现有 TRT backend 里是能自然落地的
+
+当前仍然没做的事：
+
+- 还没有把 `getOutput()` 拆成 submit/query/finish 这种异步接口
+- 还没有引入 open batch / slot state machine
+- `InputBuffers` 仍然按当前 server-thread 模型分配和复用
+
+验证结果：
+
+- 2026-03-11 本地再次增量编译通过：
+  - `cmake --build cpp/build --parallel 8 --target katago`

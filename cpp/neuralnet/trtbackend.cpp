@@ -1191,7 +1191,9 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
+  cudaStream_t h2dStream;
   cudaStream_t inferStream;
+  cudaStream_t d2hStream;
   bool trtUseCudaGraph;
   bool perfProfileEnabled;
   struct BatchGraphState {
@@ -1200,6 +1202,8 @@ struct ComputeHandle {
     BatchGraphState() : graph(nullptr), graphExec(nullptr) {}
   };
   vector<BatchGraphState> batchGraphStates;
+  cudaEvent_t h2dDoneEvent;
+  cudaEvent_t inferDoneEvent;
   cudaEvent_t perfH2DStartEvent;
   cudaEvent_t perfH2DEndEvent;
   cudaEvent_t perfInferenceDoneEvent;
@@ -1221,23 +1225,31 @@ struct ComputeHandle {
 
     maxBatchSize = maxBatchSz;
     modelVersion = loadedModel->modelDesc.modelVersion;
+    h2dStream = nullptr;
     inferStream = nullptr;
+    d2hStream = nullptr;
     trtUseCudaGraph = context->trtUseCudaGraph;
     perfProfileEnabled = GlobalPerfProfile::isEnabled();
     if(perfProfileEnabled)
       launchIntervalGpuState = getLaunchIntervalGpuStateForGpu(gpuIdxForHandle);
     batchGraphStates.resize(maxBatchSize + 1);
+    h2dDoneEvent = nullptr;
+    inferDoneEvent = nullptr;
     perfH2DStartEvent = nullptr;
     perfH2DEndEvent = nullptr;
     perfInferenceDoneEvent = nullptr;
     perfD2HEndEvent = nullptr;
+    CUDA_ERR("ComputeHandle", cudaEventCreateWithFlags(&h2dDoneEvent, cudaEventDisableTiming));
+    CUDA_ERR("ComputeHandle", cudaEventCreateWithFlags(&inferDoneEvent, cudaEventDisableTiming));
     if(perfProfileEnabled) {
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfH2DStartEvent));
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfH2DEndEvent));
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfInferenceDoneEvent));
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfD2HEndEvent));
     }
+    CUDA_ERR("ComputeHandle", cudaStreamCreateWithFlags(&h2dStream, cudaStreamNonBlocking));
     CUDA_ERR("ComputeHandle", cudaStreamCreateWithFlags(&inferStream, cudaStreamNonBlocking));
+    CUDA_ERR("ComputeHandle", cudaStreamCreateWithFlags(&d2hStream, cudaStreamNonBlocking));
 
     // Certain minor versions of TensorRT uses a global logger, which is bad.
     // Since TensorRT maintains ABI compatibility between minor versions, a dynamic library mismatch
@@ -1647,8 +1659,12 @@ struct ComputeHandle {
   ~ComputeHandle() {
     setDevice("~ComputeHandle");
     destroyAllBatchGraphs();
+    if(d2hStream != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaStreamDestroy(d2hStream));
     if(inferStream != nullptr)
       CUDA_ERR("~ComputeHandle", cudaStreamDestroy(inferStream));
+    if(h2dStream != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaStreamDestroy(h2dStream));
     if(perfD2HEndEvent != nullptr)
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfD2HEndEvent));
     if(perfInferenceDoneEvent != nullptr)
@@ -1657,6 +1673,10 @@ struct ComputeHandle {
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfH2DEndEvent));
     if(perfH2DStartEvent != nullptr)
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfH2DStartEvent));
+    if(inferDoneEvent != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaEventDestroy(inferDoneEvent));
+    if(h2dDoneEvent != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaEventDestroy(h2dDoneEvent));
     for(auto ptr: buffers) {
       CUDA_ERR("~ComputeHandle", cudaFree(ptr.second));
     }
@@ -2207,7 +2227,9 @@ void NeuralNet::getOutput(
   const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
   const int numMetaFeatures = inputBuffers->singleInputMetaElts;
   gpuHandle->setDevice("getOutput");
-  cudaStream_t stream = gpuHandle->inferStream;
+  cudaStream_t h2dStream = gpuHandle->h2dStream;
+  cudaStream_t inferStream = gpuHandle->inferStream;
+  cudaStream_t d2hStream = gpuHandle->d2hStream;
   const bool perfEnabled = gpuHandle->perfProfileEnabled;
   double preprocessMs = 0.0;
   double d2hMs = 0.0;
@@ -2258,7 +2280,7 @@ void NeuralNet::getOutput(
   }
   if(perfEnabled) {
     preprocessMs = elapsedMilliseconds(preprocessStart);
-    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DStartEvent, stream));
+    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DStartEvent, h2dStream));
   }
 
   {
@@ -2273,8 +2295,8 @@ void NeuralNet::getOutput(
         assert(inputBuffers->singleInputElts == gpuHandle->getBufferRowElts("input_spatial"));
         assert(inputBuffers->singleInputGlobalElts == gpuHandle->getBufferRowElts("input_global"));
 
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_spatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("input_global"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
 
         auto spatialInputDims = gpuHandle->getBufferDynamicShape("input_spatial", batchSize);
         auto globalInputDims = gpuHandle->getBufferDynamicShape("input_global", batchSize);
@@ -2287,11 +2309,11 @@ void NeuralNet::getOutput(
         if(numMetaFeatures > 0)
           assert(inputBuffers->singleInputMetaElts == gpuHandle->getBufferRowElts("InputMeta"));
 
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMask"), inputBuffers->maskInputs.get(), inputBuffers->singleMaskBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputSpatial"), inputBuffers->spatialInputs.get(), inputBuffers->singleInputBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputGlobal"), inputBuffers->globalInputs.get(), inputBuffers->singleInputGlobalBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
         if(numMetaFeatures > 0) {
-          CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, stream));
+          CUDA_ERR("getOutput", cudaMemcpyAsync(gpuHandle->getBuffer("InputMeta"), inputBuffers->metaInputs.get(), inputBuffers->singleInputMetaBytes * batchSize, cudaMemcpyHostToDevice, h2dStream));
         }
 
         auto maskInputDims = gpuHandle->getBufferDynamicShape("InputMask", batchSize);
@@ -2308,30 +2330,34 @@ void NeuralNet::getOutput(
         }
     }
     if(perfEnabled)
-      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DEndEvent, stream));
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfH2DEndEvent, h2dStream));
+    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->h2dDoneEvent, h2dStream));
+    CUDA_ERR("getOutput", cudaStreamWaitEvent(inferStream, gpuHandle->h2dDoneEvent, 0));
 
     gpuHandle->maybeRecordLaunchInterval();
     gpuHandle->enqueueWithOptionalCudaGraph(batchSize);
     if(perfEnabled)
-      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfInferenceDoneEvent, stream));
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfInferenceDoneEvent, inferStream));
+    CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->inferDoneEvent, inferStream));
+    CUDA_ERR("getOutput", cudaStreamWaitEvent(d2hStream, gpuHandle->inferDoneEvent, 0));
 
     // Get outputs
     if (isOnnx) {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_policyResults.get(), gpuHandle->getBuffer("out_policy"), inputBuffers->singleout_policyBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_valueResults.get(), gpuHandle->getBuffer("out_value"), inputBuffers->singleout_valueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_miscvalueResults.get(), gpuHandle->getBuffer("out_miscvalue"), inputBuffers->singleout_miscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_moremiscvalueResults.get(), gpuHandle->getBuffer("out_moremiscvalue"), inputBuffers->singleout_moremiscvalueBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->out_ownershipResults.get(), gpuHandle->getBuffer("out_ownership"), inputBuffers->singleout_ownershipBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
     } else {
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
-        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, stream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyPassResults.get(), gpuHandle->getBuffer("OutputPolicyPass"), inputBuffers->singlePolicyPassResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->policyResults.get(), gpuHandle->getBuffer("OutputPolicy"), inputBuffers->singlePolicyResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->valueResults.get(), gpuHandle->getBuffer("OutputValue"), inputBuffers->singleValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->scoreValueResults.get(), gpuHandle->getBuffer("OutputScoreValue"), inputBuffers->singleScoreValueResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
+        CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
     }
     if(perfEnabled)
-      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfD2HEndEvent, stream));
-    CUDA_ERR("getOutput", cudaStreamSynchronize(stream));
+      CUDA_ERR("getOutput", cudaEventRecord(gpuHandle->perfD2HEndEvent, d2hStream));
+    CUDA_ERR("getOutput", cudaStreamSynchronize(d2hStream));
     if(perfEnabled) {
       float d2hMsF = 0.0f;
       CUDA_ERR("getOutput", cudaEventElapsedTime(&h2dMs, gpuHandle->perfH2DStartEvent, gpuHandle->perfH2DEndEvent));
