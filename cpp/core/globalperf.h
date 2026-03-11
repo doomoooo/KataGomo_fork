@@ -17,8 +17,10 @@ namespace GlobalPerfProfile {
 
   enum class TimelineStage {
     Preprocess,
+    H2DCPU,
     H2D,
     Infer,
+    D2HCPU,
     D2H,
     Postprocess
   };

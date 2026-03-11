@@ -791,13 +791,15 @@ DASHBOARD_PAGE = """<!doctype html>
     };
     const timelineStageColors = {
       preprocess: '#0f766e',
+      h2d_cpu: '#60a5fa',
       h2d: '#1d4ed8',
       infer: '#c2410c',
+      d2h_cpu: '#86efac',
       d2h: '#16a34a',
       postprocess: '#7c3aed',
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
-    const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
+    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
     const timelineUiState = {
       selectedSlotKey: null,
       spanNs: 50e6,
@@ -1340,8 +1342,10 @@ DASHBOARD_PAGE = """<!doctype html>
 
     function timelineSpanLabel(span) {
       if (span.stage === 'preprocess') return `prep r${span.row}`;
+      if (span.stage === 'h2d_cpu') return `h2d cpu r${span.row}`;
       if (span.stage === 'h2d') return `h2d r${span.row}`;
       if (span.stage === 'infer') return `infer b${span.batch_uid}`;
+      if (span.stage === 'd2h_cpu') return `d2h cpu b${span.batch_uid}`;
       if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
       if (span.stage === 'postprocess') return `post b${span.batch_uid}`;
       return span.stage || 'event';
@@ -1550,8 +1554,10 @@ DASHBOARD_PAGE = """<!doctype html>
         </svg>
         <div class="timeline-legend">
           <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>Post</span>
         </div>
@@ -2157,13 +2163,15 @@ TIMELINE_PAGE = """<!doctype html>
     const isSingleSchedulerMode = (latest) => inferenceModeOf(latest) === 'single_scheduler_slots';
     const timelineStageColors = {
       preprocess: '#0f766e',
+      h2d_cpu: '#60a5fa',
       h2d: '#1d4ed8',
       infer: '#c2410c',
+      d2h_cpu: '#86efac',
       d2h: '#16a34a',
       postprocess: '#7c3aed',
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
-    const timelineStageNames = ['preprocess', 'h2d', 'infer', 'd2h', 'postprocess'];
+    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
     const minTimelineSpanNs = 1e3;
     const timelineUiState = {
       spanNs: 50e6,
@@ -2248,8 +2256,10 @@ TIMELINE_PAGE = """<!doctype html>
 
     function timelineSpanLabel(span) {
       if (span.stage === 'preprocess') return `prep r${span.row}`;
+      if (span.stage === 'h2d_cpu') return `h2d cpu r${span.row}`;
       if (span.stage === 'h2d') return `h2d r${span.row}`;
       if (span.stage === 'infer') return `infer b${span.batch_uid}`;
+      if (span.stage === 'd2h_cpu') return `d2h cpu b${span.batch_uid}`;
       if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
       if (span.stage === 'postprocess') return `post b${span.batch_uid}`;
       return span.stage || 'event';
@@ -2486,7 +2496,7 @@ TIMELINE_PAGE = """<!doctype html>
         <span>样本范围 ${fmtTimelineNsWithScale(latestRangeEndNs - latestRangeStartNs, axisScale)}</span>
         <span>${timelineUiState.paused ? '已暂停自动刷新' : '自动跟随最新样本中'}</span>
         <span>${droppedSuffix || '未截断 span'}</span>
-        <span class="hint">Scheduler/Pre/Post 来自 CPU 时钟；H2D/Infer/D2H 时长来自 cudaEvent timing，位置按依赖关系回填。</span>
+        <span class="hint">Scheduler/Pre/Post 和 H2D/D2H 的 CPU call 来自 CPU 时钟；H2D/Infer/D2H GPU 时长来自 cudaEvent timing，位置按依赖关系回填。</span>
       `;
 
       view.innerHTML = `
@@ -2504,8 +2514,10 @@ TIMELINE_PAGE = """<!doctype html>
         </svg>
         <div class="timeline-legend">
           <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>Post</span>
         </div>

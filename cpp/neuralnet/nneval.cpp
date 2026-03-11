@@ -139,12 +139,16 @@ struct SchedulerState {
   struct PendingH2DSpan {
     int rowIdx;
     uint64_t preprocessSpanId;
+    uint64_t h2dCpuSpanId;
     int64_t enqueueStartNs;
+    int64_t enqueueEndNs;
 
     PendingH2DSpan()
       : rowIdx(-1),
         preprocessSpanId(0),
-        enqueueStartNs(0)
+        h2dCpuSpanId(0),
+        enqueueStartNs(0),
+        enqueueEndNs(0)
     {}
   };
 
@@ -201,6 +205,7 @@ struct SchedulerState {
     uint64_t batchUid;
     uint64_t lastH2DSpanId;
     uint64_t inferSpanId;
+    uint64_t d2hCpuSpanId;
     uint64_t d2hSpanId;
     int64_t cudaTimelineBaseNs;
     int64_t lastH2DEndNs;
@@ -226,6 +231,7 @@ struct SchedulerState {
         batchUid(0),
         lastH2DSpanId(0),
         inferSpanId(0),
+        d2hCpuSpanId(0),
         d2hSpanId(0),
         cudaTimelineBaseNs(0),
         lastH2DEndNs(0),
@@ -719,6 +725,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     buffer.batchUid = 0;
     buffer.lastH2DSpanId = 0;
     buffer.inferSpanId = 0;
+    buffer.d2hCpuSpanId = 0;
     buffer.d2hSpanId = 0;
     buffer.cudaTimelineBaseNs = 0;
     buffer.lastH2DEndNs = 0;
@@ -1130,8 +1137,10 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       recordBatchSample(device, buffer.batchSize, measuredWorkMs);
       buffer.measuredInferMs = measuredWorkMs;
 
-      buffer.d2hEnqueueNs = timelineNowNs();
+      const int64_t d2hCpuStartNs = timelineNowNs();
       NeuralNet::trtEnqueueOutputCopiesAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, buffer.batchSize);
+      const int64_t d2hCpuEndNs = timelineNowNs();
+      buffer.d2hEnqueueNs = d2hCpuStartNs;
       buffer.stage = SchedulerState::BufferStage::D2HPending;
       slot.d2hPendingBufferIndices.push_back(buffer.bufferIdx);
       if(!slot.launchedBufferIndices.empty() && slot.launchedBufferIndices.front() == buffer.bufferIdx)
@@ -1171,7 +1180,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             GlobalPerfProfile::TimelineLane::H2DStream,
             GlobalPerfProfile::TimelineStage::H2D,
             h2dSpanId,
-            pendingH2D.preprocessSpanId,
+            pendingH2D.h2dCpuSpanId,
             previousH2DSpanId,
             buffer.batchUid,
             pendingH2D.rowIdx,
@@ -1216,6 +1225,23 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       slot.lastRecordedInferEndNs = recordedInferEndNs;
       buffer.inferSpanId = completedInferSpanId;
       buffer.inferEndNs = recordedInferEndNs;
+      buffer.d2hCpuSpanId = 0;
+      if(shouldCaptureTimelineSpan(d2hCpuStartNs, d2hCpuEndNs)) {
+        buffer.d2hCpuSpanId = nextTimelineSpanId();
+        GlobalPerfProfile::recordRealtimeTimelineSpan(
+          slot.slotIdx,
+          slot.gpuIdx,
+          GlobalPerfProfile::TimelineLane::SchedulerThread,
+          GlobalPerfProfile::TimelineStage::D2HCPU,
+          buffer.d2hCpuSpanId,
+          completedInferSpanId,
+          0,
+          buffer.batchUid,
+          -1,
+          d2hCpuStartNs,
+          d2hCpuEndNs
+        );
+      }
     };
 
     auto finalizeCompletedBatch = [&](SchedulerState::BufferState& buffer) {
@@ -1242,7 +1268,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
           GlobalPerfProfile::TimelineLane::D2HStream,
           GlobalPerfProfile::TimelineStage::D2H,
           d2hSpanId,
-          buffer.inferSpanId,
+          buffer.d2hCpuSpanId,
           slot.lastD2HSpanId,
           buffer.batchUid,
           -1,
@@ -1409,12 +1435,32 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
             );
           }
 
-          int64_t h2dStartNs = timelineNowNs();
+          int64_t h2dCpuStartNs = timelineNowNs();
           NeuralNet::trtEnqueueInputRowCopy(slot.gpuHandle, buffer.serverBuf->inputBuffers, rowIdx);
+          int64_t h2dCpuEndNs = timelineNowNs();
+          uint64_t h2dCpuSpanId = 0;
+          if(shouldCaptureTimelineSpan(h2dCpuStartNs, h2dCpuEndNs)) {
+            h2dCpuSpanId = nextTimelineSpanId();
+            GlobalPerfProfile::recordRealtimeTimelineSpan(
+              slot.slotIdx,
+              slot.gpuIdx,
+              GlobalPerfProfile::TimelineLane::SchedulerThread,
+              GlobalPerfProfile::TimelineStage::H2DCPU,
+              h2dCpuSpanId,
+              preprocessSpanId,
+              0,
+              state->openBatch.batchUid,
+              rowIdx,
+              h2dCpuStartNs,
+              h2dCpuEndNs
+            );
+          }
           SchedulerState::PendingH2DSpan pendingH2D;
           pendingH2D.rowIdx = rowIdx;
           pendingH2D.preprocessSpanId = preprocessSpanId;
-          pendingH2D.enqueueStartNs = h2dStartNs;
+          pendingH2D.h2dCpuSpanId = h2dCpuSpanId;
+          pendingH2D.enqueueStartNs = h2dCpuStartNs;
+          pendingH2D.enqueueEndNs = h2dCpuEndNs;
           buffer.pendingH2DSpans.push_back(pendingH2D);
           buffer.requests.push_back(request);
           buffer.batchSize = (int)buffer.requests.size();

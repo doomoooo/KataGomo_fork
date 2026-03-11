@@ -2898,3 +2898,18 @@ reviewer 额外指出了一条中等严重度的问题：
 
 - dashboard 左侧“近 60 秒趋势”新增一张“空轮询耗时”卡片
 - 显示当前 1 秒窗口的平均空轮询耗时，以及最近 60 秒历史
+
+#### 2026-03-11: timeline 新增 CPU 侧 H2D/D2H cuda call span
+
+为解释 `infer -> d2h` 与 `d2h -> postprocess` 之间的残余微秒级空隙，timeline 新增两类 CPU span，统一画在 scheduler lane 上：
+
+- `H2D CPU`
+  - 颜色浅蓝
+  - 表示 scheduler 线程调用 `trtEnqueueInputRowCopy()` 的 wall-clock 持续时间
+  - 依赖关系为 `Preprocess -> H2D CPU -> H2D(GPU)`
+- `D2H CPU`
+  - 颜色浅绿
+  - 表示 scheduler 线程调用 `trtEnqueueOutputCopiesAsync()` 的 wall-clock 持续时间
+  - 依赖关系为 `Infer(GPU) -> D2H CPU -> D2H(GPU) -> Postprocess`
+
+这样 timeline 上不再把 CPU 发起 CUDA call 的那一小段压成“空白”。
