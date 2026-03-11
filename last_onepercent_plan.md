@@ -1338,3 +1338,130 @@ while (!isKilled) {
 
 - 2026-03-11 本地再次增量编译通过：
   - `cmake --build cpp/build --parallel 8 --target katago`
+
+### 2026-03-11: 当前 CPU 阶段归属需要认清
+
+重新过了一遍 [nneval.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp) 和
+[trtbackend.cpp](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp)，需要明确一点：
+
+当前实现里，并不是所有 “preprocess / postprocess” 都在 inference thread 上。
+
+当前真实分工是：
+
+- 调用 `NNEvaluator::evaluate()` 的 search thread 上：
+  - `NNInputs::fillRowV*()` 填 feature row
+  - SGF metadata row 填充
+  - 等待结果后，把 logits 做 softmax / legality filtering / value 后处理
+- inference thread / TRT server thread 上：
+  - 把每个请求的 row 拷进 batch pinned buffers
+  - H2D / infer / D2H
+  - 把输出 tensor 解包回 `NNOutput` 的 logits/value fields
+
+证据：
+
+- [nneval.cpp:889](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L889) 附近：
+  `evaluate()` 在 push 到 `queryQueue` 之前就调用 `NNInputs::fillRowV*()`
+- [nneval.cpp:945](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/nneval.cpp#L945) 之后：
+  client 线程 wait result 完成后才做 policy softmax / legality filtering / value postprocess
+- [trtbackend.cpp:2230](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2230) 附近：
+  `getOutput()` 里做的是 row -> batch pinned buffer 的 copy / symmetry pack
+- [trtbackend.cpp:2379](/home/wangyize/.katago/KataGomo_fork/cpp/neuralnet/trtbackend.cpp#L2379) 附近：
+  `getOutput()` 里做的是 output tensor -> `NNOutput` 字段解包，不是最终 softmax
+
+这对 overlap 方案的含义：
+
+- 如果坚持“尽量少的破坏性修改”，第一版 single-scheduler 不必把 feature extraction 和最终后处理搬到调度线程
+- 更现实的第一版范围应该是：
+  - search thread 继续准备 `NNResultBuf.row*`
+  - scheduler 负责 batch packing、H2D、graph launch、D2H、结果回填/唤醒
+- 用户提到的“让搜索线程自己接手更多工作”其实当前已经部分成立；后续若还要继续外推，应该先明确是要外推哪一层：
+  - row feature extraction
+  - batch packing
+  - output logits 后处理
+
+这也意味着，前面粗略口头上说的 “preprocess 10us / postprocess 4us 撞上调度关键路径” 需要重新分层看：
+
+- feature extraction / final probability postprocess 目前已经不在 inference server thread 上
+- 真正会和 single scheduler 冲突的，是 batch packing / output unpack / event polling / submit 这一层 CPU 工作
+
+### 2026-03-11: `nneval.cpp` 当前握手模型备查
+
+当前 evaluator 侧真实模型仍然是“每个逻辑 inference slot 对应一个 OS thread”。
+
+关键路径：
+
+1. search thread 在 `evaluate()` 里准备好自己的 `NNResultBuf`
+2. `NNResultBuf*` 被 push 到全局 `queryQueue`
+3. 某个 inference worker thread 在 `serve()` 里从 `queryQueue` 抽 batch
+4. 该 worker thread 用自己长期持有的：
+   - `NNServerBuf`
+   - `ComputeHandle`
+   同步调用 `NeuralNet::getOutput()`
+5. worker thread 把结果写回每个 `NNResultBuf`
+6. 对应 search thread 被各自的 condition variable 唤醒
+
+当前 batching 规则：
+
+- `numGpuBusyClaims` 是现有“空 GPU 可 partial，否则等 exact batch”的核心状态
+- 同一 GPU 上第一个拿到 idle claim 的 worker 用 `waitPopUpToN()`
+- 其他已经有兄弟 worker 在跑的 worker 用 `waitPopExactN()`
+
+这意味着：
+
+- 当前公开给调用方的 `evaluate()` / `NNResultBuf` 握手，本质上已经是按请求指针做完成通知
+- 它并不依赖“哪个线程完成”这一点
+- 因此 single-scheduler 改造里，最小 evaluator 改动面主要集中在：
+  - `serve()` 主循环
+  - `serverThreads`
+  - `numGpuBusyClaims`
+  - 启动/退出/统计相关状态
+- 而不是 `evaluate()` 的外部调用协议
+
+这条观察非常重要，因为它说明：
+
+- 第一版没必要推翻 `NNResultBuf` 这套 per-request handshake
+- 更合理的是把“谁消费 `queryQueue`、谁决定 batch 和 slot、谁在完成后 notify”改成单 scheduler 模型
+- 但保留外部请求提交和等待接口不变
+
+### 2026-03-11: realtime perf 的最小兼容路径
+
+从 `globalperf.cpp` 看，realtime 监控里“thread”和“slot”混在命名上，但并不是所有指标都真的依赖真实 OS thread 身份。
+
+当前结论：
+
+- 大部分 inference batch / rows / avg batch size / stage timing 统计，本质上只要求样本落在某个 inference slot 上
+- 真正 thread 语义最强的是：
+  - `changeInferenceThreadActiveCount()`
+  - 以及所有直接写到某个 slot-local ring buffer 的事件流
+
+因此第一版最小兼容策略可以是：
+
+- 文档和注释里先承认：
+  - `inferenceThreadIdx` 在新设计下其实表示 logical slot id
+- 仍然保留现有 JSON key 和前端结构，先不重命名外部字段
+- 保证一个 logical slot 仍然只有一个 writer
+  - 这样就不需要立刻给 perf ring buffer 加锁
+- 如果未来出现“多个真实线程共同向同一个 logical slot 写 perf 事件”，那时再补：
+  - per-slot active refcount
+  - 或 per-slot ring write lock
+
+工程上更稳妥的做法是：
+
+- 在设计和文档层先把 `serverThreadIdx` 和 `perfSlotIdx` 逻辑区分开
+- 但第一版代码可以暂时继续复用同一个整数 id
+- 只要保持“一 slot 一 writer”，现有 realtime 聚合基本还能工作
+
+### 2026-03-11: backend 适用范围
+
+这轮单 scheduler 设计目前应明确视为 TRT-first 改造。
+
+原因：
+
+- TRT backend 已经开始改成“slot 显式拥有 device + stream”
+- 但其他 backend，尤其 `cudabackend.cpp`，仍然更接近“线程初始化时绑死 device”的模型
+
+因此第一版边界应该写清楚：
+
+- 先只让 single-scheduler 跑在 TensorRT 路径
+- 其他 backend 暂时保留原有 one-thread-per-handle 模型
+- 不要为了抽象统一，过早把整个 `nninterface` 逼成所有 backend 一次性同步改造
