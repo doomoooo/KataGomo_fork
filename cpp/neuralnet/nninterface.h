@@ -172,7 +172,7 @@ namespace NeuralNet {
     InputBuffers* buffers,
     int batchSize
   );
-  bool trtQueryInferenceDone(ComputeHandle* computeHandle);
+  bool trtQueryInferenceDone(InputBuffers* buffers);
   void trtEnqueueOutputCopiesAsync(
     ComputeHandle* computeHandle,
     InputBuffers* buffers,
@@ -180,7 +180,7 @@ namespace NeuralNet {
   );
   bool trtQueryOutputCopiesDone(InputBuffers* buffers);
   double trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int rowIdx);
-  double trtGetLastInferenceElapsedMs(ComputeHandle* computeHandle);
+  double trtGetLastInferenceElapsedMs(InputBuffers* buffers);
   double trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers);
   void trtUnpackOutputRow(
     InputBuffers* buffers,
