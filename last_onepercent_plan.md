@@ -1580,6 +1580,8 @@ while (!isKilled) {
 - 按请求做：
   - row pack
   - row-level H2D
+- scheduler 主循环是 spin-first 轮询
+  - 只有长时间空转时才偶尔 `yield()`
 - 空卡立刻发 partial batch
 - 非空卡等 exact batch
 - slot 在 `D2H + output unpack + notify` 完成前不会复用
