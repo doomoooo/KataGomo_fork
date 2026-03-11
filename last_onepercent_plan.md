@@ -2716,3 +2716,57 @@ reviewer 额外指出了一条中等严重度的问题：
 - `infer done` 一被 scheduler 观察到，就先把 D2H 发出去
 - timeline instrumentation 不能再挡在 `infer -> D2H` 关键路径中间
 - infer end 的时间建模也不能再使用同一轮主循环里过期的 `nowNs`
+
+#### 2026-03-11: 确认真正的热点开销来自 timeline 本地采样，不是 `cudaEventQuery()`
+
+进一步检查后，当前结论已经很明确：
+
+- `cudaEventQuery()` 本身不是问题。
+- 在这台机子上的最小 ready-event benchmark 里：
+  - `cudaEventQuery()` 对已完成 event 的平均 API 成本只有 `0.0593 us`
+- 所以之前 timeline 里看到的：
+  - `infer -> D2H ~100 us`
+  - `D2H -> postprocess ~10+ us`
+  不能归因于 `cudaEventQuery()` 本身。
+
+真正重的是 hot scheduler thread 里为了 sampled timeline 做的本地处理：
+
+- `trtGetLastInputRowCopyElapsedMs(...)`
+- `trtGetLastInferenceElapsedMs(...)`
+- `trtGetLastOutputCopiesElapsedMs(...)`
+- 以及逐 row H2D timeline 回填
+
+当前已经按更保守的低开销方向收了一刀：
+
+- hot path 不再调用任何 `cudaEventElapsedTime()` 系列接口
+- H2D timeline 从逐 row 回填，收缩成 **batch-level H2D span**
+- infer / D2H timeline 也改成基于 hot thread 观察到的原始时间戳
+- 仍然保留 sampled timeline 的相对顺序、依赖链和关键 gap 观测能力
+
+在这一版上重新执行：
+
+- 清 GPU
+- `./build.sh`
+- 启动 monitor
+- `./run.sh --gtp`
+- stdin 输入 `boardsize 19 / clear_board / kata-analyze 100`
+
+然后读取新的一帧 raw timeline，得到：
+
+- `infer -> D2H`
+  - `min/mean/p50/p95/max = 0.03 / 0.03 / 0.03 / 0.04 / 0.04 us`
+- `D2H -> postprocess`
+  - `min/mean/p50/p95/max = 0.03 / 0.04 / 0.03 / 0.05 / 0.11 us`
+
+这说明：
+
+- 之前的百微秒级 gap 的确主要是 sampled timeline 本地采样/回填本身制造的
+- 在去掉 hot path 的 elapsed 查询和逐 row 回填后，关键 handoff gap 已经基本塌到可忽略量级
+
+后续如果还要继续逼近“热线程只写原始事件时间戳，收集线程再做处理”的最终形态，可以继续把：
+
+- `GlobalPerfProfile::recordRealtimeTimelineSpan(...)`
+- 以及 sampled timeline 的依赖整理
+
+也从 hot scheduler thread 再往外挪一层。  
+但从这次数据看，真正的大头已经被拿掉了。
