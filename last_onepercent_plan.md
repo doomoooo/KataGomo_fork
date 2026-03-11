@@ -1259,3 +1259,41 @@ while (!isKilled) {
 
 - 单 scheduler 方案并不是只改 `nneval.cpp` 就够了。
 - `trtbackend.cpp` 内部也必须从“线程拥有 device + per-thread default stream”的模型，迁移到“slot 显式拥有 device + stream”的模型。
+
+### 2026-03-11: `trtbackend.cpp` 准备性重构进展
+
+已完成一层低风险准备性重构，目标不是改调度语义，而是先把 TRT runtime 从
+`cudaStreamPerThread` + “创建线程时选一次 device” 这种隐式模型里拉出来。
+
+本次改动点：
+
+- `ComputeHandle` 显式持有 `inferStream`
+- `ComputeHandle` 内部新增 `setDevice(opName)` helper，slot-level TRT helper 在 touching CUDA 前先切到所属 device
+- `setOptimizationProfileAsync`
+- `cudaGraph` capture / destroy / launch
+- `enqueueV3`
+- `getOutput()` 中的 H2D / infer / D2H 主路径
+
+都已经改成使用 `gpuHandle->inferStream`，不再依赖 `cudaStreamPerThread`。
+
+这层改动当前的边界：
+
+- 只引入了显式 `inferStream`
+- 还没有把 H2D / D2H 从 infer stream 上拆开
+- `getOutput()` 仍然是同步 API，末尾仍然 `cudaStreamSynchronize(stream)`
+- 因此它还不能支撑最终的 single-scheduler overlap 工作流，但已经清掉了最危险的隐式前提
+
+验证结果：
+
+- 2026-03-11 本地增量编译通过：
+  - `cmake --build cpp/build --parallel 8 --target katago`
+- 无新增编译错误；只有仓库原有 warning
+
+当前判断：
+
+- blocker 1 还没有彻底完成，因为显式 `h2dStream/d2hStream` 还没引入
+- 但最核心的一步已经完成：
+  - TRT 不再硬绑 `cudaStreamPerThread`
+- blocker 2 也部分落地：
+  - `ComputeHandle` 自身的 slot-level TRT helper 已经开始显式 `cudaSetDevice(gpuIdxForHandle)`
+  - 后续继续拆异步接口时，应沿用这个 ownership 方向，而不是把 `cudaSetDevice()` 重新散落到高层调度逻辑里

@@ -1191,6 +1191,7 @@ struct ComputeHandle {
   unique_ptr<IRuntime> runtime;
   unique_ptr<ICudaEngine> engine;
   unique_ptr<IExecutionContext> exec;
+  cudaStream_t inferStream;
   bool trtUseCudaGraph;
   bool perfProfileEnabled;
   struct BatchGraphState {
@@ -1220,6 +1221,7 @@ struct ComputeHandle {
 
     maxBatchSize = maxBatchSz;
     modelVersion = loadedModel->modelDesc.modelVersion;
+    inferStream = nullptr;
     trtUseCudaGraph = context->trtUseCudaGraph;
     perfProfileEnabled = GlobalPerfProfile::isEnabled();
     if(perfProfileEnabled)
@@ -1235,6 +1237,7 @@ struct ComputeHandle {
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfInferenceDoneEvent));
       CUDA_ERR("ComputeHandle", cudaEventCreate(&perfD2HEndEvent));
     }
+    CUDA_ERR("ComputeHandle", cudaStreamCreateWithFlags(&inferStream, cudaStreamNonBlocking));
 
     // Certain minor versions of TensorRT uses a global logger, which is bad.
     // Since TensorRT maintains ABI compatibility between minor versions, a dynamic library mismatch
@@ -1632,8 +1635,8 @@ struct ComputeHandle {
       exec->setTensorAddress(name, buffer);
     }
 
-    exec->setOptimizationProfileAsync(0, cudaStreamPerThread);
-    cudaStreamSynchronize(cudaStreamPerThread);
+    exec->setOptimizationProfileAsync(0, inferStream);
+    CUDA_ERR("ComputeHandle", cudaStreamSynchronize(inferStream));
     trtErrorRecorder.clear();
 
     if(trtUseCudaGraph) {
@@ -1642,7 +1645,10 @@ struct ComputeHandle {
   }
 
   ~ComputeHandle() {
+    setDevice("~ComputeHandle");
     destroyAllBatchGraphs();
+    if(inferStream != nullptr)
+      CUDA_ERR("~ComputeHandle", cudaStreamDestroy(inferStream));
     if(perfD2HEndEvent != nullptr)
       CUDA_ERR("~ComputeHandle", cudaEventDestroy(perfD2HEndEvent));
     if(perfInferenceDoneEvent != nullptr)
@@ -1659,6 +1665,10 @@ struct ComputeHandle {
   ComputeHandle() = delete;
   ComputeHandle(const ComputeHandle&) = delete;
   ComputeHandle& operator=(const ComputeHandle&) = delete;
+
+  void setDevice(const char* opName) const {
+    CUDA_ERR(opName, cudaSetDevice(gpuIdxForHandle));
+  }
 
   void maybeRecordLaunchInterval() {
     if(!perfProfileEnabled || launchIntervalGpuState == nullptr)
@@ -1722,6 +1732,7 @@ struct ComputeHandle {
   }
 
   void printDebugOutput(int batchSize) {
+    setDevice("printDebugOutput");
     for(auto& debugOutput: debugOutputs) {
       auto name = debugOutput.first;
       auto desc = debugOutput.second;
@@ -1781,6 +1792,7 @@ struct ComputeHandle {
   }
 
   void destroyBatchGraph(BatchGraphState& state) {
+    setDevice("destroyBatchGraph");
     if(state.graphExec != nullptr) {
       CUDA_ERR("destroyBatchGraph", cudaGraphExecDestroy(state.graphExec));
       state.graphExec = nullptr;
@@ -1798,19 +1810,20 @@ struct ComputeHandle {
   }
 
   void captureBatchGraph(int batchSize, BatchGraphState& state) {
+    setDevice("captureBatchGraph");
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t graphExec = nullptr;
 
-    cudaError_t beginStatus = cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal);
+    cudaError_t beginStatus = cudaStreamBeginCapture(inferStream, cudaStreamCaptureModeThreadLocal);
     if(beginStatus != cudaSuccess) {
       throw StringError(
         string("TensorRT backend: cudaStreamBeginCapture failed: ") + cudaGetErrorString(beginStatus)
       );
     }
 
-    if(!exec->enqueueV3(cudaStreamPerThread)) {
+    if(!exec->enqueueV3(inferStream)) {
       cudaGraph_t ignoredGraph = nullptr;
-      (void)cudaStreamEndCapture(cudaStreamPerThread, &ignoredGraph);
+      (void)cudaStreamEndCapture(inferStream, &ignoredGraph);
       if(ignoredGraph != nullptr) {
         (void)cudaGraphDestroy(ignoredGraph);
       }
@@ -1819,7 +1832,7 @@ struct ComputeHandle {
       );
     }
 
-    cudaError_t endStatus = cudaStreamEndCapture(cudaStreamPerThread, &graph);
+    cudaError_t endStatus = cudaStreamEndCapture(inferStream, &graph);
     if(endStatus != cudaSuccess || graph == nullptr) {
       if(graph != nullptr) {
         (void)cudaGraphDestroy(graph);
@@ -1845,25 +1858,27 @@ struct ComputeHandle {
   void preCaptureAllBatchGraphs() {
     static std::mutex captureMutex;
     std::lock_guard<std::mutex> lock(captureMutex);
+    setDevice("preCaptureAllBatchGraphs");
 
     for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
       BatchGraphState& state = batchGraphStates[batchSize];
 
       setInputShapesForBatch(batchSize);
 
-      if(!exec->enqueueV3(cudaStreamPerThread)) {
+      if(!exec->enqueueV3(inferStream)) {
         throw StringError(
           "TensorRT backend: enqueueV3 warmup failed before cudaGraph capture for batch " + Global::intToString(batchSize)
         );
       }
-      CUDA_ERR("preCaptureAllBatchGraphs", cudaStreamSynchronize(cudaStreamPerThread));
+      CUDA_ERR("preCaptureAllBatchGraphs", cudaStreamSynchronize(inferStream));
       captureBatchGraph(batchSize, state);
     }
   }
 
   void enqueueWithOptionalCudaGraph(int batchSize) {
+    setDevice("enqueueWithOptionalCudaGraph");
     if(!trtUseCudaGraph) {
-      if(!exec->enqueueV3(cudaStreamPerThread)) {
+      if(!exec->enqueueV3(inferStream)) {
         throw StringError("TensorRT backend: enqueueV3 failed");
       }
       return;
@@ -1878,7 +1893,7 @@ struct ComputeHandle {
         "TensorRT backend: missing pre-captured cudaGraph for batch size " + Global::intToString(batchSize)
       );
     }
-    CUDA_ERR("enqueueWithOptionalCudaGraph", cudaGraphLaunch(state.graphExec, cudaStreamPerThread));
+    CUDA_ERR("enqueueWithOptionalCudaGraph", cudaGraphLaunch(state.graphExec, inferStream));
   }
 };
 
@@ -2191,7 +2206,8 @@ void NeuralNet::getOutput(
   const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
   const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
   const int numMetaFeatures = inputBuffers->singleInputMetaElts;
-  cudaStream_t stream = cudaStreamPerThread;
+  gpuHandle->setDevice("getOutput");
+  cudaStream_t stream = gpuHandle->inferStream;
   const bool perfEnabled = gpuHandle->perfProfileEnabled;
   double preprocessMs = 0.0;
   double d2hMs = 0.0;
