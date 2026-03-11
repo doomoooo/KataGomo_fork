@@ -2686,3 +2686,33 @@ reviewer 额外指出了一条中等严重度的问题：
   - 也不主动把调度时机让给 OS
 
 这意味着后续如果仍然观察到大的 `D2H -> postprocess` 空窗，不能再归因于 scheduler 代码里显式的 `yield/backoff` 逻辑，需要继续查别的原因。
+
+#### 2026-03-11: `infer -> D2H` 大 gap 的代码级原因与修复
+
+新一轮时间线检查里，又观察到一段 `infer end -> D2H start` 的大 gap。当前已经定位到两个具体代码问题：
+
+- `handleInferCompletion()` 原实现会在真正 `trtEnqueueOutputCopiesAsync()` 之前，先做一整批 row 的 H2D timing 回填：
+  - 对每个 row 调一次 `trtGetLastInputRowCopyElapsedMs(...)`
+  - 再调一次 `trtGetLastInferenceElapsedMs(...)`
+  - 再写一串 realtime timeline spans
+- 主循环原实现只在每轮顶部取一次 `nowNs`，然后把这个时间传给同一轮里所有 slot 的 `handleInferCompletion(...)`
+  - 如果前一个 slot 的 completion 处理本身已经花掉了几十到几百微秒
+  - 后一个 slot 的 infer end 会被错误地 clamp 到更早的旧时间
+  - 时间线上就会把 `infer -> D2H` gap 额外夸大
+
+当前修复已经落地：
+
+- `handleInferCompletion()` 不再接收循环顶部的 `nowNs`
+- 改为在函数内部用 fresh `completionObservedNs`
+- 先立即：
+  - 记录 `buffer.d2hEnqueueNs`
+  - 调 `trtEnqueueOutputCopiesAsync(...)`
+  - 把 buffer 挂到 `d2hPendingBufferIndices`
+  - 释放 slot 的 infer occupancy
+- 然后才做 H2D / infer timing 回填和 timeline span 记录
+
+这次修复的目标非常明确：
+
+- `infer done` 一被 scheduler 观察到，就先把 D2H 发出去
+- timeline instrumentation 不能再挡在 `infer -> D2H` 关键路径中间
+- infer end 的时间建模也不能再使用同一轮主循环里过期的 `nowNs`
