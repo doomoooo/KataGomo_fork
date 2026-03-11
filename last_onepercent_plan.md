@@ -1465,3 +1465,40 @@ while (!isKilled) {
 - 先只让 single-scheduler 跑在 TensorRT 路径
 - 其他 backend 暂时保留原有 one-thread-per-handle 模型
 - 不要为了抽象统一，过早把整个 `nninterface` 逼成所有 backend 一次性同步改造
+
+### 2026-03-11: `getOutput()` 已开始拆单体函数
+
+又做了一层纯整理性质的准备性重构，没有改变外部行为。
+
+当前已经从 `getOutput()` 里拆出了三块 helper：
+
+- `packInputRow(...)`
+  - 单个请求的 row -> batch pinned input buffer
+- `enqueueInputCopies(...)`
+  - 整批 H2D + dynamic shape 设置
+- `enqueueOutputCopies(...)`
+  - 整批 D2H
+
+这层改动的价值不是性能，而是把“CPU batch packing”和“GPU 提交”从超长同步函数里拉开。
+
+这对后续 single-scheduler 的直接帮助：
+
+- request-level H2D 真要落地时，最先复用/扩展的就是 `packInputRow(...)`
+- 如果后面要把 submit API 拆成：
+  - prepare
+  - H2D submit
+  - graph launch
+  - D2H submit
+  - finalize
+  这三块 helper 已经给出了自然切口
+
+当前仍未拆开的部分：
+
+- output tensor -> `NNOutput` 的 row unpack
+- `getOutput()` 末尾同步等待和 perf timing 汇总
+- 对外仍然只有同步 `NeuralNet::getOutput(...)`
+
+验证结果：
+
+- 2026-03-11 本地再次增量编译通过：
+  - `cmake --build cpp/build --parallel 8 --target katago`
