@@ -1494,7 +1494,6 @@ while (!isKilled) {
 
 当前仍未拆开的部分：
 
-- output tensor -> `NNOutput` 的 row unpack
 - `getOutput()` 末尾同步等待和 perf timing 汇总
 - 对外仍然只有同步 `NeuralNet::getOutput(...)`
 
@@ -1502,3 +1501,24 @@ while (!isKilled) {
 
 - 2026-03-11 本地再次增量编译通过：
   - `cmake --build cpp/build --parallel 8 --target katago`
+
+更新：
+
+- 现在 output tensor -> `NNOutput` 的 row unpack 也已经抽成 `unpackOutputRow(...)`
+
+因此当前 `getOutput()` 已经基本只剩“阶段编排器”角色：
+
+- pack rows into batch host buffers
+- enqueue H2D
+- infer stream 等待并 launch
+- enqueue D2H
+- 同步等待
+- 遍历 rows 做 unpack
+- 记录 perf timings
+
+这一步完成后，下一层真正有意义的改造就不再是“继续拆函数”，而是二选一：
+
+- 开始设计/实现异步 submit-query-finish 接口
+- 或开始在 `nneval.cpp` 里引入单 scheduler 所需的 slot/open-batch 状态对象
+
+在我看来，更合理的是先做前者，因为 `nneval.cpp` 的状态机必须建立在 backend 已经能暴露异步阶段边界的前提上。

@@ -2309,6 +2309,148 @@ static void enqueueOutputCopies(
   CUDA_ERR("getOutput", cudaMemcpyAsync(inputBuffers->ownershipResults.get(), gpuHandle->getBuffer("OutputOwnership"), inputBuffers->singleOwnershipResultBytes * batchSize, cudaMemcpyDeviceToHost, d2hStream));
 }
 
+static void unpackOutputRow(
+  InputBuffers* inputBuffers,
+  const NNResultBuf* inputBuf,
+  NNOutput* output,
+  int row,
+  int nnXLen,
+  int nnYLen,
+  int modelVersion,
+  bool isOnnx,
+  int trtPolicyChannels,
+  float* policyProbsTmp
+) {
+  assert(output->nnXLen == nnXLen);
+  assert(output->nnYLen == nnYLen);
+  const float policyOptimism = (float)inputBuf->policyOptimism;
+
+  if(isOnnx) {
+    const float* policySrcBuf = &inputBuffers->out_policyResults[row * inputBuffers->singleout_policyElts];
+    float* policyProbs = output->policyProbs;
+
+    int onnxPolicyChannels = (modelVersion >= 12 && modelVersion <= 99) ? 2 : 1;
+
+    if(onnxPolicyChannels == 2) {
+      assert(inputBuffers->singleout_policyElts == 6 * (nnXLen * nnYLen + 1));
+      for(int i = 0; i < nnXLen * nnYLen; i++) {
+        float p = policySrcBuf[i];
+        float pOpt = policySrcBuf[i + 5 * (nnXLen * nnYLen + 1)];
+        policyProbsTmp[i] = p + (pOpt - p) * policyOptimism;
+      }
+      SymmetryHelpers::copyOutputsWithSymmetry(
+        policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBuf->symmetry);
+      policyProbs[nnXLen * nnYLen] =
+        policySrcBuf[nnXLen * nnYLen] +
+        (policySrcBuf[5 * (nnXLen * nnYLen + 1) + nnXLen * nnYLen] - policySrcBuf[nnXLen * nnYLen]) * policyOptimism;
+    } else {
+      assert(onnxPolicyChannels == 1);
+      SymmetryHelpers::copyOutputsWithSymmetry(
+        policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBuf->symmetry);
+      policyProbs[nnXLen * nnYLen] = policySrcBuf[nnXLen * nnYLen];
+    }
+
+    int numValueChannels = inputBuffers->singleout_valueElts;
+    assert(numValueChannels == 3);
+    output->whiteWinProb = inputBuffers->out_valueResults[row * numValueChannels];
+    output->whiteLossProb = inputBuffers->out_valueResults[row * numValueChannels + 1];
+    output->whiteNoResultProb = inputBuffers->out_valueResults[row * numValueChannels + 2];
+
+    if(output->whiteOwnerMap != NULL) {
+      const float* ownershipSrcBuf = &inputBuffers->out_ownershipResults[row * nnXLen * nnYLen];
+      assert(inputBuffers->singleout_ownershipElts == nnXLen * nnYLen);
+      SymmetryHelpers::copyOutputsWithSymmetry(
+        ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBuf->symmetry);
+    }
+
+    int numScoreValueChannels = inputBuffers->singleout_miscvalueElts;
+    int numMoreValueChannels = inputBuffers->singleout_moremiscvalueElts;
+    if(modelVersion >= 9) {
+      output->whiteScoreMean = inputBuffers->out_miscvalueResults[row * numScoreValueChannels];
+      output->whiteScoreMeanSq = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 1];
+      output->whiteLead = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 2];
+      output->varTimeLeft = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 3];
+      output->shorttermWinlossError = inputBuffers->out_moremiscvalueResults[row * numMoreValueChannels];
+      output->shorttermScoreError = inputBuffers->out_moremiscvalueResults[row * numMoreValueChannels + 1];
+    }
+    else {
+      std::cout << "version: " << modelVersion << " is not supported in ONNX" << std::endl;
+      assert(false);
+    }
+    return;
+  }
+
+  const float* policyPassSrcBuf = &inputBuffers->policyPassResults[row * inputBuffers->singlePolicyPassResultElts];
+  const float* policySrcBuf = &inputBuffers->policyResults[row * inputBuffers->singlePolicyResultElts];
+  float* policyProbs = output->policyProbs;
+
+  if(trtPolicyChannels == 2 || (trtPolicyChannels == 4 && modelVersion >= 16)) {
+    for(int i = 0; i < nnXLen * nnYLen; i++) {
+      float p = policySrcBuf[i];
+      float pOpt = policySrcBuf[i + nnXLen * nnYLen];
+      policyProbsTmp[i] = p + (pOpt - p) * policyOptimism;
+    }
+    SymmetryHelpers::copyOutputsWithSymmetry(
+      policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBuf->symmetry);
+    policyProbs[nnXLen * nnYLen] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
+  } else {
+    assert(trtPolicyChannels == 1);
+    SymmetryHelpers::copyOutputsWithSymmetry(
+      policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBuf->symmetry);
+    policyProbs[nnXLen * nnYLen] = policyPassSrcBuf[0];
+  }
+
+  int numValueChannels = inputBuffers->singleValueResultElts;
+  assert(numValueChannels == 3);
+  output->whiteWinProb = inputBuffers->valueResults[row * numValueChannels];
+  output->whiteLossProb = inputBuffers->valueResults[row * numValueChannels + 1];
+  output->whiteNoResultProb = inputBuffers->valueResults[row * numValueChannels + 2];
+
+  if(output->whiteOwnerMap != NULL) {
+    const float* ownershipSrcBuf = &inputBuffers->ownershipResults[row * nnXLen * nnYLen];
+    assert(inputBuffers->singleOwnershipResultElts == nnXLen * nnYLen);
+    SymmetryHelpers::copyOutputsWithSymmetry(
+      ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBuf->symmetry);
+  }
+
+  int numScoreValueChannels = inputBuffers->singleScoreValueResultElts;
+  if(modelVersion >= 9) {
+    assert(numScoreValueChannels == 6);
+    output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
+    output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
+    output->whiteLead = inputBuffers->scoreValueResults[row * numScoreValueChannels + 2];
+    output->varTimeLeft = inputBuffers->scoreValueResults[row * numScoreValueChannels + 3];
+    output->shorttermWinlossError = inputBuffers->scoreValueResults[row * numScoreValueChannels + 4];
+    output->shorttermScoreError = inputBuffers->scoreValueResults[row * numScoreValueChannels + 5];
+  } else if(modelVersion >= 8) {
+    assert(numScoreValueChannels == 4);
+    output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
+    output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
+    output->whiteLead = inputBuffers->scoreValueResults[row * numScoreValueChannels + 2];
+    output->varTimeLeft = inputBuffers->scoreValueResults[row * numScoreValueChannels + 3];
+    output->shorttermWinlossError = 0;
+    output->shorttermScoreError = 0;
+  } else if(modelVersion >= 4) {
+    assert(numScoreValueChannels == 2);
+    output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
+    output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
+    output->whiteLead = output->whiteScoreMean;
+    output->varTimeLeft = 0;
+    output->shorttermWinlossError = 0;
+    output->shorttermScoreError = 0;
+  } else if(modelVersion >= 3) {
+    assert(numScoreValueChannels == 1);
+    output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
+    output->whiteScoreMeanSq = output->whiteScoreMean * output->whiteScoreMean;
+    output->whiteLead = output->whiteScoreMean;
+    output->varTimeLeft = 0;
+    output->shorttermWinlossError = 0;
+    output->shorttermScoreError = 0;
+  } else {
+    ASSERT_UNREACHABLE;
+  }
+}
+
 void NeuralNet::getOutput(
   ComputeHandle* gpuHandle,
   InputBuffers* inputBuffers,
@@ -2404,162 +2546,11 @@ void NeuralNet::getOutput(
   assert(outputs.size() == batchSize);
 
   float policyProbsTmp[NNPos::MAX_NN_POLICY_SIZE];
-  const int numPolicyChannels = inputBuffers->singlePolicyPassResultElts;
+  const int trtPolicyChannels = inputBuffers->singlePolicyPassResultElts;
   auto postprocessStart = std::chrono::steady_clock::now();
 
-  for(int row = 0; row < batchSize; row++) {
-    NNOutput* output = outputs[row];
-
-    assert(output->nnXLen == nnXLen);
-    assert(output->nnYLen == nnYLen);
-    float policyOptimism = (float)inputBufs[row]->policyOptimism;
-
-    if(isOnnx) {
-      const float* policySrcBuf = &inputBuffers->out_policyResults[row * inputBuffers->singleout_policyElts];
-      float* policyProbs = output->policyProbs;
-
-      int numPolicyChannels = (modelVersion >= 12 && modelVersion <= 99) ? 2 : 1;
-
-      if(numPolicyChannels == 2) {
-        assert(inputBuffers->singleout_policyElts == 6 * (nnXLen * nnYLen + 1));
-        // TRT is all NCHW
-        for(int i = 0; i < nnXLen * nnYLen; i++) {
-          float p = policySrcBuf[i];
-          // float pOpt = policySrcBuf[i + nnXLen * nnYLen];
-          float pOpt = policySrcBuf[i + 5 * (nnXLen * nnYLen + 1)];
-          policyProbsTmp[i] = p + (pOpt - p) * policyOptimism;
-        }
-        SymmetryHelpers::copyOutputsWithSymmetry(
-          policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry); 
-        policyProbs[nnXLen * nnYLen] =
-          policySrcBuf[nnXLen * nnYLen] +
-          (policySrcBuf[5 * (nnXLen * nnYLen + 1) + nnXLen * nnYLen] - policySrcBuf[nnXLen * nnYLen]) * policyOptimism;
-      } else {
-        // Fallback or default for 1 channel (or just take first channel if > 1 and not handled)
-        // trtbackend1.cpp logic for 6/4 channels likely just takes the first one?
-        // "singleout_policyElts = 1 * policyNum * ..."
-        // If policyNum is 6, what do we do?
-        // In trtbackend1.cpp getOutput, it asserts numPolicyChannels == 1.
-        // If policyNum was 6, assert would fail if numPolicyChannels was 6.
-        // But numPolicyChannels variable in trtbackend1.cpp seemed to come from somewhere else or was 1.
-        // If we assume channel 0 is the main policy.
-        assert(numPolicyChannels == 1);
-        SymmetryHelpers::copyOutputsWithSymmetry(
-          policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        policyProbs[nnXLen * nnYLen] = policySrcBuf[nnXLen * nnYLen];
-      }
-
-      int numValueChannels = inputBuffers->singleout_valueElts;
-      assert(numValueChannels == 3);
-      output->whiteWinProb = inputBuffers->out_valueResults[row * numValueChannels];
-      output->whiteLossProb = inputBuffers->out_valueResults[row * numValueChannels + 1];
-      output->whiteNoResultProb = inputBuffers->out_valueResults[row * numValueChannels + 2];
-
-      // As above, these are NOT actually from white's perspective, but rather the player to move.
-      // As usual the client does the postprocessing.
-      if(output->whiteOwnerMap != NULL) {
-        // const float* ownershipSrcBuf = &inputBuffers->ownershipResults[row * nnXLen * nnYLen];
-        const float* ownershipSrcBuf = &inputBuffers->out_ownershipResults[row * nnXLen * nnYLen];
-        assert(inputBuffers->singleout_ownershipElts == nnXLen * nnYLen);
-        SymmetryHelpers::copyOutputsWithSymmetry(
-          ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-      }
-
-
-      int numScoreValueChannels = inputBuffers->singleout_miscvalueElts;
-      int numMoreValueChannels = inputBuffers->singleout_moremiscvalueElts;
-      if(modelVersion >= 9) {
-        output->whiteScoreMean = inputBuffers->out_miscvalueResults[row * numScoreValueChannels];
-        output->whiteScoreMeanSq = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 1];
-        output->whiteLead = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 2];
-        output->varTimeLeft = inputBuffers->out_miscvalueResults[row * numScoreValueChannels + 3];
-        output->shorttermWinlossError = inputBuffers->out_moremiscvalueResults[row * numMoreValueChannels];
-        output->shorttermScoreError = inputBuffers->out_moremiscvalueResults[row * numMoreValueChannels + 1];
-      }
-      else
-      {
-          std::cout << "version: " << modelVersion << " is not supported in ONNX" << std::endl;
-          assert(false);
-      }
-
-    } else {
-      const float* policyPassSrcBuf = &inputBuffers->policyPassResults[row * inputBuffers->singlePolicyPassResultElts];
-      const float* policySrcBuf = &inputBuffers->policyResults[row * inputBuffers->singlePolicyResultElts];
-      float* policyProbs = output->policyProbs;
-
-    // These are in logits, the client does the postprocessing to turn them into
-    // policy probabilities and white game outcome probabilities
-    // Also we don't fill in the nnHash here either
-    // Handle version >= 12 policy optimism
-      if(numPolicyChannels == 2 || (numPolicyChannels == 4 && modelVersion >= 16)) {
-      // TRT is all NCHW
-        for(int i = 0; i < nnXLen * nnYLen; i++) {
-          float p = policySrcBuf[i];
-          float pOpt = policySrcBuf[i + nnXLen * nnYLen];
-          policyProbsTmp[i] = p + (pOpt - p) * policyOptimism;
-        }
-        SymmetryHelpers::copyOutputsWithSymmetry(
-          policyProbsTmp, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-      policyProbs[nnXLen * nnYLen] = policyPassSrcBuf[0] + (policyPassSrcBuf[1] - policyPassSrcBuf[0]) * policyOptimism;
-      } else {
-        assert(numPolicyChannels == 1);
-      SymmetryHelpers::copyOutputsWithSymmetry(policySrcBuf, policyProbs, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-        policyProbs[nnXLen * nnYLen] = policyPassSrcBuf[0];
-      }
-
-      int numValueChannels = inputBuffers->singleValueResultElts;
-      assert(numValueChannels == 3);
-      output->whiteWinProb = inputBuffers->valueResults[row * numValueChannels];
-      output->whiteLossProb = inputBuffers->valueResults[row * numValueChannels + 1];
-      output->whiteNoResultProb = inputBuffers->valueResults[row * numValueChannels + 2];
-
-    // As above, these are NOT actually from white's perspective, but rather the player to move.
-    // As usual the client does the postprocessing.
-      if(output->whiteOwnerMap != NULL) {
-        const float* ownershipSrcBuf = &inputBuffers->ownershipResults[row * nnXLen * nnYLen];
-        assert(inputBuffers->singleOwnershipResultElts == nnXLen * nnYLen);
-        SymmetryHelpers::copyOutputsWithSymmetry(
-          ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
-      }
-
-      int numScoreValueChannels = inputBuffers->singleScoreValueResultElts;
-      if(modelVersion >= 9) {
-        assert(numScoreValueChannels == 6);
-        output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
-        output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
-        output->whiteLead = inputBuffers->scoreValueResults[row * numScoreValueChannels + 2];
-        output->varTimeLeft = inputBuffers->scoreValueResults[row * numScoreValueChannels + 3];
-        output->shorttermWinlossError = inputBuffers->scoreValueResults[row * numScoreValueChannels + 4];
-        output->shorttermScoreError = inputBuffers->scoreValueResults[row * numScoreValueChannels + 5];
-      } else if(modelVersion >= 8) {
-        assert(numScoreValueChannels == 4);
-        output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
-        output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
-        output->whiteLead = inputBuffers->scoreValueResults[row * numScoreValueChannels + 2];
-        output->varTimeLeft = inputBuffers->scoreValueResults[row * numScoreValueChannels + 3];
-        output->shorttermWinlossError = 0;
-        output->shorttermScoreError = 0;
-      } else if(modelVersion >= 4) {
-        assert(numScoreValueChannels == 2);
-        output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
-        output->whiteScoreMeanSq = inputBuffers->scoreValueResults[row * numScoreValueChannels + 1];
-        output->whiteLead = output->whiteScoreMean;
-        output->varTimeLeft = 0;
-        output->shorttermWinlossError = 0;
-        output->shorttermScoreError = 0;
-      } else if(modelVersion >= 3) {
-        assert(numScoreValueChannels == 1);
-        output->whiteScoreMean = inputBuffers->scoreValueResults[row * numScoreValueChannels];
-        output->whiteScoreMeanSq = output->whiteScoreMean * output->whiteScoreMean;
-        output->whiteLead = output->whiteScoreMean;
-        output->varTimeLeft = 0;
-        output->shorttermWinlossError = 0;
-        output->shorttermScoreError = 0;
-      } else {
-        ASSERT_UNREACHABLE;
-      }
-    }
-  }
+  for(int row = 0; row < batchSize; row++)
+    unpackOutputRow(inputBuffers, inputBufs[row], outputs[row], row, nnXLen, nnYLen, modelVersion, isOnnx, trtPolicyChannels, policyProbsTmp);
   if(perfEnabled) {
     double postprocessMs = elapsedMilliseconds(postprocessStart);
     GlobalPerfProfile::recordInferencePhases(
