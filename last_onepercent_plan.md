@@ -2770,3 +2770,39 @@ reviewer 额外指出了一条中等严重度的问题：
 
 也从 hot scheduler thread 再往外挪一层。  
 但从这次数据看，真正的大头已经被拿掉了。
+
+#### 2026-03-11: 修正上一条错误结论，timeline 中所有 CUDA-event 阶段恢复到 CUDA 时间基准
+
+继续对照真实 timeline 后，确认上一条收得过头了，具体有两处错误：
+
+- H2D 被压成了单个 batch-level block，而不是按请求 / row 展开成多个 block
+- H2D / Infer / D2H 的时间轴被退化成了 scheduler 观察时间，不再主要由 CUDA event 的 duration 决定
+
+这和当前调试目标不符。当前时间线的约束应恢复为：
+
+- 只要阶段边界本来就是由 CUDA event 标记的，就仍然使用 CUDA event 的 duration 做时间建模
+- H2D 必须恢复成逐 row / 逐请求 block，不能再压成单个 batch H2D 块
+- Scheduler CPU 时间只用于：
+  - preprocess / postprocess 的 CPU block
+  - 以及给 CUDA timeline 提供一个 host 侧锚点
+
+这也澄清了一点：
+
+- `cudaEventElapsedTime()` 本身并不贵
+- 在这台机子上的最小基准里，对已完成 event 做一次 `cudaEventElapsedTime()` 的平均 API 成本大约是 `0.0341 us`
+
+因此前面那条“百微秒级 gap 主要是 `cudaEventElapsedTime()` 本身”的解释是不成立的。  
+更可能的真实问题，是我当时把 sampled timeline 的 H2D / Infer / D2H 建模顺手改错了。
+
+当前代码已经按这个修正方向收回：
+
+- 恢复 `trtGetLastInputRowCopyElapsedMs(...)`
+- 恢复 `trtGetLastInferenceElapsedMs(...)`
+- 恢复 `trtGetLastOutputCopiesElapsedMs(...)`
+- H2D timeline 恢复为逐 row span，而不是 batch-level 合并 span
+
+下一步继续观察：
+
+- timeline 是否重新出现逐 row H2D blocks
+- H2D / Infer / D2H 的长度和相对顺序是否重新与 CUDA event 观测一致
+- 如果恢复精度后再次出现明显性能影响，再单独把“采样数据写入预分配缓冲区，由汇总线程处理”的结构落地

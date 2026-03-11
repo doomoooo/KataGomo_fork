@@ -923,7 +923,7 @@ DASHBOARD_PAGE = """<!doctype html>
       const timelineHint = document.getElementById('timeline-hint');
       if (timelineHint) {
         timelineHint.textContent = single
-          ? '每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；Infer/D2H 接近完成时刻；H2D 目前是 enqueue proxy。'
+          ? '每秒附带最近约 50ms 的 sampled timeline。默认聚焦这 50ms；拖拽可左右平移，滚轮可水平缩放，`回到最新` 会重新跟随尾部。Scheduler 是真实 CPU span；H2D / Infer / D2H 使用 CUDA event duration 回填。'
           : 'timeline 当前主要服务于 TRT single-scheduler 路径；其他后端暂未接线。';
       }
     }
