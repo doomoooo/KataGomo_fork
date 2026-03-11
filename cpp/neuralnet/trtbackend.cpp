@@ -2990,6 +2990,16 @@ static double elapsedMsBetweenEvents(const char* opName, cudaEvent_t startEvent,
   return (double)elapsedMs;
 }
 
+static cudaEvent_t getTimelineBaseEvent(InputBuffers* buffers) {
+  if(buffers == nullptr || buffers->trtTimelineH2DStartEvents.empty())
+    return nullptr;
+  return buffers->trtTimelineH2DStartEvents[0];
+}
+
+static double elapsedMsFromTimelineBase(const char* opName, InputBuffers* buffers, cudaEvent_t endEvent) {
+  return elapsedMsBetweenEvents(opName, getTimelineBaseEvent(buffers), endEvent);
+}
+
 void NeuralNet::trtInitializeSharedBuffer(
   ComputeHandle* computeHandle,
   InputBuffers* buffers
@@ -3169,6 +3179,42 @@ double NeuralNet::trtGetLastInferenceElapsedMs(InputBuffers* buffers) {
 
 double NeuralNet::trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers) {
   return elapsedMsBetweenEvents("trtGetLastOutputCopiesElapsedMs", buffers->trtTimelineD2HStartEvent, buffers->trtTimelineD2HEndEvent);
+}
+
+double NeuralNet::trtGetTimelineInputRowStartOffsetMs(InputBuffers* buffers, int rowIdx) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtGetTimelineInputRowStartOffsetMs: rowIdx out of bounds");
+  return elapsedMsFromTimelineBase(
+    "trtGetTimelineInputRowStartOffsetMs",
+    buffers,
+    buffers->trtTimelineH2DStartEvents[rowIdx]
+  );
+}
+
+double NeuralNet::trtGetTimelineInputRowEndOffsetMs(InputBuffers* buffers, int rowIdx) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtGetTimelineInputRowEndOffsetMs: rowIdx out of bounds");
+  return elapsedMsFromTimelineBase(
+    "trtGetTimelineInputRowEndOffsetMs",
+    buffers,
+    buffers->trtTimelineH2DEndEvents[rowIdx]
+  );
+}
+
+double NeuralNet::trtGetTimelineInferenceStartOffsetMs(InputBuffers* buffers) {
+  return elapsedMsFromTimelineBase("trtGetTimelineInferenceStartOffsetMs", buffers, buffers->trtTimelineInferStartEvent);
+}
+
+double NeuralNet::trtGetTimelineInferenceEndOffsetMs(InputBuffers* buffers) {
+  return elapsedMsFromTimelineBase("trtGetTimelineInferenceEndOffsetMs", buffers, buffers->trtTimelineInferEndEvent);
+}
+
+double NeuralNet::trtGetTimelineOutputCopiesStartOffsetMs(InputBuffers* buffers) {
+  return elapsedMsFromTimelineBase("trtGetTimelineOutputCopiesStartOffsetMs", buffers, buffers->trtTimelineD2HStartEvent);
+}
+
+double NeuralNet::trtGetTimelineOutputCopiesEndOffsetMs(InputBuffers* buffers) {
+  return elapsedMsFromTimelineBase("trtGetTimelineOutputCopiesEndOffsetMs", buffers, buffers->trtTimelineD2HEndEvent);
 }
 
 void NeuralNet::trtUnpackOutputRow(

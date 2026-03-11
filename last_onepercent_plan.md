@@ -2807,6 +2807,48 @@ reviewer 额外指出了一条中等严重度的问题：
 - H2D / Infer / D2H 的长度和相对顺序是否重新与 CUDA event 观测一致
 - 如果恢复精度后再次出现明显性能影响，再单独把“采样数据写入预分配缓冲区，由汇总线程处理”的结构落地
 
+#### 2026-03-11: 修正 shared-buffer timeline 的 CUDA span 锚点
+
+当前进一步确认的问题不是 scheduler 真的在 `infer -> D2H` 间稳定空了几百微秒，而是 timeline 里还残留了这一类错误建模：
+
+- 用 host 的 `enqueue/launch` 时间戳做 span 起点
+- 再叠加 `cudaEventElapsedTime()` 给出的 duration
+
+这会把 “真实 GPU 事件时间” 和 “host 提交时间” 混到一条 span 里，尤其在 shared-buffer + 同 slot 提前排队的模型下，会把 infer 结束点系统性画早，进而制造假的 `infer -> D2H` gap。
+
+修正方向：
+
+- 对于 `H2D / Infer / D2H` 三类 CUDA span：
+  - 同一批次内统一使用 CUDA event offset 重建
+  - 以该批次第一条 `H2D start event` 为 batch-local base
+  - 其余 row 的 `H2D start/end`、整批 `infer start/end`、整批 `D2H start/end` 都改成
+    - `batchCudaBaseNs + cudaEventElapsedTime(baseEvent, targetEvent)`
+- host 时钟只保留在：
+  - `preprocess`
+  - `postprocess`
+  - 以及 scheduler busy span 这种纯 CPU 指标
+
+这不能凭空制造“真正的 GPU 绝对时间戳”，但能保证：
+
+- 所有 CUDA span 的相对位置由同一套 CUDA event 时钟决定
+- `infer -> D2H` 之类的 gap 不再由 `host launch time + CUDA duration` 的混合建模伪造出来
+
+修正后的实际观测：
+
+- 重新 build / run / `kata-analyze 100` 后，raw `50ms` timeline 中
+  - `infer -> D2H` 不再出现几百微秒量级的假 gap
+  - 5 帧聚合后约为
+    - `p50 ~= 5.5 us`
+    - `p95 ~= 14.1 us`
+  - `D2H -> postprocess`
+    - `p50 ~= 4.6 us`
+    - `p95 ~= 5.0 us`
+
+这说明：
+
+- 之前那种几百微秒的 `infer -> D2H` 主要是时间线建模错误
+- 修完后剩下的主要是 scheduler 真实的 CPU 观察 / enqueue / finalize handoff，而不是虚假的 span 锚点漂移
+
 #### 2026-03-11: 新增调度线程空闲时间占比实时统计
 
 为后续继续压 `infer -> D2H -> postprocess` handoff gap，dashboard 侧新增一个更直接的 realtime 指标：
