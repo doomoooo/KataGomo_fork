@@ -64,6 +64,7 @@ bool Search::initNodeNNOutput(
   bool isRoot, bool skipCache, bool isReInit
 ) {
   thread.nnResultBuf.submittedToNNServer = false;
+  bool primarySubmittedToNNServer = false;
   bool includeOwnerMap = isRoot || alwaysIncludeOwnerMap;
   bool antiMirrorDifficult = false;
   if(searchParams.antiMirror && mirroringPla != C_EMPTY && mirrorAdvantage >= -0.5 &&
@@ -104,6 +105,7 @@ bool Search::initNodeNNOutput(
         thread.rand, searchParams.rootNumSymmetriesToSample
       );
       thread.waitNNEvalTimeThisPlayoutMs += elapsedMilliseconds(start);
+      primarySubmittedToNNServer = thread.nnResultBuf.submittedToNNServer;
     }
     else {
       result = nnEvaluator->averageMultipleSymmetries(
@@ -112,6 +114,7 @@ bool Search::initNodeNNOutput(
         thread.nnResultBuf, includeOwnerMap,
         thread.rand, searchParams.rootNumSymmetriesToSample
       );
+      primarySubmittedToNNServer = thread.nnResultBuf.submittedToNNServer;
     }
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
       if(GlobalPerfProfile::isEnabled()) {
@@ -143,6 +146,7 @@ bool Search::initNodeNNOutput(
         thread.nnResultBuf, skipCache, includeOwnerMap
       );
       thread.waitNNEvalTimeThisPlayoutMs += elapsedMilliseconds(start);
+      primarySubmittedToNNServer = thread.nnResultBuf.submittedToNNServer;
     }
     else {
       nnEvaluator->evaluate(
@@ -150,6 +154,7 @@ bool Search::initNodeNNOutput(
         nnInputParams,
         thread.nnResultBuf, skipCache, includeOwnerMap
       );
+      primarySubmittedToNNServer = thread.nnResultBuf.submittedToNNServer;
     }
     result = new std::shared_ptr<NNOutput>(std::move(thread.nnResultBuf.result));
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
@@ -190,8 +195,13 @@ bool Search::initNodeNNOutput(
     delete tmp;
   }
 
+  if(!isReInit) {
+    thread.endReasonThisPlayout = primarySubmittedToNNServer
+      ? GlobalPerfProfile::SearchLoopEndReason::SubmittedGpuTask
+      : GlobalPerfProfile::SearchLoopEndReason::HitNNCache;
+  }
   thread.submittedNNEvalThisPlayout =
-    thread.submittedNNEvalThisPlayout || thread.nnResultBuf.submittedToNNServer;
+    thread.submittedNNEvalThisPlayout || primarySubmittedToNNServer || thread.nnResultBuf.submittedToNNServer;
 
   node.nodeAge.store(searchNodeAge,std::memory_order_release);
   //If this is a re-initialization of the nnOutput, we don't want to add any visits or anything.

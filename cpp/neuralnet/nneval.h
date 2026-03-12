@@ -1,6 +1,7 @@
 #ifndef NEURALNET_NNEVAL_H_
 #define NEURALNET_NNEVAL_H_
 
+#include <atomic>
 #include <map>
 #include <memory>
 
@@ -30,6 +31,8 @@ class NNCacheTable {
   uint64_t tableSize;
   uint64_t tableMask;
   uint32_t mutexPoolMask;
+  int sizePowerOfTwo;
+  std::atomic<uint64_t> occupiedCount;
 
  public:
   NNCacheTable(int sizePowerOfTwo, int mutexPoolSizePowerOfTwo);
@@ -42,6 +45,9 @@ class NNCacheTable {
   bool get(Hash128 nnHash, std::shared_ptr<NNOutput>& ret);
   void set(const std::shared_ptr<NNOutput>& p);
   void clear();
+  uint64_t getOccupiedCount() const;
+  uint64_t getCapacity() const;
+  int getSizePowerOfTwo() const;
 };
 
 //Each thread should allocate and re-use one of these

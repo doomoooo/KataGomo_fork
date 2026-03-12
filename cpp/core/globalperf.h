@@ -8,6 +8,18 @@
 class Logger;
 
 namespace GlobalPerfProfile {
+  enum class SearchLoopEndReason : uint8_t {
+    Unknown = 0,
+    SubmittedGpuTask = 1,
+    HitNNCache = 2,
+    Terminal = 3,
+    NoLegalChild = 4,
+    Contention = 5,
+    EdgeVisitCatchUp = 6,
+    CycleDetected = 7,
+    IllegalReinit = 8
+  };
+
   enum class TimelineLane {
     SchedulerThread,
     H2DStream,
@@ -63,9 +75,11 @@ namespace GlobalPerfProfile {
     double waitMilliseconds,
     int depth,
     int visitDelta,
-    bool submittedNNEval
+    bool submittedNNEval,
+    SearchLoopEndReason endReason
   );
   void noteQueueLength(int queueLength);
+  void setNNCacheOccupancy(uint64_t currentEntries, uint64_t capacityEntries, int sizePowerOfTwo);
   void changeInferenceThreadActiveCount(int inferenceThreadIdx, int delta);
   void recordInferencePhases(
     double preprocessMs,

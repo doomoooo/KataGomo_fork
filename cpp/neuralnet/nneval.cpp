@@ -447,6 +447,8 @@ NNEvaluator::NNEvaluator(
 
   if(nnCacheSizePowerOfTwo >= 0)
     nnCacheTable = new NNCacheTable(nnCacheSizePowerOfTwo, nnMutexPoolSizePowerofTwo);
+  else
+    GlobalPerfProfile::setNNCacheOccupancy(0, 0, -1);
 
   if(!debugSkipNeuralNet) {
     vector<int> gpuIdxs = gpuIdxByServerThread;
@@ -2533,12 +2535,15 @@ NNCacheTable::NNCacheTable(int sizePowerOfTwo, int mutexPoolSizePowerOfTwo) {
   if(mutexPoolSizePowerOfTwo > sizePowerOfTwo)
     mutexPoolSizePowerOfTwo = sizePowerOfTwo;
 
+  this->sizePowerOfTwo = sizePowerOfTwo;
+  occupiedCount.store(0, std::memory_order_relaxed);
   tableSize = ((uint64_t)1) << sizePowerOfTwo;
   tableMask = tableSize-1;
   entries = new Entry[tableSize];
   uint32_t mutexPoolSize = ((uint32_t)1) << mutexPoolSizePowerOfTwo;
   mutexPoolMask = mutexPoolSize-1;
   mutexPool = new MutexPool(mutexPoolSize);
+  GlobalPerfProfile::setNNCacheOccupancy(0, tableSize, this->sizePowerOfTwo);
 }
 NNCacheTable::~NNCacheTable() {
   delete[] entries;
@@ -2584,10 +2589,18 @@ void NNCacheTable::set(const shared_ptr<NNOutput>& p) {
   {
     std::lock_guard<std::mutex> lock(mutex);
     //Perform a swap, to avoid any expensive free under the mutex.
+    bool hadValue = entry.ptr != nullptr;
     entry.ptr.swap(buf);
+    if(!hadValue && entry.ptr != nullptr)
+      occupiedCount.fetch_add(1, std::memory_order_relaxed);
   }
 
   //No longer locked, allow buf to fall out of scope now, will free whatever used to be present in the table.
+  GlobalPerfProfile::setNNCacheOccupancy(
+    occupiedCount.load(std::memory_order_relaxed),
+    tableSize,
+    sizePowerOfTwo
+  );
 }
 
 void NNCacheTable::clear() {
@@ -2602,4 +2615,18 @@ void NNCacheTable::clear() {
     }
     buf.reset();
   }
+  occupiedCount.store(0, std::memory_order_relaxed);
+  GlobalPerfProfile::setNNCacheOccupancy(0, tableSize, sizePowerOfTwo);
+}
+
+uint64_t NNCacheTable::getOccupiedCount() const {
+  return occupiedCount.load(std::memory_order_relaxed);
+}
+
+uint64_t NNCacheTable::getCapacity() const {
+  return tableSize;
+}
+
+int NNCacheTable::getSizePowerOfTwo() const {
+  return sizePowerOfTwo;
 }

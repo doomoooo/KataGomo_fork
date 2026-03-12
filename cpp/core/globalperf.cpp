@@ -40,6 +40,7 @@ namespace {
   static constexpr size_t SCHEDULER_BUSY_RING_CAPACITY = 4096;
   static constexpr int64_t TIMELINE_WINDOW_NS = 50 * ONE_MILLISECOND_NS;
   static constexpr size_t TIMELINE_SNAPSHOT_MAX_SPANS = 1024;
+  static constexpr size_t SEARCH_LOOP_END_REASON_BUCKETS = 9;
 
   struct CountDurationSegment {
     double durationSeconds;
@@ -123,6 +124,7 @@ namespace {
     int depth = 0;
     int visitDelta = 0;
     bool submittedNNEval = false;
+    uint8_t endReason = 0;
   };
 
   struct DeltaEventSample {
@@ -224,6 +226,9 @@ namespace {
     atomic<int64_t> timelineCaptureEndNs;
     atomic<uint64_t> schedulerIdlePollCount;
     atomic<int64_t> schedulerIdlePollTotalNs;
+    atomic<uint64_t> currentNNCacheEntries;
+    atomic<uint64_t> currentNNCacheCapacityEntries;
+    atomic<int> currentNNCacheSizePowerOfTwo;
     uint64_t lastSchedulerIdlePollCountSnapshot;
     int64_t lastSchedulerIdlePollTotalNsSnapshot;
 
@@ -263,6 +268,9 @@ namespace {
         timelineCaptureEndNs(0),
         schedulerIdlePollCount(0),
         schedulerIdlePollTotalNs(0),
+        currentNNCacheEntries(0),
+        currentNNCacheCapacityEntries(0),
+        currentNNCacheSizePowerOfTwo(-1),
         lastSchedulerIdlePollCountSnapshot(0),
         lastSchedulerIdlePollTotalNsSnapshot(0),
         publisherMutex(),
@@ -295,6 +303,54 @@ namespace {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::system_clock::now().time_since_epoch()
     ).count();
+  }
+
+  static size_t searchLoopEndReasonIndex(GlobalPerfProfile::SearchLoopEndReason reason) {
+    size_t index = static_cast<size_t>(reason);
+    if(index >= SEARCH_LOOP_END_REASON_BUCKETS)
+      return 0;
+    return index;
+  }
+
+  static const char* searchLoopEndReasonName(GlobalPerfProfile::SearchLoopEndReason reason) {
+    switch(reason) {
+    case GlobalPerfProfile::SearchLoopEndReason::Unknown: return "unknown";
+    case GlobalPerfProfile::SearchLoopEndReason::SubmittedGpuTask: return "submitted_gpu_task";
+    case GlobalPerfProfile::SearchLoopEndReason::HitNNCache: return "hit_nn_cache";
+    case GlobalPerfProfile::SearchLoopEndReason::Terminal: return "terminal";
+    case GlobalPerfProfile::SearchLoopEndReason::NoLegalChild: return "no_legal_child";
+    case GlobalPerfProfile::SearchLoopEndReason::Contention: return "contention";
+    case GlobalPerfProfile::SearchLoopEndReason::EdgeVisitCatchUp: return "edge_visit_catchup";
+    case GlobalPerfProfile::SearchLoopEndReason::CycleDetected: return "cycle_detected";
+    case GlobalPerfProfile::SearchLoopEndReason::IllegalReinit: return "illegal_reinit";
+    }
+    return "unknown";
+  }
+
+  static json searchLoopEndReasonArrayJson(const array<uint64_t, SEARCH_LOOP_END_REASON_BUCKETS>& counts) {
+    uint64_t total = 0;
+    for(uint64_t count: counts)
+      total += count;
+
+    json out = json::array();
+    for(size_t i = 1; i < SEARCH_LOOP_END_REASON_BUCKETS; i++) {
+      GlobalPerfProfile::SearchLoopEndReason reason = static_cast<GlobalPerfProfile::SearchLoopEndReason>(i);
+      uint64_t count = counts[i];
+      out.push_back({
+        {"reason", searchLoopEndReasonName(reason)},
+        {"count", count},
+        {"value", total > 0 ? (double)count / (double)total : 0.0}
+      });
+    }
+    uint64_t unknownCount = counts[0];
+    if(unknownCount > 0 || total == 0) {
+      out.push_back({
+        {"reason", searchLoopEndReasonName(GlobalPerfProfile::SearchLoopEndReason::Unknown)},
+        {"count", unknownCount},
+        {"value", total > 0 ? (double)unknownCount / (double)total : 0.0}
+      });
+    }
+    return out;
   }
 
   template<typename T>
@@ -543,6 +599,9 @@ namespace {
     state.timelineCaptureEndNs.store(0, std::memory_order_relaxed);
     state.schedulerIdlePollCount.store(0, std::memory_order_relaxed);
     state.schedulerIdlePollTotalNs.store(0, std::memory_order_relaxed);
+    state.currentNNCacheEntries.store(0, std::memory_order_relaxed);
+    state.currentNNCacheCapacityEntries.store(0, std::memory_order_relaxed);
+    state.currentNNCacheSizePowerOfTwo.store(-1, std::memory_order_relaxed);
     state.lastSchedulerIdlePollCountSnapshot = 0;
     state.lastSchedulerIdlePollTotalNsSnapshot = 0;
     state.sendErrorCount.store(0, std::memory_order_relaxed);
@@ -783,6 +842,7 @@ namespace {
     vector<double> inferenceD2HMs;
     vector<double> inferencePostprocessMs;
     vector<double> searchDepthHistogram;
+    array<uint64_t, SEARCH_LOOP_END_REASON_BUCKETS> searchEndReasonCounts{};
     vector<double> queueTimeShareBuckets;
     vector<double> inferenceThreadActiveBuckets;
     vector<double> gpuBatchTimeBySize;
@@ -803,6 +863,9 @@ namespace {
     vector<vector<double>> gpuBatchTimeBySizeByGpu;
     vector<TimelineSpanRealtimeSample> timelineSpans;
     vector<SchedulerBusyRealtimeSample> schedulerBusySpans;
+    uint64_t nnCacheEntries = state.currentNNCacheEntries.load(std::memory_order_relaxed);
+    uint64_t nnCacheCapacityEntries = state.currentNNCacheCapacityEntries.load(std::memory_order_relaxed);
+    int nnCacheSizePowerOfTwo = state.currentNNCacheSizePowerOfTwo.load(std::memory_order_relaxed);
 
     {
       lock_guard<mutex> lock(state.configMutex);
@@ -829,6 +892,9 @@ namespace {
             searchLoopProcessMs.push_back(sample.processMs);
             searchLoopWaitMs.push_back(sample.waitMs);
           }
+          searchEndReasonCounts[std::min(searchLoopEndReasonIndex(
+            static_cast<GlobalPerfProfile::SearchLoopEndReason>(sample.endReason)
+          ), SEARCH_LOOP_END_REASON_BUCKETS - 1)] += 1;
         });
       }
 
@@ -946,6 +1012,7 @@ namespace {
     window1s["nn_batches_per_s"] = (double)windowBatches;
     window1s["avg_batch_size"] = windowBatches > 0 ? (double)windowBatchSizeSum / (double)windowBatches : 0.0;
     window1s["search_depth_histogram"] = bucketArrayJson(searchDepthHistogram, false);
+    window1s["search_end_reason_share"] = searchLoopEndReasonArrayJson(searchEndReasonCounts);
     window1s["queue_length_time_share"] = bucketArrayJson(queueTimeShareBuckets, true);
     window1s["inference_thread_active_time_share"] = bucketArrayJson(inferenceThreadActiveBuckets, true);
     window1s["gpu_batch_time_share"] = bucketArrayJson(gpuBatchTimeBySize, true);
@@ -972,6 +1039,12 @@ namespace {
       schedulerIdlePollDeltaCount > 0
         ? (double)schedulerIdlePollDeltaNs / (double)schedulerIdlePollDeltaCount / 1e3
         : 0.0;
+    window1s["nn_cache"] = {
+      {"current_entries", nnCacheEntries},
+      {"capacity_entries", nnCacheCapacityEntries},
+      {"size_power_of_two", nnCacheSizePowerOfTwo},
+      {"occupancy_share", nnCacheCapacityEntries > 0 ? (double)nnCacheEntries / (double)nnCacheCapacityEntries : 0.0}
+    };
 
     json searchLoop;
     searchLoop["total_ms"] = percentileSummaryJson(searchLoopTotalMs);
@@ -1390,7 +1463,8 @@ void GlobalPerfProfile::recordSearchLoop(
   double waitMilliseconds,
   int depth,
   int visitDelta,
-  bool submittedNNEval
+  bool submittedNNEval,
+  SearchLoopEndReason endReason
 ) {
   if(!isEnabled())
     return;
@@ -1422,7 +1496,8 @@ void GlobalPerfProfile::recordSearchLoop(
     waitMilliseconds,
     std::max(0, depth),
     std::max(0, visitDelta),
-    submittedNNEval
+    submittedNNEval,
+    (uint8_t)searchLoopEndReasonIndex(endReason)
   });
 }
 
@@ -1445,6 +1520,14 @@ void GlobalPerfProfile::noteQueueLength(int queueLength) {
   lock_guard<mutex> lock(g_benchmarkState.stateMutex);
   updateQueueSampleSegmentsLocked(g_benchmarkState, now);
   g_benchmarkState.currentQueueLength = queueLength;
+}
+
+void GlobalPerfProfile::setNNCacheOccupancy(uint64_t currentEntries, uint64_t capacityEntries, int sizePowerOfTwo) {
+  if(!isEnabled() || !isRealtimeRunning())
+    return;
+  g_realtimeState.currentNNCacheEntries.store(currentEntries, std::memory_order_relaxed);
+  g_realtimeState.currentNNCacheCapacityEntries.store(capacityEntries, std::memory_order_relaxed);
+  g_realtimeState.currentNNCacheSizePowerOfTwo.store(sizePowerOfTwo, std::memory_order_relaxed);
 }
 
 void GlobalPerfProfile::changeInferenceThreadActiveCount(int inferenceThreadIdx, int delta) {
