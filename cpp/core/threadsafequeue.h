@@ -9,6 +9,7 @@
 #include "../core/global.h"
 #include "../core/multithread.h"
 
+#include <functional>
 #include <queue>
 
 template<typename T>
@@ -21,6 +22,7 @@ class ThreadSafeContainer
   std::condition_variable notEmptyCondVar;
   std::condition_variable sizeChangedCondVar;
   std::condition_variable notFullCondVar;
+  std::function<void(size_t)> sizeChangedObserver;
 
   // Abstract methods to be implemented in derived classes
   virtual void pushUnsynchronized(T&& elt) = 0;
@@ -31,10 +33,10 @@ class ThreadSafeContainer
 
  public:
   inline ThreadSafeContainer()
-    :maxSize(0x7FFFFFFF),closed(false),readOnly(false),mutex(),notEmptyCondVar(),sizeChangedCondVar(),notFullCondVar()
+    :maxSize(0x7FFFFFFF),closed(false),readOnly(false),mutex(),notEmptyCondVar(),sizeChangedCondVar(),notFullCondVar(),sizeChangedObserver()
   {}
   inline ThreadSafeContainer(size_t maxSz)
-    :maxSize(maxSz),closed(false),readOnly(false),mutex(),notEmptyCondVar(),sizeChangedCondVar(),notFullCondVar()
+    :maxSize(maxSz),closed(false),readOnly(false),mutex(),notEmptyCondVar(),sizeChangedCondVar(),notFullCondVar(),sizeChangedObserver()
   {}
   inline ~ThreadSafeContainer()
   {}
@@ -63,12 +65,19 @@ class ThreadSafeContainer
     return readOnly;
   }
 
+  inline void setSizeChangedObserver(std::function<void(size_t)> observer) {
+    std::lock_guard<std::mutex> lock(mutex);
+    sizeChangedObserver = std::move(observer);
+  }
+
   // Close the queue. Any elements still in the queue will be dropped and never read.
   // All blocked threads will unblock and any further reads or writes will not occur (with the respective functions returning false).
   inline void close() {
     std::lock_guard<std::mutex> lock(mutex);
     closed = true;
     clearUnsynchronized();
+    if(sizeChangedObserver)
+      sizeChangedObserver(0);
     notFullCondVar.notify_all();
     notEmptyCondVar.notify_all();
     sizeChangedCondVar.notify_all();
@@ -102,6 +111,9 @@ class ThreadSafeContainer
       return false;
     size_t oldSize = sizeUnsynchronized();
     pushUnsynchronized(std::forward<T>(elt));
+    size_t newSize = oldSize + 1;
+    if(sizeChangedObserver)
+      sizeChangedObserver(newSize);
     if(oldSize == 0)
       notEmptyCondVar.notify_one();
     sizeChangedCondVar.notify_one();
@@ -125,6 +137,9 @@ class ThreadSafeContainer
       return false;
     size_t oldSize = sizeUnsynchronized();
     pushUnsynchronized(std::forward<T>(elt));
+    size_t newSize = oldSize + 1;
+    if(sizeChangedObserver)
+      sizeChangedObserver(newSize);
     if(oldSize == 0)
       notEmptyCondVar.notify_one();
     sizeChangedCondVar.notify_one();
@@ -152,6 +167,8 @@ class ThreadSafeContainer
     if(size == maxSize)
       notFullCondVar.notify_all();
     buf = popUnsynchronized();
+    if(sizeChangedObserver)
+      sizeChangedObserver(size - 1);
     return true;
   }
 
@@ -170,6 +187,8 @@ class ThreadSafeContainer
     if(size == maxSize)
       notFullCondVar.notify_all();
     buf = popUnsynchronized();
+    if(sizeChangedObserver)
+      sizeChangedObserver(size - 1);
     return true;
   }
 
@@ -189,6 +208,8 @@ class ThreadSafeContainer
     size_t numToPop = std::min(size,n);
     for(size_t i = 0; i<numToPop; i++)
       buf.push_back(popUnsynchronized());
+    if(sizeChangedObserver)
+      sizeChangedObserver(size - numToPop);
     if(size >= maxSize && size < maxSize + n)
       notFullCondVar.notify_all();
     return true;
@@ -208,6 +229,8 @@ class ThreadSafeContainer
     if(size >= n) {
       for(size_t i = 0; i<n; i++)
         buf.push_back(popUnsynchronized());
+      if(sizeChangedObserver)
+        sizeChangedObserver(size - n);
       if(size - n >= n)
         sizeChangedCondVar.notify_one();
       if(size >= maxSize && size < maxSize + n)
@@ -217,6 +240,8 @@ class ThreadSafeContainer
     if(readOnly && size > 0) {
       for(size_t i = 0; i<size; i++)
         buf.push_back(popUnsynchronized());
+      if(sizeChangedObserver)
+        sizeChangedObserver(0);
       if(size >= maxSize)
         notFullCondVar.notify_all();
       return true;

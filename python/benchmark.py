@@ -12,6 +12,8 @@ import sys
 import time
 from typing import Dict, List, Optional, Tuple
 
+from env_defaults import load_env_sh_defaults
+
 
 PLAN_PATH_RE = re.compile(
     r"(?:Saved new plan cache to|Using existing plan cache at)\s+(.+)$",
@@ -60,58 +62,6 @@ def detect_default_path(candidates: List[str]) -> str:
         if Path(candidate).exists():
             return str(Path(candidate).resolve())
     return candidates[0]
-
-
-def resolve_path_with_base(raw: str, base_dir: Path) -> str:
-    expanded = os.path.expanduser(os.path.expandvars(raw.strip()))
-    path = Path(expanded)
-    if not path.is_absolute():
-        path = (base_dir / path).resolve()
-    return str(path)
-
-
-def load_env_sh_defaults(env_sh_path: Path) -> Dict[str, str]:
-    if not env_sh_path.exists():
-        return {}
-
-    keys = [
-        "TENSORRT_ROOT",
-        "KATAGO_BIN_PATH",
-        "KATAGO_MODEL_PATH",
-        "KATAGO_CONFIG_PATH",
-        "TRT_DEVICE_ID",
-    ]
-    path_keys = {
-        "TENSORRT_ROOT",
-        "KATAGO_BIN_PATH",
-        "KATAGO_MODEL_PATH",
-        "KATAGO_CONFIG_PATH",
-    }
-    var_expr = " ".join(f'"${{{key}-}}"' for key in keys)
-    shell_cmd = f"source {shlex.quote(str(env_sh_path))} >/dev/null 2>&1 && printf '%s\\n' {var_expr}"
-    proc = subprocess.run(
-        ["bash", "-lc", shell_cmd],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return {}
-
-    lines = (proc.stdout or "").splitlines()
-    out: Dict[str, str] = {}
-    base_dir = env_sh_path.parent
-    for idx, key in enumerate(keys):
-        if idx >= len(lines):
-            break
-        value = lines[idx].strip()
-        if not value:
-            continue
-        if key in path_keys:
-            out[key] = resolve_path_with_base(value, base_dir)
-        else:
-            out[key] = value
-    return out
 
 
 def split_csv(values: Optional[List[str]]) -> List[str]:

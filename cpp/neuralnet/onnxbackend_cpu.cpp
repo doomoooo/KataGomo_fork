@@ -258,8 +258,11 @@ void NeuralNet::getOutput(
   InputBuffers* inputBuffers,
   int numBatchEltsFilled,
   NNResultBuf** inputBufs,
-  vector<NNOutput*>& outputs
+  vector<NNOutput*>& outputs,
+  NNPerfInfo* perfInfo
 ) {
+  if(perfInfo != NULL)
+    *perfInfo = NNPerfInfo();
   int batchSize = numBatchEltsFilled;
   int nnXLen = handle->ctx->nnXLen;
   int nnYLen = handle->ctx->nnYLen;

@@ -11,6 +11,16 @@
 //Defined in nneval.h
 struct NNResultBuf;
 
+struct NNPerfInfo {
+  bool hasStageTimings = false;
+  int gpuIdx = -1;
+  double preprocessMs = 0.0;
+  double h2dMs = 0.0;
+  double inferMs = 0.0;
+  double d2hMs = 0.0;
+  double postprocessMs = 0.0;
+};
+
 // A handle to cross-thread cross-gpu initialization state.
 // Create one of these per process, although creating more is fine.
 struct ComputeContext;
@@ -138,7 +148,8 @@ namespace NeuralNet {
     InputBuffers* buffers,
     int numBatchEltsFilled,
     NNResultBuf** inputBufs,
-    std::vector<NNOutput*>& outputs
+    std::vector<NNOutput*>& outputs,
+    NNPerfInfo* perfInfo
   );
 
 #ifdef USE_TENSORRT_BACKEND
@@ -180,6 +191,7 @@ namespace NeuralNet {
   );
   bool trtQueryOutputCopiesDone(InputBuffers* buffers);
   double trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int rowIdx);
+  double trtGetLastInputRowCopyEndToLastCopyEndMs(InputBuffers* buffers, int rowIdx, int batchSize);
   double trtGetLastInferenceElapsedMs(InputBuffers* buffers);
   double trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers);
   void trtUnpackOutputRow(

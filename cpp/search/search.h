@@ -7,6 +7,7 @@
 #include "../core/global.h"
 #include "../core/hash.h"
 #include "../core/logger.h"
+#include "../core/globalperf.h"
 #include "../core/multithread.h"
 #include "../core/threadsafequeue.h"
 #include "../core/threadsafecounter.h"
@@ -62,6 +63,9 @@ struct SearchThread {
 
   double upperBoundVisitsLeft;
   double waitNNEvalTimeThisPlayoutMs;
+  int lastPlayoutDepth;
+  bool submittedNNEvalThisPlayout;
+  GlobalPerfProfile::SearchLoopEndReason endReasonThisPlayout;
 
   //Occasionally we may need to swap out an NNOutput from a node mid-search.
   //However, to prevent access-after-delete races, the thread that swaps one out stores

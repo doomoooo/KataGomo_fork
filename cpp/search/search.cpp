@@ -55,6 +55,9 @@ SearchThread::SearchThread(int tIdx, const Search& search)
    statsBuf(),
    upperBoundVisitsLeft(1e30),
    waitNNEvalTimeThisPlayoutMs(0.0),
+   lastPlayoutDepth(0),
+   submittedNNEvalThisPlayout(false),
+   endReasonThisPlayout(GlobalPerfProfile::SearchLoopEndReason::Unknown),
    oldNNOutputsToCleanUp(),
    illegalMoveHashes()
 {
@@ -126,6 +129,8 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
   assert(nnXLen > 0 && nnXLen <= NNPos::MAX_BOARD_LEN);
   assert(nnYLen > 0 && nnYLen <= NNPos::MAX_BOARD_LEN);
   policySize = NNPos::getPolicySize(nnXLen,nnYLen);
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 
   if(humanEvaluator != NULL) {
     if(humanEvaluator->getNNXLen() != nnXLen || humanEvaluator->getNNYLen() != nnYLen)
@@ -264,10 +269,14 @@ void Search::setRootSymmetryPruningOnly(const std::vector<int>& v) {
 void Search::setParams(SearchParams params) {
   clearSearch();
   searchParams = params;
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 }
 
 void Search::setParamsNoClearing(SearchParams params) {
   searchParams = params;
+  GlobalPerfProfile::setCurrentSearchThreadCount(searchParams.numThreads);
+  GlobalPerfProfile::configureSearchSlots(searchParams.numThreads);
 }
 
 void Search::setExternalPatternBonusTable(std::unique_ptr<PatternBonusTable>&& table) {
@@ -463,6 +472,11 @@ void Search::runWholeSearch(
   const TimeControls& tc,
   double searchFactor
 ) {
+  GlobalPerfProfile::SearchThreadScope mainSearchThreadScope(0);
+  struct SearchSessionGuard {
+    SearchSessionGuard() { GlobalPerfProfile::searchSessionStarted(); }
+    ~SearchSessionGuard() { GlobalPerfProfile::searchSessionEnded(); }
+  } searchSessionGuard;
 
   ClockTimer timer;
   atomic<int64_t> numPlayoutsShared(0);
@@ -532,6 +546,7 @@ void Search::runWholeSearch(
     &hasMaxTime,&hasTc,
     &shouldStopNow,&shouldStopEarly,maxVisits,maxPlayouts,maxTime,pondering,searchFactor
   ](int threadIdx) {
+    GlobalPerfProfile::SearchThreadScope searchThreadScope(threadIdx);
     SearchThread* stbuf = new SearchThread(threadIdx,*this);
     const bool perfEnabled = GlobalPerfProfile::isEnabled();
 
@@ -593,7 +608,16 @@ void Search::runWholeSearch(
         if(perfEnabled) {
           double totalMs = elapsedMilliseconds(playoutStart);
           double waitMs = stbuf->waitNNEvalTimeThisPlayoutMs;
-          GlobalPerfProfile::recordSearchLoop(std::max(0.0, totalMs - waitMs), waitMs);
+          GlobalPerfProfile::recordSearchLoop(
+            threadIdx,
+            totalMs,
+            std::max(0.0, totalMs - waitMs),
+            waitMs,
+            stbuf->lastPlayoutDepth,
+            finishedPlayout ? 1 : 0,
+            stbuf->submittedNNEvalThisPlayout,
+            stbuf->endReasonThisPlayout
+          );
         }
         if(finishedPlayout) {
           numPlayouts = numPlayoutsShared.fetch_add((int64_t)1, std::memory_order_relaxed);
@@ -1152,12 +1176,19 @@ bool Search::runSinglePlayout(SearchThread& thread, double upperBoundVisitsLeft)
   //Store this value, used for futile-visit pruning this thread's root children selections.
   thread.upperBoundVisitsLeft = upperBoundVisitsLeft;
   thread.waitNNEvalTimeThisPlayoutMs = 0.0;
+  thread.lastPlayoutDepth = 0;
+  thread.submittedNNEvalThisPlayout = false;
+  thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Unknown;
 
   //Prep this value, playoutDescend will set it to false if the playout shouldn't count
   thread.shouldCountPlayout = true;
 
   bool finishedPlayout = playoutDescend(thread,*rootNode,true);
   (void)finishedPlayout;
+  thread.lastPlayoutDepth = std::max(
+    0,
+    (int)thread.history.moveHistory.size() - (int)rootHistory.moveHistory.size()
+  );
 
   //Restore thread state back to the root state
   thread.pla = rootPla;
@@ -1192,6 +1223,7 @@ bool Search::playoutDescend(
       nnEvaluator->waitForNextNNEvalIfAny();
     }
     if(thread.history.isNoResult) {
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Terminal;
       double winLossValue = 0.0;
       double noResultValue = 1.0;
       double scoreMean = 0.0;
@@ -1202,6 +1234,7 @@ bool Search::playoutDescend(
       return true;
     }
     else {
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Terminal;
       double winLossValue = 2.0 * ScoreValue::whiteWinsOfWinner(thread.history.winner, searchParams.drawEquivalentWinsForWhite) - 1;
       double noResultValue = 0.0;
       double scoreMean = ScoreValue::whiteScoreDrawAdjust(thread.history.finalWhiteMinusBlackScore,searchParams.drawEquivalentWinsForWhite,thread.history);
@@ -1222,6 +1255,7 @@ bool Search::playoutDescend(
       //gets to update the state, to avoid races where we update the state while the node stats aren't updated yet.
       if(!suc) {
         thread.shouldCountPlayout = false;
+        thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Contention;
         return false;
       }
     }
@@ -1231,6 +1265,7 @@ bool Search::playoutDescend(
       //Presumably someone else got there first.
       //Just give up on this playout and try again from the start.
       thread.shouldCountPlayout = false;
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Contention;
       return false;
     }
     else {
@@ -1243,6 +1278,7 @@ bool Search::playoutDescend(
   else if(nodeState == SearchNode::STATE_EVALUATING) {
     //Just give up on this playout and try again from the start.
     thread.shouldCountPlayout = false;
+    thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Contention;
     return false;
   }
 
@@ -1305,12 +1341,14 @@ bool Search::playoutDescend(
       //Return TRUE though, so that the parent path we traversed increments its edge visits.
       //We want the search to continue as best it can, so we increment visits so search will still make progress
       //even if this keeps happening in some really bad transposition or something.
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::IllegalReinit;
       return true;
     }
 
     if(bestChildIdx <= -1) {
       //This might happen if all moves have been forbidden. The node will just get stuck counting visits without expanding
       //and we won't do any search.
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::NoLegalChild;
       addCurrentNNOutputAsLeafValue(node,false);
       return true;
     }
@@ -1371,6 +1409,7 @@ bool Search::playoutDescend(
           //Clean up virtual losses in case the node is a transposition and is being used.
           child->virtualLosses.fetch_add(-1,std::memory_order_release);
           thread.shouldCountPlayout = false;
+          thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::Contention;
           return false;
         }
       }
@@ -1379,6 +1418,7 @@ bool Search::playoutDescend(
       //Instead just add edge visits and treat that as a visit.
       //If we're not counting edge visits, then we're deliberately trying to add child visits beyond edge visits, don't return early
       if(countEdgeVisit && maybeCatchUpEdgeVisits(thread, node, child, nodeState, bestChildIdx)) {
+        thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::EdgeVisitCatchUp;
         updateStatsAfterPlayout(node,thread,isRoot);
         child->virtualLosses.fetch_add(-1,std::memory_order_release);
         return true;
@@ -1396,6 +1436,7 @@ bool Search::playoutDescend(
       //Instead just add edge visits and treat that as a visit.
       //If we're not counting edge visits, then we're deliberately trying to add child visits beyond edge visits, don't return early
       if(countEdgeVisit && maybeCatchUpEdgeVisits(thread, node, child, nodeState, bestChildIdx)) {
+        thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::EdgeVisitCatchUp;
         updateStatsAfterPlayout(node,thread,isRoot);
         child->virtualLosses.fetch_add(-1,std::memory_order_release);
         return true;
@@ -1432,6 +1473,7 @@ bool Search::playoutDescend(
 
       child->virtualLosses.fetch_add(-1,std::memory_order_release);
       // If we didn't count an edge visit, none of the parents need to update either.
+      thread.endReasonThisPlayout = GlobalPerfProfile::SearchLoopEndReason::CycleDetected;
       return countEdgeVisit;
     }
   }
