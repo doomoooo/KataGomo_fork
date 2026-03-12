@@ -41,6 +41,7 @@ namespace {
   static constexpr int64_t TIMELINE_WINDOW_NS = 50 * ONE_MILLISECOND_NS;
   static constexpr size_t TIMELINE_SNAPSHOT_MAX_SPANS = 1024;
   static constexpr size_t SEARCH_LOOP_END_REASON_BUCKETS = 9;
+  static constexpr size_t SEARCH_SUBMIT_INTERVAL_TOP_COUNT = 20;
 
   struct CountDurationSegment {
     double durationSeconds;
@@ -168,6 +169,23 @@ namespace {
     uint64_t sequence = 0;
     int64_t startNs = 0;
     int64_t endNs = 0;
+  };
+
+  struct SearchSubmitIntervalEvent {
+    int64_t timestampNs = 0;
+    uint8_t endReason = 0;
+    double searchUs = 0.0;
+    double waitUs = 0.0;
+  };
+
+  struct SearchSubmitIntervalSnapshot {
+    int threadIdx = -1;
+    int64_t startNs = 0;
+    int64_t endNs = 0;
+    bool ongoing = false;
+    double searchUs = 0.0;
+    double waitUs = 0.0;
+    std::vector<SearchSubmitIntervalEvent> events;
   };
 
   struct SearchRealtimeSlot {
@@ -348,6 +366,147 @@ namespace {
         {"reason", searchLoopEndReasonName(GlobalPerfProfile::SearchLoopEndReason::Unknown)},
         {"count", unknownCount},
         {"value", total > 0 ? (double)unknownCount / (double)total : 0.0}
+      });
+    }
+    return out;
+  }
+
+  static bool isEffectiveNNSubmitEndReason(uint8_t endReason) {
+    return endReason == static_cast<uint8_t>(GlobalPerfProfile::SearchLoopEndReason::SubmittedGpuTask);
+  }
+
+  static std::vector<SearchSubmitIntervalSnapshot> computeTopSearchSubmitIntervals(
+    const std::vector<std::vector<SearchLoopRealtimeSample>>& samplesByThread,
+    int64_t windowStartNs,
+    int64_t nowNs
+  ) {
+    std::vector<SearchSubmitIntervalSnapshot> intervals;
+    intervals.reserve(128);
+
+    for(size_t threadIdx = 0; threadIdx < samplesByThread.size(); threadIdx++) {
+      std::vector<SearchLoopRealtimeSample> samples = samplesByThread[threadIdx];
+      if(samples.empty())
+        continue;
+      std::sort(samples.begin(), samples.end(), [](const SearchLoopRealtimeSample& a, const SearchLoopRealtimeSample& b) {
+        if(a.timestampNs != b.timestampNs)
+          return a.timestampNs < b.timestampNs;
+        return a.sequence < b.sequence;
+      });
+
+      int64_t intervalStartNs = 0;
+      bool hasOpenInterval = false;
+      bool shouldStartOnNextSample = false;
+      std::vector<SearchSubmitIntervalEvent> intervalEvents;
+      intervalEvents.reserve(128);
+      double intervalSearchUs = 0.0;
+      double intervalWaitUs = 0.0;
+
+      for(const SearchLoopRealtimeSample& sample: samples) {
+        if(sample.timestampNs <= 0 || sample.timestampNs > nowNs)
+          continue;
+
+        if(shouldStartOnNextSample) {
+          const int64_t sampleStartNs = sample.timestampNs - (int64_t)std::llround(std::max(0.0, sample.totalMs) * 1e6);
+          intervalStartNs = std::max<int64_t>(0, sampleStartNs);
+          intervalEvents.clear();
+          intervalSearchUs = 0.0;
+          intervalWaitUs = 0.0;
+          hasOpenInterval = true;
+          shouldStartOnNextSample = false;
+        }
+
+        if(!hasOpenInterval) {
+          if(isEffectiveNNSubmitEndReason(sample.endReason))
+            shouldStartOnNextSample = true;
+          continue;
+        }
+
+        const double searchUs = std::max(0.0, sample.processMs * 1e3);
+        const double waitUs = std::max(0.0, sample.waitMs * 1e3);
+        intervalEvents.push_back(SearchSubmitIntervalEvent{
+          sample.timestampNs,
+          sample.endReason,
+          searchUs,
+          waitUs
+        });
+        intervalSearchUs += searchUs;
+        intervalWaitUs += waitUs;
+
+        if(isEffectiveNNSubmitEndReason(sample.endReason)) {
+          if(sample.timestampNs >= windowStartNs || intervalStartNs >= windowStartNs) {
+            intervals.push_back(SearchSubmitIntervalSnapshot{
+              (int)threadIdx,
+              intervalStartNs,
+              sample.timestampNs,
+              false,
+              intervalSearchUs,
+              intervalWaitUs,
+              intervalEvents
+            });
+          }
+          hasOpenInterval = false;
+          shouldStartOnNextSample = true;
+          intervalEvents.clear();
+          intervalSearchUs = 0.0;
+          intervalWaitUs = 0.0;
+        }
+      }
+
+      if(hasOpenInterval && (nowNs >= windowStartNs || intervalStartNs >= windowStartNs)) {
+        intervals.push_back(SearchSubmitIntervalSnapshot{
+          (int)threadIdx,
+          intervalStartNs,
+          nowNs,
+          true,
+          intervalSearchUs,
+          intervalWaitUs,
+          intervalEvents
+        });
+      }
+    }
+
+    std::sort(intervals.begin(), intervals.end(), [](const SearchSubmitIntervalSnapshot& a, const SearchSubmitIntervalSnapshot& b) {
+      if(a.searchUs != b.searchUs)
+        return a.searchUs > b.searchUs;
+      if(a.waitUs != b.waitUs)
+        return a.waitUs > b.waitUs;
+      const int64_t aDurationNs = std::max<int64_t>(0, a.endNs - a.startNs);
+      const int64_t bDurationNs = std::max<int64_t>(0, b.endNs - b.startNs);
+      if(aDurationNs != bDurationNs)
+        return aDurationNs > bDurationNs;
+      if(a.threadIdx != b.threadIdx)
+        return a.threadIdx < b.threadIdx;
+      return a.startNs < b.startNs;
+    });
+
+    if(intervals.size() > SEARCH_SUBMIT_INTERVAL_TOP_COUNT)
+      intervals.resize(SEARCH_SUBMIT_INTERVAL_TOP_COUNT);
+    return intervals;
+  }
+
+  static json searchSubmitIntervalsJson(
+    const std::vector<SearchSubmitIntervalSnapshot>& intervals
+  ) {
+    json out = json::array();
+    for(const SearchSubmitIntervalSnapshot& interval: intervals) {
+      json events = json::array();
+      for(const SearchSubmitIntervalEvent& event: interval.events) {
+        events.push_back(json::array({
+          (double)(event.timestampNs - interval.startNs) / 1e3,
+          (int)event.endReason,
+          event.searchUs,
+          event.waitUs
+        }));
+      }
+      out.push_back({
+        {"thread_idx", interval.threadIdx},
+        {"start_ns", interval.startNs},
+        {"end_ns", interval.endNs},
+        {"duration_us", (double)std::max<int64_t>(0, interval.endNs - interval.startNs) / 1e3},
+        {"search_us", interval.searchUs},
+        {"wait_us", interval.waitUs},
+        {"ongoing", interval.ongoing},
+        {"playouts", events}
       });
     }
     return out;
@@ -846,6 +1005,7 @@ namespace {
     vector<double> queueTimeShareBuckets;
     vector<double> inferenceThreadActiveBuckets;
     vector<double> gpuBatchTimeBySize;
+    vector<vector<SearchLoopRealtimeSample>> searchLoopSamplesByThread;
     vector<DeltaEventSample> queueEvents;
     vector<DeltaEventSample> inferenceThreadActiveEvents;
     uint64_t totalVisits = state.retiredSearchVisits.load(std::memory_order_relaxed);
@@ -878,10 +1038,14 @@ namespace {
       }
       streamEventsByGpu.resize(gpuCounters.size());
       gpuBatchTimeBySizeByGpu.resize(gpuCounters.size());
+      searchLoopSamplesByThread.resize(state.searchSlots.size());
 
-      for(const unique_ptr<SearchRealtimeSlot>& slot: state.searchSlots) {
+      for(size_t threadIdx = 0; threadIdx < state.searchSlots.size(); threadIdx++) {
+        const unique_ptr<SearchRealtimeSlot>& slot = state.searchSlots[threadIdx];
         totalVisits += slot->totalVisits.load(std::memory_order_relaxed);
         forEachRingSample(slot->searchLoops, [&](const SearchLoopRealtimeSample& sample) {
+          if(sample.timestampNs <= nowNs)
+            searchLoopSamplesByThread[threadIdx].push_back(sample);
           if(sample.timestampNs < windowStartNs || sample.timestampNs > nowNs)
             return;
           windowVisits += (uint64_t)std::max(0, sample.visitDelta);
@@ -970,6 +1134,8 @@ namespace {
       nowNs,
       currentInferenceThreadActiveCountAtSnapshot
     );
+    vector<SearchSubmitIntervalSnapshot> topSearchSubmitIntervals =
+      computeTopSearchSubmitIntervals(searchLoopSamplesByThread, windowStartNs, nowNs);
 
     json gpuStreamTimeShareByGpu = json::array();
     json gpuBatchTimeShareByGpu = json::array();
@@ -1013,6 +1179,10 @@ namespace {
     window1s["avg_batch_size"] = windowBatches > 0 ? (double)windowBatchSizeSum / (double)windowBatches : 0.0;
     window1s["search_depth_histogram"] = bucketArrayJson(searchDepthHistogram, false);
     window1s["search_end_reason_share"] = searchLoopEndReasonArrayJson(searchEndReasonCounts);
+    window1s["search_submit_intervals_top20"] = {
+      {"sort_key", "search_us"},
+      {"intervals", searchSubmitIntervalsJson(topSearchSubmitIntervals)}
+    };
     window1s["queue_length_time_share"] = bucketArrayJson(queueTimeShareBuckets, true);
     window1s["inference_thread_active_time_share"] = bucketArrayJson(inferenceThreadActiveBuckets, true);
     window1s["gpu_batch_time_share"] = bucketArrayJson(gpuBatchTimeBySize, true);

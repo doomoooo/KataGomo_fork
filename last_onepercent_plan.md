@@ -3094,3 +3094,49 @@ timeline 页面也继续为“看时序”让路：
 - 状态 pills 合并进标题栏，不再单独占一整节
 - 左侧 lane label 改成中文，并把 `Slot` 统一改名为 `Stream`
 - 给时间轴本体释放更多纵向空间
+
+#### 2026-03-12: 新增“搜索线程有效 NN 提交长尾”诊断页
+
+为了追 `search thread` 的长尾，不再只看 60 秒聚合占比，补一页按“有效 NN 提交区间”展开的实时诊断：
+
+- “有效 NN 提交”口径固定为 `SearchLoopEndReason::SubmittedGpuTask`
+  - 即一次 playout 真正把请求提交给 GPU
+  - 不把 `hit_nn_cache` 算成有效提交
+- 区间定义为：
+  - 以上一次有效 NN 提交结束后，该线程下一次 playout 的开始时刻为左端点
+  - 一路累计后续重试 playout，直到再次遇到 `SubmittedGpuTask`
+  - 如果还没有迎来下一次提交，则用 `now` 作为右端点，记为 `ongoing`
+- 当前排序口径再次收紧成“累计搜索时间 `search_us`”
+  - 即区间内所有 playout 的 `process_ms` 累加
+  - `wait_ms` 单独累计成 `wait_us`
+  - 用 `search_us` 取当前 top20
+- 每个区间会带出：
+  - `thread_idx`
+  - `search_us`
+  - `wait_us`
+  - `duration_us`
+  - `ongoing`
+  - 区间内每次 playout 的：
+    - 区间内结束偏移 `offset_us`
+    - `end_reason`
+    - 单次 `playout search_us`
+    - 单次 `playout wait_us`
+
+前端新增独立页面 `/search-gaps`：
+
+- 用卡片方式展示 top20 区间
+- 每张卡展开：
+  - 累计搜索时间 / 累计等待时间 / 区间跨度
+  - 按 `end_reason` 聚合的搜索时间去向堆叠条和图例
+  - 区间内 playout 结束时刻小时间轴
+  - 每次 playout 的 `offset_us / search_us / wait_us / end_reason`
+- 目的不是替代 dashboard
+  - 而是专门用于看“为什么某个线程在两次有效提交之间卡了这么久”
+
+live 验证：
+
+- `/api/state.latest.window1s.search_submit_intervals_top20.sort_key == "search_us"`
+- 当前 top1 示例已经符合预期：
+  - 多次 `edge_visit_catchup` / `contention` 类搜索重试
+  - 最后一次 `submitted_gpu_task` 结束区间
+  - 区间里 `search_us` 和 `wait_us` 分开累计，不再按 wall 时间排序

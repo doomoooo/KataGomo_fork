@@ -134,6 +134,13 @@ DASHBOARD_PAGE = """<!doctype html>
     .brand-link:hover {
       background: rgba(255,255,255,0.92);
     }
+    .brand-links {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .status-grid {
       display: grid;
       grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -774,7 +781,10 @@ DASHBOARD_PAGE = """<!doctype html>
             <h1 class="title">搜索资源监控</h1>
             <p class="subtitle">固定一屏展示 1Hz 搜索与推理概览。详细调度线程 / CUDA Stream 时间线已拆到独立页面，避免主 dashboard 被压扁。</p>
           </div>
-          <a class="brand-link" href="/timeline">打开时间线页面</a>
+          <div class="brand-links">
+            <a class="brand-link" href="/timeline">打开时间线页面</a>
+            <a class="brand-link" href="/search-gaps">打开搜索长尾页面</a>
+          </div>
         </div>
       </div>
       <div class="panel">
@@ -2775,6 +2785,703 @@ TIMELINE_PAGE = """<!doctype html>
 """
 
 
+SEARCH_GAPS_PAGE = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KataGo 搜索长尾</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: rgba(255,255,255,0.84);
+      --panel-strong: rgba(255,255,255,0.95);
+      --ink: #17202a;
+      --muted: #5d6670;
+      --line: rgba(23,32,42,0.12);
+      --accent: #0f766e;
+      --shadow: 0 14px 34px rgba(25, 32, 40, 0.08);
+      --radius: 18px;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; min-width: 0; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(15,118,110,0.18), transparent 38%),
+        radial-gradient(circle at top right, rgba(194,65,12,0.12), transparent 32%),
+        linear-gradient(180deg, #f8f4ec 0%, #f2ebe0 100%);
+    }
+    .app {
+      width: 100vw;
+      height: 100vh;
+      padding: 14px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
+    }
+    .panel {
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.02;
+    }
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 78rem;
+    }
+    .topbar-side {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      justify-items: end;
+    }
+    .nav-links {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: end;
+    }
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,118,110,0.18);
+      background: var(--panel-strong);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .status-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: end;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .status-pill {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(23,32,42,0.08);
+      white-space: nowrap;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: end;
+    }
+    .controls button {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-height: 38px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .content {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
+      min-height: 0;
+    }
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .summary strong {
+      color: var(--ink);
+    }
+    .cards {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-content: start;
+      padding-right: 2px;
+    }
+    .gap-card {
+      background: rgba(255,255,255,0.74);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      gap: 8px;
+      min-height: 250px;
+    }
+    .gap-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+    .gap-title {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.15;
+    }
+    .gap-subtitle {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+    .gap-state {
+      padding: 6px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid rgba(23,32,42,0.08);
+      background: rgba(255,255,255,0.82);
+    }
+    .gap-state.ongoing {
+      color: #9a3412;
+      border-color: rgba(194,65,12,0.18);
+      background: rgba(255,237,213,0.9);
+    }
+    .gap-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .metric {
+      padding: 8px 9px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(23,32,42,0.08);
+    }
+    .metric label {
+      display: block;
+      font-size: 9px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .metric strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.1;
+      font-family: var(--mono);
+    }
+    .util-bar {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(23,32,42,0.08);
+      overflow: hidden;
+      position: relative;
+    }
+    .util-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #0f766e, #1d4ed8);
+    }
+    .util-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-family: var(--mono);
+    }
+    .reason-breakdown {
+      display: grid;
+      gap: 8px;
+    }
+    .reason-bar {
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(23,32,42,0.08);
+      overflow: hidden;
+      display: flex;
+    }
+    .reason-segment {
+      min-width: 2px;
+      height: 100%;
+    }
+    .reason-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .reason-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(23,32,42,0.08);
+      background: rgba(255,255,255,0.72);
+      font-size: 10px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .playout-track {
+      position: relative;
+      height: 78px;
+      border-radius: 12px;
+      border: 1px solid rgba(23,32,42,0.08);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.76), rgba(255,255,255,0.62)),
+        linear-gradient(90deg, rgba(15,118,110,0.04), rgba(29,78,216,0.04));
+      overflow: hidden;
+    }
+    .track-axis {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 18px;
+      height: 1px;
+      background: rgba(23,32,42,0.18);
+    }
+    .track-marker {
+      position: absolute;
+      bottom: 22px;
+      width: 0;
+      height: 32px;
+      border-left: 2px solid currentColor;
+    }
+    .track-marker::after {
+      content: "";
+      position: absolute;
+      left: -4px;
+      top: -6px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.88);
+    }
+    .track-label {
+      position: absolute;
+      bottom: 0;
+      transform: translateX(-50%);
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .event-table {
+      min-height: 0;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(23,32,42,0.08);
+      background: rgba(255,255,255,0.62);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: rgba(255,255,255,0.92);
+      z-index: 1;
+      text-align: left;
+      font-weight: 700;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(23,32,42,0.08);
+    }
+    tbody td {
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(23,32,42,0.06);
+      font-family: var(--mono);
+    }
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+    .reason-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-family: var(--sans);
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(23,32,42,0.08);
+      white-space: nowrap;
+    }
+    .reason-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .waiting {
+      padding: 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      border: 1px dashed rgba(23,32,42,0.18);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.52);
+    }
+    @media (max-width: 1500px) {
+      .cards {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="panel topbar">
+      <div>
+        <div class="eyebrow">KataGo Search Tail Monitor</div>
+        <h1>搜索线程有效 NN 提交长尾</h1>
+        <p class="subtitle">这里按同一搜索线程在拿到上次结果后重新开始的一段 playout 区间来观察长尾。区间内会累计每次 playout 的搜索时间与等待 GPU 时间，并按累计搜索时间取当前 top20，帮助看清搜索线程的长尾到底耗在哪些结束原因上。</p>
+      </div>
+      <div class="topbar-side">
+        <div class="nav-links">
+          <a class="nav-link" href="/">返回 Dashboard</a>
+          <a class="nav-link" href="/timeline">打开时间线页面</a>
+        </div>
+        <div id="gap-status-meta" class="status-meta">
+          <div class="status-pill">等待快照</div>
+        </div>
+        <div class="controls">
+          <button id="gap-refresh-btn" type="button">手动刷新</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel content">
+      <div id="gap-summary" class="summary">
+        <span><strong>等待数据</strong></span>
+      </div>
+      <div id="gap-cards" class="cards">
+        <div class="waiting">等待来自 KataGo 的快照</div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const fmtFloat = (v, digits = 2) => {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return 'N/A';
+      return Number(v).toFixed(digits);
+    };
+    const fmtInt = (v) => Number(v || 0).toLocaleString('en-US');
+    const fmtPercent = (v) => `${fmtFloat(Number(v || 0) * 100, 1)}%`;
+    const fmtIso = (unixMs) => {
+      if (!unixMs) return '等待数据';
+      return new Date(unixMs).toLocaleString('zh-CN', { hour12: false });
+    };
+    const fmtUs = (v) => `${fmtFloat(v, 2)} us`;
+    const fmtMs = (v) => `${fmtFloat(Number(v || 0) / 1000, 2)} ms`;
+
+    const reasonIndexToKey = [
+      'unknown',
+      'submitted_gpu_task',
+      'hit_nn_cache',
+      'terminal',
+      'no_legal_child',
+      'contention',
+      'edge_visit_catchup',
+      'cycle_detected',
+      'illegal_reinit',
+    ];
+    const reasonLabels = {
+      submitted_gpu_task: '提交 GPU',
+      hit_nn_cache: '命中 NN 缓存',
+      terminal: '终局',
+      no_legal_child: '无合法子',
+      contention: '竞争失败',
+      edge_visit_catchup: '补边访问',
+      cycle_detected: '发现循环',
+      illegal_reinit: '非法重算',
+      unknown: '未知',
+    };
+    const reasonColors = {
+      submitted_gpu_task: '#c2410c',
+      hit_nn_cache: '#0f766e',
+      terminal: '#7c3aed',
+      no_legal_child: '#475569',
+      contention: '#1d4ed8',
+      edge_visit_catchup: '#ea580c',
+      cycle_detected: '#be185d',
+      illegal_reinit: '#b45309',
+      unknown: '#94a3b8',
+    };
+
+    let latestRealtimeState = null;
+
+    function reasonKeyOf(index) {
+      return reasonIndexToKey[Number(index || 0)] || 'unknown';
+    }
+
+    function reasonPill(reasonKey) {
+      const color = reasonColors[reasonKey] || '#94a3b8';
+      return `<span class="reason-pill"><i class="reason-dot" style="background:${color}"></i>${reasonLabels[reasonKey] || reasonKey}</span>`;
+    }
+
+    function buildReasonBreakdown(interval) {
+      const events = Array.isArray(interval.playouts) ? interval.playouts : [];
+      const totalSearchUs = Math.max(Number(interval.search_us || 0), 1e-6);
+      const buckets = new Map();
+      events.forEach((event) => {
+        const reasonKey = reasonKeyOf(event?.[1]);
+        const searchUs = Number(event?.[2] || 0);
+        const waitUs = Number(event?.[3] || 0);
+        const current = buckets.get(reasonKey) || { reasonKey, searchUs: 0, waitUs: 0, count: 0 };
+        current.searchUs += searchUs;
+        current.waitUs += waitUs;
+        current.count += 1;
+        buckets.set(reasonKey, current);
+      });
+      const segments = Array.from(buckets.values())
+        .filter((bucket) => bucket.searchUs > 0 || bucket.count > 0)
+        .sort((a, b) => {
+          if (a.searchUs !== b.searchUs) return b.searchUs - a.searchUs;
+          if (a.waitUs !== b.waitUs) return b.waitUs - a.waitUs;
+          return a.reasonKey.localeCompare(b.reasonKey);
+        });
+      if (segments.length === 0) {
+        return '<div class="waiting">这个区间里还没有可归因的搜索时间。</div>';
+      }
+      return `
+        <div class="reason-breakdown">
+          <div class="reason-bar">
+            ${segments.map((segment) => {
+              const width = Math.max(0.8, (segment.searchUs / totalSearchUs) * 100);
+              const color = reasonColors[segment.reasonKey] || '#94a3b8';
+              const label = reasonLabels[segment.reasonKey] || segment.reasonKey;
+              return `
+                <div
+                  class="reason-segment"
+                  style="width:${width}%; background:${color}"
+                  title="${label} | 搜索 ${fmtUs(segment.searchUs)} | 等待 ${fmtUs(segment.waitUs)} | playout ${fmtInt(segment.count)}"
+                ></div>
+              `;
+            }).join('')}
+          </div>
+          <div class="reason-legend">
+            ${segments.map((segment) => {
+              const label = reasonLabels[segment.reasonKey] || segment.reasonKey;
+              const color = reasonColors[segment.reasonKey] || '#94a3b8';
+              const share = segment.searchUs / totalSearchUs;
+              return `
+                <div class="reason-legend-item">
+                  <i class="reason-dot" style="background:${color}"></i>
+                  <span>${label}</span>
+                  <span>${fmtPercent(share)}</span>
+                  <span>${fmtUs(segment.searchUs)}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function updateStatusBar(state) {
+      const latest = state?.latest || null;
+      const receiver = state?.receiver || {};
+      document.getElementById('gap-status-meta').innerHTML = `
+        <div class="status-pill">最新快照 ${fmtIso(latest?.timestamp_unix_ms)}</div>
+        <div class="status-pill">sequence ${fmtInt(latest?.sequence || 0)}</div>
+        <div class="status-pill">模式 ${latest?.status?.inference_mode || '等待数据'}</div>
+        <div class="status-pill">接收快照 ${fmtInt(receiver.received_count || 0)}</div>
+      `;
+    }
+
+    function buildTrack(interval) {
+      const durationUs = Math.max(Number(interval.duration_us || 0), 1e-6);
+      const events = Array.isArray(interval.playouts) ? interval.playouts : [];
+      const markers = events.map((event) => {
+        const offsetUs = Number(event?.[0] || 0);
+        const reasonKey = reasonKeyOf(event?.[1]);
+        const searchUs = Number(event?.[2] || 0);
+        const waitUs = Number(event?.[3] || 0);
+        const left = Math.max(0, Math.min(100, offsetUs / durationUs * 100));
+        return `
+          <div class="track-marker" style="left:calc(12px + (100% - 24px) * ${left / 100}); color:${reasonColors[reasonKey] || '#94a3b8'}">
+            <title>${fmtUs(offsetUs)} | ${reasonLabels[reasonKey] || reasonKey} | search=${fmtUs(searchUs)} | wait=${fmtUs(waitUs)}</title>
+          </div>
+          <div class="track-label" style="left:calc(12px + (100% - 24px) * ${left / 100});">${fmtFloat(offsetUs, 0)}</div>
+        `;
+      }).join('');
+      return `
+        <div class="playout-track">
+          <div class="track-axis"></div>
+          ${markers}
+        </div>
+      `;
+    }
+
+    function buildEventRows(interval) {
+      const events = Array.isArray(interval.playouts) ? interval.playouts : [];
+      if (events.length === 0) {
+        return '<div class="waiting">这个区间里还没有后续 playout 样本</div>';
+      }
+      return `
+        <div class="event-table">
+          <table>
+            <thead>
+              <tr>
+                <th>区间内结束时刻</th>
+                <th>搜索时间</th>
+                <th>等待 GPU</th>
+                <th>结束原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${events.map((event) => {
+                const offsetUs = Number(event?.[0] || 0);
+                const reasonKey = reasonKeyOf(event?.[1]);
+                const searchUs = Number(event?.[2] || 0);
+                const waitUs = Number(event?.[3] || 0);
+                return `
+                  <tr>
+                    <td>${fmtUs(offsetUs)}</td>
+                    <td>${fmtUs(searchUs)}</td>
+                    <td>${fmtUs(waitUs)}</td>
+                    <td>${reasonPill(reasonKey)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderIntervals(state) {
+      const latest = state?.latest || null;
+      const payload = latest?.window1s?.search_submit_intervals_top20 || {};
+      const intervals = Array.isArray(payload?.intervals) ? payload.intervals : [];
+      const cards = document.getElementById('gap-cards');
+      const summary = document.getElementById('gap-summary');
+      if (!latest || intervals.length === 0) {
+        summary.innerHTML = '<span><strong>等待数据</strong></span>';
+        cards.innerHTML = '<div class="waiting">过去 1 秒还没有形成可分析的有效 NN 提交区间。</div>';
+        return;
+      }
+      const top = intervals[0] || null;
+      summary.innerHTML = `
+        <span><strong>排序依据 search_us</strong></span>
+        <span>当前区间数 ${fmtInt(intervals.length)}</span>
+        <span>最重区间 thread ${top ? fmtInt(top.thread_idx) : 'N/A'}</span>
+        <span>搜索 ${top ? fmtMs(top.search_us) : 'N/A'}</span>
+        <span>等待 ${top ? fmtMs(top.wait_us) : 'N/A'}</span>
+        <span>跨度 ${top ? fmtMs(top.duration_us) : 'N/A'}</span>
+        <span>ongoing ${top?.ongoing ? 'yes' : 'no'}</span>
+      `;
+      cards.innerHTML = intervals.map((interval, idx) => {
+        const searchUs = Number(interval.search_us || 0);
+        const waitUs = Number(interval.wait_us || 0);
+        const durationUs = Math.max(Number(interval.duration_us || 0), 1e-6);
+        const util = Math.max(0, Math.min(1, searchUs / durationUs));
+        const playoutCount = Array.isArray(interval.playouts) ? interval.playouts.length : 0;
+        return `
+          <section class="gap-card">
+            <div class="gap-head">
+              <div>
+                <h2 class="gap-title">#${idx + 1} 线程 ${fmtInt(interval.thread_idx)}</h2>
+                <p class="gap-subtitle">start=${fmtInt(interval.start_ns)} end=${fmtInt(interval.end_ns)}</p>
+              </div>
+              <div class="gap-state ${interval.ongoing ? 'ongoing' : ''}">${interval.ongoing ? '仍在进行' : '已完成'}</div>
+            </div>
+            <div class="gap-metrics">
+              <div class="metric"><label>累计搜索</label><strong>${fmtUs(searchUs)}</strong></div>
+              <div class="metric"><label>累计等待</label><strong>${fmtUs(waitUs)}</strong></div>
+              <div class="metric"><label>区间跨度</label><strong>${fmtUs(durationUs)}</strong></div>
+              <div class="metric"><label>playout 数</label><strong>${fmtInt(playoutCount)}</strong></div>
+            </div>
+            <div>
+              <div class="util-bar"><div class="util-fill" style="width:${Math.max(0.5, util * 100)}%"></div></div>
+              <div class="util-label"><span>search ${fmtUs(searchUs)}</span><span>wall ${fmtUs(durationUs)}</span></div>
+            </div>
+            ${buildReasonBreakdown(interval)}
+            ${buildTrack(interval)}
+            ${buildEventRows(interval)}
+          </section>
+        `;
+      }).join('');
+    }
+
+    async function fetchState() {
+      try {
+        const resp = await fetch('/api/state', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const state = await resp.json();
+        latestRealtimeState = state;
+        updateStatusBar(state);
+        renderIntervals(state);
+      } catch (err) {
+        updateStatusBar(latestRealtimeState);
+        document.getElementById('gap-summary').innerHTML = '<span><strong>页面请求失败</strong></span>';
+        document.getElementById('gap-cards').innerHTML = `<div class="waiting">页面请求失败: ${String(err)}</div>`;
+      }
+    }
+
+    document.getElementById('gap-refresh-btn').addEventListener('click', () => {
+      fetchState();
+    });
+
+    updateStatusBar(null);
+    fetchState();
+    window.setInterval(fetchState, 1000);
+  </script>
+</body>
+</html>
+"""
+
+
 def to_int(raw: str, default: int) -> int:
     try:
         return int(raw)
@@ -2862,6 +3569,15 @@ def make_handler(state: MonitorState):
 
             if self.path == "/timeline":
                 body = TIMELINE_PAGE.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if self.path == "/search-gaps":
+                body = SEARCH_GAPS_PAGE.encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
