@@ -3027,3 +3027,22 @@ reviewer 额外指出了一条中等严重度的问题：
 
 - `launch_cpu -> infer` 之间如果还看到很大的 gap，那不表示 `cudaGraphLaunch()` 这个 CPU call 自己很慢
 - 它表示 infer 在 GPU stream 上还要等前序 infer 排空
+
+#### 2026-03-12: `launch_cpu` 依赖修正为最后一次 `H2D` GPU 完成
+
+发现一个实现细节错误：
+
+- `launch_cpu` span 原先在 `cudaGraphLaunch()` CPU 调用当下立即写入 timeline
+- 但当时逐 row `H2D` 的 GPU spans 还没被 materialize，`buffer.lastH2DSpanId` 仍然是 `0`
+- 结果页面上看不到 `最后一次 H2D GPU 完成 -> launch_cpu` 这条依赖箭头
+
+修正后：
+
+- `maybeLaunchOpenBatch()` 只记录 `launchCpuStartNs/launchCpuEndNs`
+- 等到 infer 完成、scheduler 回填完这一批的所有 `H2D` GPU spans 之后
+- 再补记 `launch_cpu` span
+- 这样 `launch_cpu` 的主依赖就能稳定挂到 `buffer.lastH2DSpanId`
+
+因此现在的目标依赖链是：
+
+- `preprocess -> h2d_cpu -> h2d(row...) -> launch_cpu -> infer -> d2h_cpu -> d2h -> postprocess`

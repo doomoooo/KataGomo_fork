@@ -210,6 +210,8 @@ struct SchedulerState {
     uint64_t d2hSpanId;
     int64_t h2dDoneObservedNs;
     int64_t lastH2DEndNs;
+    int64_t launchCpuStartNs;
+    int64_t launchCpuEndNs;
     int64_t inferLaunchNs;
     int64_t inferEndNs;
     int64_t d2hEnqueueNs;
@@ -237,6 +239,8 @@ struct SchedulerState {
         d2hSpanId(0),
         h2dDoneObservedNs(0),
         lastH2DEndNs(0),
+        launchCpuStartNs(0),
+        launchCpuEndNs(0),
         inferLaunchNs(0),
         inferEndNs(0),
         d2hEnqueueNs(0),
@@ -732,6 +736,8 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     buffer.d2hSpanId = 0;
     buffer.h2dDoneObservedNs = 0;
     buffer.lastH2DEndNs = 0;
+    buffer.launchCpuStartNs = 0;
+    buffer.launchCpuEndNs = 0;
     buffer.inferLaunchNs = 0;
     buffer.inferEndNs = 0;
     buffer.d2hEnqueueNs = 0;
@@ -946,24 +952,10 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     const int64_t launchCpuStartNs = launchNowNs;
     NeuralNet::trtLaunchInferenceAsync(slot.gpuHandle, buffer.serverBuf->inputBuffers, buffer.batchSize);
     const int64_t launchCpuEndNs = timelineNowNs();
+    buffer.launchCpuStartNs = launchCpuStartNs;
+    buffer.launchCpuEndNs = launchCpuEndNs;
     buffer.inferLaunchNs = launchCpuEndNs;
     buffer.launchCpuSpanId = 0;
-    if(shouldCaptureTimelineSpan(launchCpuStartNs, launchCpuEndNs)) {
-      buffer.launchCpuSpanId = nextTimelineSpanId();
-      GlobalPerfProfile::recordRealtimeTimelineSpan(
-        slot.slotIdx,
-        slot.gpuIdx,
-        GlobalPerfProfile::TimelineLane::SchedulerThread,
-        GlobalPerfProfile::TimelineStage::LaunchCPU,
-        buffer.launchCpuSpanId,
-        buffer.lastH2DSpanId,
-        0,
-        buffer.batchUid,
-        -1,
-        launchCpuStartNs,
-        launchCpuEndNs
-      );
-    }
     if(slotWasIdle) {
       device.activeInferCount += 1;
       GlobalPerfProfile::changeGpuStreamActiveCount(slot.slotIdx, slot.gpuIdx, 1);
@@ -1221,6 +1213,24 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
         buffer.lastH2DEndNs = recordedH2DEndNs;
       }
       buffer.pendingH2DSpans.clear();
+
+      buffer.launchCpuSpanId = 0;
+      if(shouldCaptureTimelineSpan(buffer.launchCpuStartNs, buffer.launchCpuEndNs)) {
+        buffer.launchCpuSpanId = nextTimelineSpanId();
+        GlobalPerfProfile::recordRealtimeTimelineSpan(
+          slot.slotIdx,
+          slot.gpuIdx,
+          GlobalPerfProfile::TimelineLane::SchedulerThread,
+          GlobalPerfProfile::TimelineStage::LaunchCPU,
+          buffer.launchCpuSpanId,
+          buffer.lastH2DSpanId,
+          0,
+          buffer.batchUid,
+          -1,
+          buffer.launchCpuStartNs,
+          buffer.launchCpuEndNs
+        );
+      }
 
       double inferElapsedMs = NeuralNet::trtGetLastInferenceElapsedMs(buffer.serverBuf->inputBuffers);
       int64_t inferStartNs = completionObservedNs - msToRoundedNs(inferElapsedMs);
