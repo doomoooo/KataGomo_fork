@@ -2907,6 +2907,21 @@ SEARCH_GAPS_PAGE = """<!doctype html>
       gap: 10px;
       align-items: center;
       justify-content: end;
+      flex-wrap: wrap;
+    }
+    .page-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: end;
+    }
+    .page-index {
+      min-width: 88px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
     }
     .controls button {
       font: inherit;
@@ -2918,6 +2933,23 @@ SEARCH_GAPS_PAGE = """<!doctype html>
       min-height: 38px;
       cursor: pointer;
       font-weight: 700;
+    }
+    .controls select {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-height: 38px;
+      cursor: pointer;
+      font-weight: 700;
+      min-width: 168px;
+    }
+    .controls button.active {
+      color: #9a3412;
+      border-color: rgba(194,65,12,0.22);
+      background: rgba(255,237,213,0.92);
     }
     .content {
       display: grid;
@@ -2940,10 +2972,7 @@ SEARCH_GAPS_PAGE = """<!doctype html>
     .cards {
       min-height: 0;
       overflow: auto;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      align-content: start;
+      display: block;
       padding-right: 2px;
     }
     .gap-card {
@@ -2955,6 +2984,8 @@ SEARCH_GAPS_PAGE = """<!doctype html>
       grid-template-rows: auto auto auto minmax(0, 1fr);
       gap: 8px;
       min-height: 250px;
+      max-width: 1380px;
+      margin: 0 auto;
     }
     .gap-head {
       display: flex;
@@ -3171,11 +3202,6 @@ SEARCH_GAPS_PAGE = """<!doctype html>
       border-radius: 12px;
       background: rgba(255,255,255,0.52);
     }
-    @media (max-width: 1500px) {
-      .cards {
-        grid-template-columns: 1fr;
-      }
-    }
   </style>
 </head>
 <body>
@@ -3195,6 +3221,13 @@ SEARCH_GAPS_PAGE = """<!doctype html>
           <div class="status-pill">等待快照</div>
         </div>
         <div class="controls">
+          <div class="page-controls">
+            <button id="gap-prev-btn" type="button">上一条</button>
+            <div id="gap-page-index" class="page-index">1 / 1</div>
+            <button id="gap-next-btn" type="button">下一条</button>
+            <select id="gap-page-select" aria-label="选择区间页"></select>
+          </div>
+          <button id="gap-pause-btn" type="button">暂停刷新</button>
           <button id="gap-refresh-btn" type="button">手动刷新</button>
         </div>
       </div>
@@ -3259,6 +3292,9 @@ SEARCH_GAPS_PAGE = """<!doctype html>
     };
 
     let latestRealtimeState = null;
+    let gapPageIndex = 0;
+    let gapPaused = false;
+    let gapTimer = null;
 
     function reasonKeyOf(index) {
       return reasonIndexToKey[Number(index || 0)] || 'unknown';
@@ -3336,7 +3372,35 @@ SEARCH_GAPS_PAGE = """<!doctype html>
         <div class="status-pill">sequence ${fmtInt(latest?.sequence || 0)}</div>
         <div class="status-pill">模式 ${latest?.status?.inference_mode || '等待数据'}</div>
         <div class="status-pill">接收快照 ${fmtInt(receiver.received_count || 0)}</div>
+        <div class="status-pill">刷新 ${gapPaused ? '已暂停' : '进行中'}</div>
       `;
+    }
+
+    function updateGapPageControls(intervals) {
+      const total = intervals.length;
+      const prevBtn = document.getElementById('gap-prev-btn');
+      const nextBtn = document.getElementById('gap-next-btn');
+      const pageIndex = document.getElementById('gap-page-index');
+      const pageSelect = document.getElementById('gap-page-select');
+      if (total <= 0) {
+        gapPageIndex = 0;
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        pageIndex.textContent = '0 / 0';
+        pageSelect.innerHTML = '<option value="0">暂无区间</option>';
+        pageSelect.disabled = true;
+        return;
+      }
+      gapPageIndex = Math.max(0, Math.min(gapPageIndex, total - 1));
+      prevBtn.disabled = (gapPageIndex <= 0);
+      nextBtn.disabled = (gapPageIndex >= total - 1);
+      pageIndex.textContent = `${gapPageIndex + 1} / ${total}`;
+      pageSelect.disabled = false;
+      pageSelect.innerHTML = intervals.map((interval, idx) => {
+        const thread = fmtInt(interval.thread_idx);
+        const searchUs = fmtFloat(interval.search_us || 0, 1);
+        return `<option value="${idx}" ${idx === gapPageIndex ? 'selected' : ''}>#${idx + 1} 线程 ${thread} | ${searchUs} us</option>`;
+      }).join('');
     }
 
     function buildTrack(interval) {
@@ -3409,9 +3473,12 @@ SEARCH_GAPS_PAGE = """<!doctype html>
       if (!latest || intervals.length === 0) {
         summary.innerHTML = '<span><strong>等待数据</strong></span>';
         cards.innerHTML = '<div class="waiting">过去 1 秒还没有形成可分析的有效 NN 提交区间。</div>';
+        updateGapPageControls([]);
         return;
       }
+      updateGapPageControls(intervals);
       const top = intervals[0] || null;
+      const interval = intervals[gapPageIndex] || top;
       summary.innerHTML = `
         <span><strong>排序依据 search_us</strong></span>
         <span>当前区间数 ${fmtInt(intervals.length)}</span>
@@ -3420,41 +3487,52 @@ SEARCH_GAPS_PAGE = """<!doctype html>
         <span>等待 ${top ? fmtMs(top.wait_us) : 'N/A'}</span>
         <span>跨度 ${top ? fmtMs(top.duration_us) : 'N/A'}</span>
         <span>ongoing ${top?.ongoing ? 'yes' : 'no'}</span>
+        <span>当前展示 #${fmtInt(gapPageIndex + 1)}</span>
       `;
-      cards.innerHTML = intervals.map((interval, idx) => {
-        const searchUs = Number(interval.search_us || 0);
-        const waitUs = Number(interval.wait_us || 0);
-        const durationUs = Math.max(Number(interval.duration_us || 0), 1e-6);
-        const util = Math.max(0, Math.min(1, searchUs / durationUs));
-        const playoutCount = Array.isArray(interval.playouts) ? interval.playouts.length : 0;
-        return `
-          <section class="gap-card">
-            <div class="gap-head">
-              <div>
-                <h2 class="gap-title">#${idx + 1} 线程 ${fmtInt(interval.thread_idx)}</h2>
-                <p class="gap-subtitle">start=${fmtInt(interval.start_ns)} end=${fmtInt(interval.end_ns)}</p>
-              </div>
-              <div class="gap-state ${interval.ongoing ? 'ongoing' : ''}">${interval.ongoing ? '仍在进行' : '已完成'}</div>
-            </div>
-            <div class="gap-metrics">
-              <div class="metric"><label>累计搜索</label><strong>${fmtUs(searchUs)}</strong></div>
-              <div class="metric"><label>累计等待</label><strong>${fmtUs(waitUs)}</strong></div>
-              <div class="metric"><label>区间跨度</label><strong>${fmtUs(durationUs)}</strong></div>
-              <div class="metric"><label>playout 数</label><strong>${fmtInt(playoutCount)}</strong></div>
-            </div>
+      const searchUs = Number(interval.search_us || 0);
+      const waitUs = Number(interval.wait_us || 0);
+      const durationUs = Math.max(Number(interval.duration_us || 0), 1e-6);
+      const util = Math.max(0, Math.min(1, searchUs / durationUs));
+      const playoutCount = Array.isArray(interval.playouts) ? interval.playouts.length : 0;
+      cards.innerHTML = `
+        <section class="gap-card">
+          <div class="gap-head">
             <div>
-              <div class="util-bar"><div class="util-fill" style="width:${Math.max(0.5, util * 100)}%"></div></div>
-              <div class="util-label"><span>search ${fmtUs(searchUs)}</span><span>wall ${fmtUs(durationUs)}</span></div>
+              <h2 class="gap-title">#${gapPageIndex + 1} 线程 ${fmtInt(interval.thread_idx)}</h2>
+              <p class="gap-subtitle">start=${fmtInt(interval.start_ns)} end=${fmtInt(interval.end_ns)}</p>
             </div>
-            ${buildReasonBreakdown(interval)}
-            ${buildTrack(interval)}
-            ${buildEventRows(interval)}
-          </section>
-        `;
-      }).join('');
+            <div class="gap-state ${interval.ongoing ? 'ongoing' : ''}">${interval.ongoing ? '仍在进行' : '已完成'}</div>
+          </div>
+          <div class="gap-metrics">
+            <div class="metric"><label>累计搜索</label><strong>${fmtUs(searchUs)}</strong></div>
+            <div class="metric"><label>累计等待</label><strong>${fmtUs(waitUs)}</strong></div>
+            <div class="metric"><label>区间跨度</label><strong>${fmtUs(durationUs)}</strong></div>
+            <div class="metric"><label>playout 数</label><strong>${fmtInt(playoutCount)}</strong></div>
+          </div>
+          <div>
+            <div class="util-bar"><div class="util-fill" style="width:${Math.max(0.5, util * 100)}%"></div></div>
+            <div class="util-label"><span>search ${fmtUs(searchUs)}</span><span>wall ${fmtUs(durationUs)}</span></div>
+          </div>
+          ${buildReasonBreakdown(interval)}
+          ${buildTrack(interval)}
+          ${buildEventRows(interval)}
+        </section>
+      `;
+    }
+
+    function setGapPaused(paused) {
+      gapPaused = !!paused;
+      const btn = document.getElementById('gap-pause-btn');
+      btn.textContent = gapPaused ? '继续刷新' : '暂停刷新';
+      btn.classList.toggle('active', gapPaused);
+      updateStatusBar(latestRealtimeState);
     }
 
     async function fetchState() {
+      if (gapPaused) {
+        updateStatusBar(latestRealtimeState);
+        return;
+      }
       try {
         const resp = await fetch('/api/state', { cache: 'no-store' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -3472,10 +3550,28 @@ SEARCH_GAPS_PAGE = """<!doctype html>
     document.getElementById('gap-refresh-btn').addEventListener('click', () => {
       fetchState();
     });
+    document.getElementById('gap-pause-btn').addEventListener('click', () => {
+      setGapPaused(!gapPaused);
+    });
+    document.getElementById('gap-prev-btn').addEventListener('click', () => {
+      gapPageIndex = Math.max(0, gapPageIndex - 1);
+      renderIntervals(latestRealtimeState);
+    });
+    document.getElementById('gap-next-btn').addEventListener('click', () => {
+      const intervals = latestRealtimeState?.latest?.window1s?.search_submit_intervals_top20?.intervals || [];
+      gapPageIndex = Math.min(Math.max(0, intervals.length - 1), gapPageIndex + 1);
+      renderIntervals(latestRealtimeState);
+    });
+    document.getElementById('gap-page-select').addEventListener('change', (event) => {
+      const nextValue = Number(event.target.value || 0);
+      gapPageIndex = Number.isFinite(nextValue) ? Math.max(0, nextValue) : 0;
+      renderIntervals(latestRealtimeState);
+    });
 
     updateStatusBar(null);
+    updateGapPageControls([]);
     fetchState();
-    window.setInterval(fetchState, 1000);
+    gapTimer = window.setInterval(fetchState, 1000);
   </script>
 </body>
 </html>
