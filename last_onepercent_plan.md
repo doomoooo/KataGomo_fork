@@ -2995,3 +2995,35 @@ reviewer 额外指出了一条中等严重度的问题：
 - `d2h -> postprocess gap` `0.17 us`
 
 这说明当前几百微秒的假 gap 已经不再来自 timeline 锚点错误。
+
+#### 2026-03-12: timeline 新增浅橙色 `launch_cpu` span
+
+为了把 `cudaGraphLaunch()` 的 CPU 侧提交成本从“空白”里单独抠出来，timeline 新增一类 scheduler lane span：
+
+- `launch_cpu`
+  - 颜色浅橙
+  - 表示 scheduler 线程调用 `trtLaunchInferenceAsync()` 的 wall-clock 持续时间
+  - 依赖关系改成 `H2D -> Launch CPU -> Infer`
+
+实现口径：
+
+- `maybeLaunchOpenBatch()` 在调用 `trtLaunchInferenceAsync()` 前后各取一次 `steady_clock` 时间戳
+- 如果当前样本窗口需要捕获 timeline，就记录一段 `TimelineStage::LaunchCPU`
+- `infer` 的主依赖优先改成这段 `launch_cpu` span
+- `infer` 的显示起点继续由“CPU 观察到 infer 完成的时刻 - CUDA duration”倒推
+- 同时做因果钳位：
+  - `infer start >= launch_cpu end`
+
+当前 live 样本：
+
+- `launch_cpu_count = 31`
+- `launch_cpu`
+  - `p50 ~= 7.68 us`
+  - `p95 ~= 10.28 us`
+  - `max ~= 15.40 us`
+- 当前帧里 `infer` 的主依赖多数已经切到 `launch_cpu`
+
+注意：
+
+- `launch_cpu -> infer` 之间如果还看到很大的 gap，那不表示 `cudaGraphLaunch()` 这个 CPU call 自己很慢
+- 它表示 infer 在 GPU stream 上还要等前序 infer 排空

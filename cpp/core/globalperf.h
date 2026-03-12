@@ -19,6 +19,7 @@ namespace GlobalPerfProfile {
     Preprocess,
     H2DCPU,
     H2D,
+    LaunchCPU,
     Infer,
     D2HCPU,
     D2H,

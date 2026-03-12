@@ -793,13 +793,14 @@ DASHBOARD_PAGE = """<!doctype html>
       preprocess: '#0f766e',
       h2d_cpu: '#60a5fa',
       h2d: '#1d4ed8',
+      launch_cpu: '#fdba74',
       infer: '#c2410c',
       d2h_cpu: '#86efac',
       d2h: '#16a34a',
       postprocess: '#7c3aed',
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
-    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
+    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'launch_cpu', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
     const timelineUiState = {
       selectedSlotKey: null,
       spanNs: 50e6,
@@ -1344,6 +1345,7 @@ DASHBOARD_PAGE = """<!doctype html>
       if (span.stage === 'preprocess') return `prep r${span.row}`;
       if (span.stage === 'h2d_cpu') return `h2d cpu r${span.row}`;
       if (span.stage === 'h2d') return `h2d r${span.row}`;
+      if (span.stage === 'launch_cpu') return `launch cpu b${span.batch_uid}`;
       if (span.stage === 'infer') return `infer b${span.batch_uid}`;
       if (span.stage === 'd2h_cpu') return `d2h cpu b${span.batch_uid}`;
       if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
@@ -1556,6 +1558,7 @@ DASHBOARD_PAGE = """<!doctype html>
           <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.launch_cpu}"></i>Launch CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
@@ -2165,13 +2168,14 @@ TIMELINE_PAGE = """<!doctype html>
       preprocess: '#0f766e',
       h2d_cpu: '#60a5fa',
       h2d: '#1d4ed8',
+      launch_cpu: '#fdba74',
       infer: '#c2410c',
       d2h_cpu: '#86efac',
       d2h: '#16a34a',
       postprocess: '#7c3aed',
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
-    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
+    const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'launch_cpu', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
     const minTimelineSpanNs = 1e3;
     const timelineUiState = {
       spanNs: 50e6,
@@ -2258,6 +2262,7 @@ TIMELINE_PAGE = """<!doctype html>
       if (span.stage === 'preprocess') return `prep r${span.row}`;
       if (span.stage === 'h2d_cpu') return `h2d cpu r${span.row}`;
       if (span.stage === 'h2d') return `h2d r${span.row}`;
+      if (span.stage === 'launch_cpu') return `launch cpu b${span.batch_uid}`;
       if (span.stage === 'infer') return `infer b${span.batch_uid}`;
       if (span.stage === 'd2h_cpu') return `d2h cpu b${span.batch_uid}`;
       if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
@@ -2516,6 +2521,7 @@ TIMELINE_PAGE = """<!doctype html>
           <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.launch_cpu}"></i>Launch CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H CPU</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
