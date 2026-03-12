@@ -2922,3 +2922,76 @@ reviewer 额外指出了一条中等严重度的问题：
   - `H2D GPU start >= H2D CPU start`
   - `D2H GPU start >= D2H CPU start`
 - 这不改变时长，只是去掉不符合因果关系的显示伪像
+
+#### 2026-03-12: timeline 改成“CPU 观察完成时刻 + CUDA duration 倒推”
+
+继续梳理后确认，旧 timeline 的核心问题不是 `cudaEventQuery()` 慢，而是绝对位置仍混用了：
+
+- `steady_clock` 的 CPU 时间
+- 以第一条 `H2D start event` 为 base 的 CUDA offset
+
+这会让 `infer -> d2h`、`d2h -> postprocess` 看起来出现不真实的大 gap。
+
+当前新口径：
+
+- 所有 GPU 操作都保持 `cudaEvent(start) + gpu work + cudaEvent(end)` 的结构
+- 这套 pattern 在 TRT backend 里统一封成一个 helper
+- timeline 不再使用“base event + offset”来拼绝对位置
+- GPU span 的绝对结束时刻改成由 CPU 观察完成时决定
+- span 开始时刻由 `cudaEventElapsedTime()` 倒推
+
+具体规则：
+
+- `H2D`
+  - 逐 row 仍保留 `start/end` event
+  - 绝对结束锚点使用“最后一条 row copy 完成被 CPU 观察到”的时刻
+  - 每一 row 的结束时刻通过 `row_end -> last_row_end` 的 CUDA 相对时间倒推
+  - 每一 row 的开始时刻再用 `row_start -> row_end` 的 CUDA 时长倒推
+- `infer`
+  - 绝对结束时刻直接使用 CPU 观察到 `infer done` 的时刻
+  - 开始时刻使用 `infer duration` 倒推
+- `D2H`
+  - 绝对结束时刻直接使用 CPU 观察到 `d2h done` 的时刻
+  - 开始时刻使用 `d2h duration` 倒推
+
+这意味着：
+
+- 不再依赖 `cudaEvent` 的“绝对时间戳”能力
+- 也不需要 `cudaLaunchHostFunc()` 之类的 CPU/GPU epoch 对齐技巧
+- 旧的 `timeline base event` 重建路径应视为废弃
+
+实现切口：
+
+- `cpp/neuralnet/trtbackend.cpp`
+  - 统一新增 `enqueueCudaTimedSection(...)`
+  - `trtEnqueueInputRowCopy / trtLaunchInferenceAsync / trtEnqueueOutputCopiesAsync`
+    全部走这套 helper
+- `cpp/neuralnet/nninterface.h`
+  - 删除旧的 `trtGetTimeline*OffsetMs(...)`
+  - 新增 `trtGetLastInputRowCopyEndToLastCopyEndMs(...)`
+- `cpp/neuralnet/nneval.cpp`
+  - 删除 `cudaTimelineBaseNs`
+  - 改为记录 `h2dDoneObservedNs`
+  - `infer` 与 `d2h` 的 GPU span 均直接用 CPU 观察完成时刻作为 `endNs`
+
+当前 live 验证结果：
+
+- `infer -> d2h_cpu`
+  - `p50 ~= 0.03 us`
+  - `p95 ~= 0.05 us`
+  - `max ~= 0.13 us`
+- `d2h -> postprocess`
+  - `p50 ~= 0.15 us`
+  - `p95 ~= 0.22 us`
+  - `max ~= 0.26 us`
+
+样本：
+
+- `infer` `28.85 us`
+- `d2h_cpu` `7.53 us`
+- `d2h` `3.74 us`
+- `postprocess` `2.17 us`
+- `infer -> d2h_cpu gap` `0.03 us`
+- `d2h -> postprocess gap` `0.17 us`
+
+这说明当前几百微秒的假 gap 已经不再来自 timeline 锚点错误。

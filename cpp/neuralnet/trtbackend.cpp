@@ -2990,14 +2990,23 @@ static double elapsedMsBetweenEvents(const char* opName, cudaEvent_t startEvent,
   return (double)elapsedMs;
 }
 
-static cudaEvent_t getTimelineBaseEvent(InputBuffers* buffers) {
-  if(buffers == nullptr || buffers->trtTimelineH2DStartEvents.empty())
-    return nullptr;
-  return buffers->trtTimelineH2DStartEvents[0];
-}
+struct CudaTimedSection {
+  cudaEvent_t startEvent;
+  cudaEvent_t endEvent;
+};
 
-static double elapsedMsFromTimelineBase(const char* opName, InputBuffers* buffers, cudaEvent_t endEvent) {
-  return elapsedMsBetweenEvents(opName, getTimelineBaseEvent(buffers), endEvent);
+template<typename EnqueueFunc>
+static void enqueueCudaTimedSection(
+  const char* opName,
+  cudaStream_t stream,
+  const CudaTimedSection& section,
+  EnqueueFunc&& enqueueFunc
+) {
+  if(section.startEvent != nullptr)
+    CUDA_ERR(opName, cudaEventRecord(section.startEvent, stream));
+  enqueueFunc();
+  if(section.endEvent != nullptr)
+    CUDA_ERR(opName, cudaEventRecord(section.endEvent, stream));
 }
 
 void NeuralNet::trtInitializeSharedBuffer(
@@ -3090,11 +3099,16 @@ void NeuralNet::trtEnqueueInputRowCopy(
   if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
     throw StringError("trtEnqueueInputRowCopy: rowIdx out of bounds");
   computeHandle->setDevice("trtEnqueueInputRowCopy");
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtEnqueueInputRowCopy", cudaEventRecord(buffers->trtTimelineH2DStartEvents[rowIdx], computeHandle->h2dStream));
-  enqueueInputRowCopy(computeHandle, buffers, rowIdx);
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtEnqueueInputRowCopy", cudaEventRecord(buffers->trtTimelineH2DEndEvents[rowIdx], computeHandle->h2dStream));
+  CudaTimedSection section = {
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineH2DStartEvents[rowIdx] : nullptr,
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineH2DEndEvents[rowIdx] : nullptr,
+  };
+  enqueueCudaTimedSection(
+    "trtEnqueueInputRowCopy",
+    computeHandle->h2dStream,
+    section,
+    [&]() { enqueueInputRowCopy(computeHandle, buffers, rowIdx); }
+  );
 }
 
 bool NeuralNet::trtQueryInputCopiesDone(InputBuffers* buffers) {
@@ -3118,12 +3132,19 @@ void NeuralNet::trtLaunchInferenceAsync(
   if(state == nullptr)
     throw StringError("trtLaunchInferenceAsync: shared buffer not registered with compute handle");
   setInputShapesForExec(computeHandle, state->exec.get(), batchSize);
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtTimelineInferStartEvent, computeHandle->inferStream));
-  computeHandle->maybeRecordLaunchInterval();
-  enqueueWithOptionalCudaGraphForExec(computeHandle, state->exec.get(), state->batchGraphStates, batchSize);
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtTimelineInferEndEvent, computeHandle->inferStream));
+  CudaTimedSection section = {
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineInferStartEvent : nullptr,
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineInferEndEvent : nullptr,
+  };
+  enqueueCudaTimedSection(
+    "trtLaunchInferenceAsync",
+    computeHandle->inferStream,
+    section,
+    [&]() {
+      computeHandle->maybeRecordLaunchInterval();
+      enqueueWithOptionalCudaGraphForExec(computeHandle, state->exec.get(), state->batchGraphStates, batchSize);
+    }
+  );
   CUDA_ERR("trtLaunchInferenceAsync", cudaEventRecord(buffers->trtInferDoneEvent, computeHandle->inferStream));
   buffers->trtInferPending = true;
 }
@@ -3145,11 +3166,16 @@ void NeuralNet::trtEnqueueOutputCopiesAsync(
   if(batchSize <= 0 || batchSize > buffers->maxBatchSize)
     throw StringError("trtEnqueueOutputCopiesAsync: invalid batch size");
   computeHandle->setDevice("trtEnqueueOutputCopiesAsync");
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtEnqueueOutputCopiesAsync", cudaEventRecord(buffers->trtTimelineD2HStartEvent, computeHandle->d2hStream));
-  enqueueSharedOutputCopies(computeHandle, buffers, batchSize, computeHandle->d2hStream);
-  if(computeHandle->perfProfileEnabled)
-    CUDA_ERR("trtEnqueueOutputCopiesAsync", cudaEventRecord(buffers->trtTimelineD2HEndEvent, computeHandle->d2hStream));
+  CudaTimedSection section = {
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineD2HStartEvent : nullptr,
+    computeHandle->perfProfileEnabled ? buffers->trtTimelineD2HEndEvent : nullptr,
+  };
+  enqueueCudaTimedSection(
+    "trtEnqueueOutputCopiesAsync",
+    computeHandle->d2hStream,
+    section,
+    [&]() { enqueueSharedOutputCopies(computeHandle, buffers, batchSize, computeHandle->d2hStream); }
+  );
   CUDA_ERR("trtEnqueueOutputCopiesAsync", cudaEventRecord(buffers->trtD2HDoneEvent, computeHandle->d2hStream));
   buffers->trtD2HPending = true;
 }
@@ -3173,48 +3199,25 @@ double NeuralNet::trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int row
   );
 }
 
+double NeuralNet::trtGetLastInputRowCopyEndToLastCopyEndMs(InputBuffers* buffers, int rowIdx, int batchSize) {
+  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
+    throw StringError("trtGetLastInputRowCopyEndToLastCopyEndMs: rowIdx out of bounds");
+  if(batchSize <= 0 || batchSize > buffers->maxBatchSize)
+    throw StringError("trtGetLastInputRowCopyEndToLastCopyEndMs: invalid batch size");
+  const int lastRowIdx = batchSize - 1;
+  return elapsedMsBetweenEvents(
+    "trtGetLastInputRowCopyEndToLastCopyEndMs",
+    buffers->trtTimelineH2DEndEvents[rowIdx],
+    buffers->trtTimelineH2DEndEvents[lastRowIdx]
+  );
+}
+
 double NeuralNet::trtGetLastInferenceElapsedMs(InputBuffers* buffers) {
   return elapsedMsBetweenEvents("trtGetLastInferenceElapsedMs", buffers->trtTimelineInferStartEvent, buffers->trtTimelineInferEndEvent);
 }
 
 double NeuralNet::trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers) {
   return elapsedMsBetweenEvents("trtGetLastOutputCopiesElapsedMs", buffers->trtTimelineD2HStartEvent, buffers->trtTimelineD2HEndEvent);
-}
-
-double NeuralNet::trtGetTimelineInputRowStartOffsetMs(InputBuffers* buffers, int rowIdx) {
-  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
-    throw StringError("trtGetTimelineInputRowStartOffsetMs: rowIdx out of bounds");
-  return elapsedMsFromTimelineBase(
-    "trtGetTimelineInputRowStartOffsetMs",
-    buffers,
-    buffers->trtTimelineH2DStartEvents[rowIdx]
-  );
-}
-
-double NeuralNet::trtGetTimelineInputRowEndOffsetMs(InputBuffers* buffers, int rowIdx) {
-  if(rowIdx < 0 || rowIdx >= buffers->maxBatchSize)
-    throw StringError("trtGetTimelineInputRowEndOffsetMs: rowIdx out of bounds");
-  return elapsedMsFromTimelineBase(
-    "trtGetTimelineInputRowEndOffsetMs",
-    buffers,
-    buffers->trtTimelineH2DEndEvents[rowIdx]
-  );
-}
-
-double NeuralNet::trtGetTimelineInferenceStartOffsetMs(InputBuffers* buffers) {
-  return elapsedMsFromTimelineBase("trtGetTimelineInferenceStartOffsetMs", buffers, buffers->trtTimelineInferStartEvent);
-}
-
-double NeuralNet::trtGetTimelineInferenceEndOffsetMs(InputBuffers* buffers) {
-  return elapsedMsFromTimelineBase("trtGetTimelineInferenceEndOffsetMs", buffers, buffers->trtTimelineInferEndEvent);
-}
-
-double NeuralNet::trtGetTimelineOutputCopiesStartOffsetMs(InputBuffers* buffers) {
-  return elapsedMsFromTimelineBase("trtGetTimelineOutputCopiesStartOffsetMs", buffers, buffers->trtTimelineD2HStartEvent);
-}
-
-double NeuralNet::trtGetTimelineOutputCopiesEndOffsetMs(InputBuffers* buffers) {
-  return elapsedMsFromTimelineBase("trtGetTimelineOutputCopiesEndOffsetMs", buffers, buffers->trtTimelineD2HEndEvent);
 }
 
 void NeuralNet::trtUnpackOutputRow(

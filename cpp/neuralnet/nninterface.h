@@ -191,14 +191,9 @@ namespace NeuralNet {
   );
   bool trtQueryOutputCopiesDone(InputBuffers* buffers);
   double trtGetLastInputRowCopyElapsedMs(InputBuffers* buffers, int rowIdx);
+  double trtGetLastInputRowCopyEndToLastCopyEndMs(InputBuffers* buffers, int rowIdx, int batchSize);
   double trtGetLastInferenceElapsedMs(InputBuffers* buffers);
   double trtGetLastOutputCopiesElapsedMs(InputBuffers* buffers);
-  double trtGetTimelineInputRowStartOffsetMs(InputBuffers* buffers, int rowIdx);
-  double trtGetTimelineInputRowEndOffsetMs(InputBuffers* buffers, int rowIdx);
-  double trtGetTimelineInferenceStartOffsetMs(InputBuffers* buffers);
-  double trtGetTimelineInferenceEndOffsetMs(InputBuffers* buffers);
-  double trtGetTimelineOutputCopiesStartOffsetMs(InputBuffers* buffers);
-  double trtGetTimelineOutputCopiesEndOffsetMs(InputBuffers* buffers);
   void trtUnpackOutputRow(
     InputBuffers* buffers,
     const NNResultBuf* inputBuf,

@@ -207,7 +207,7 @@ struct SchedulerState {
     uint64_t inferSpanId;
     uint64_t d2hCpuSpanId;
     uint64_t d2hSpanId;
-    int64_t cudaTimelineBaseNs;
+    int64_t h2dDoneObservedNs;
     int64_t lastH2DEndNs;
     int64_t inferLaunchNs;
     int64_t inferEndNs;
@@ -233,7 +233,7 @@ struct SchedulerState {
         inferSpanId(0),
         d2hCpuSpanId(0),
         d2hSpanId(0),
-        cudaTimelineBaseNs(0),
+        h2dDoneObservedNs(0),
         lastH2DEndNs(0),
         inferLaunchNs(0),
         inferEndNs(0),
@@ -727,7 +727,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     buffer.inferSpanId = 0;
     buffer.d2hCpuSpanId = 0;
     buffer.d2hSpanId = 0;
-    buffer.cudaTimelineBaseNs = 0;
+    buffer.h2dDoneObservedNs = 0;
     buffer.lastH2DEndNs = 0;
     buffer.inferLaunchNs = 0;
     buffer.inferEndNs = 0;
@@ -742,6 +742,9 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
   };
   auto recordSchedulerBusySpan = [&](int64_t startNs, int64_t endNs) {
     GlobalPerfProfile::recordSchedulerBusySpan(startNs, endNs);
+  };
+  auto msToRoundedNs = [&](double ms) {
+    return (int64_t)(ms * 1e6 + 0.5);
   };
   auto recordSchedulerIdlePoll = [&](int64_t startNs, int64_t endNs) {
     GlobalPerfProfile::recordSchedulerIdlePoll(startNs, endNs);
@@ -911,7 +914,6 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     SchedulerState::SlotState& slot = state->slots[state->openBatch.targetSlotIdx];
     SchedulerState::DeviceState& device = state->devices[slot.deviceStateIdx];
     SchedulerState::BufferState& buffer = state->buffers[state->openBatch.bufferIdx];
-    const int64_t launchNowNs = timelineNowNs();
     int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
     bool shouldLaunch = false;
     if(device.activeInferCount == 0)
@@ -923,11 +925,13 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
     if(buffer.stage == SchedulerState::BufferStage::Filling) {
       if(!NeuralNet::trtQueryInputCopiesDone(buffer.serverBuf->inputBuffers))
         return false;
+      buffer.h2dDoneObservedNs = timelineNowNs();
       buffer.stage = SchedulerState::BufferStage::ReadyToLaunch;
     }
     if(buffer.stage != SchedulerState::BufferStage::ReadyToLaunch)
       return false;
 
+    const int64_t launchNowNs = timelineNowNs();
     buffer.stage = SchedulerState::BufferStage::InferRunning;
     buffer.batchSize = (int)buffer.requests.size();
     buffer.plannedInferMs = device.baseWorkMsByBatch[buffer.batchSize];
@@ -1156,17 +1160,16 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       int64_t previousH2DEndNs = 0;
       buffer.lastH2DSpanId = 0;
       buffer.lastH2DEndNs = 0;
-      int64_t cudaTimelineBaseNs = 0;
-      if(!buffer.pendingH2DSpans.empty())
-        cudaTimelineBaseNs = buffer.pendingH2DSpans[0].enqueueStartNs;
-      if(cudaTimelineBaseNs <= 0)
-        cudaTimelineBaseNs = completionObservedNs;
-      buffer.cudaTimelineBaseNs = cudaTimelineBaseNs;
+      const int64_t h2dDoneObservedNs = buffer.h2dDoneObservedNs > 0 ? buffer.h2dDoneObservedNs : completionObservedNs;
       for(const SchedulerState::PendingH2DSpan& pendingH2D: buffer.pendingH2DSpans) {
-        double h2dStartOffsetMs = NeuralNet::trtGetTimelineInputRowStartOffsetMs(buffer.serverBuf->inputBuffers, pendingH2D.rowIdx);
-        double h2dEndOffsetMs = NeuralNet::trtGetTimelineInputRowEndOffsetMs(buffer.serverBuf->inputBuffers, pendingH2D.rowIdx);
-        int64_t recordedH2DStartNs = cudaTimelineBaseNs + (int64_t)(h2dStartOffsetMs * 1e6 + 0.5);
-        int64_t recordedH2DEndNs = cudaTimelineBaseNs + (int64_t)(h2dEndOffsetMs * 1e6 + 0.5);
+        double h2dElapsedMs = NeuralNet::trtGetLastInputRowCopyElapsedMs(buffer.serverBuf->inputBuffers, pendingH2D.rowIdx);
+        double h2dEndToBatchEndMs = NeuralNet::trtGetLastInputRowCopyEndToLastCopyEndMs(
+          buffer.serverBuf->inputBuffers,
+          pendingH2D.rowIdx,
+          buffer.batchSize
+        );
+        int64_t recordedH2DEndNs = h2dDoneObservedNs - msToRoundedNs(h2dEndToBatchEndMs);
+        int64_t recordedH2DStartNs = recordedH2DEndNs - msToRoundedNs(h2dElapsedMs);
         if(recordedH2DStartNs < pendingH2D.enqueueStartNs)
           recordedH2DStartNs = pendingH2D.enqueueStartNs;
         if(recordedH2DStartNs < previousH2DEndNs)
@@ -1197,14 +1200,15 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       }
       buffer.pendingH2DSpans.clear();
 
-      double inferStartOffsetMs = NeuralNet::trtGetTimelineInferenceStartOffsetMs(buffer.serverBuf->inputBuffers);
-      double inferEndOffsetMs = NeuralNet::trtGetTimelineInferenceEndOffsetMs(buffer.serverBuf->inputBuffers);
-      int64_t inferStartNs = cudaTimelineBaseNs + (int64_t)(inferStartOffsetMs * 1e6 + 0.5);
+      double inferElapsedMs = NeuralNet::trtGetLastInferenceElapsedMs(buffer.serverBuf->inputBuffers);
+      int64_t inferStartNs = completionObservedNs - msToRoundedNs(inferElapsedMs);
       if(buffer.lastH2DEndNs > inferStartNs)
         inferStartNs = buffer.lastH2DEndNs;
+      if(buffer.inferLaunchNs > inferStartNs)
+        inferStartNs = buffer.inferLaunchNs;
       if(slot.lastRecordedInferEndNs > inferStartNs)
         inferStartNs = slot.lastRecordedInferEndNs;
-      recordedInferEndNs = cudaTimelineBaseNs + (int64_t)(inferEndOffsetMs * 1e6 + 0.5);
+      recordedInferEndNs = completionObservedNs;
       if(recordedInferEndNs < inferStartNs)
         recordedInferEndNs = inferStartNs;
       if(shouldCaptureTimelineSpan(inferStartNs, recordedInferEndNs)) {
@@ -1253,15 +1257,13 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
       const int completedBatchSize = buffer.batchSize;
       const double completedInferMs = buffer.measuredInferMs;
       uint64_t d2hSpanId = 0;
-      const int64_t cudaTimelineBaseNs = buffer.cudaTimelineBaseNs > 0 ? buffer.cudaTimelineBaseNs : d2hDoneNs;
-      double d2hStartOffsetMs = NeuralNet::trtGetTimelineOutputCopiesStartOffsetMs(buffer.serverBuf->inputBuffers);
-      double d2hEndOffsetMs = NeuralNet::trtGetTimelineOutputCopiesEndOffsetMs(buffer.serverBuf->inputBuffers);
-      int64_t d2hStartNs = cudaTimelineBaseNs + (int64_t)(d2hStartOffsetMs * 1e6 + 0.5);
+      double d2hElapsedMs = NeuralNet::trtGetLastOutputCopiesElapsedMs(buffer.serverBuf->inputBuffers);
+      int64_t d2hStartNs = d2hDoneNs - msToRoundedNs(d2hElapsedMs);
       if(d2hStartNs < buffer.d2hEnqueueNs)
         d2hStartNs = buffer.d2hEnqueueNs;
       if(slot.lastRecordedD2HEndNs > d2hStartNs)
         d2hStartNs = slot.lastRecordedD2HEndNs;
-      int64_t recordedD2HEndNs = cudaTimelineBaseNs + (int64_t)(d2hEndOffsetMs * 1e6 + 0.5);
+      int64_t recordedD2HEndNs = d2hDoneNs;
       if(recordedD2HEndNs < d2hStartNs)
         recordedD2HEndNs = d2hStartNs;
       if(shouldCaptureTimelineSpan(d2hStartNs, recordedD2HEndNs)) {
