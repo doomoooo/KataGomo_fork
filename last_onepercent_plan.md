@@ -3046,3 +3046,51 @@ reviewer 额外指出了一条中等严重度的问题：
 因此现在的目标依赖链是：
 
 - `preprocess -> h2d_cpu -> h2d(row...) -> launch_cpu -> infer -> d2h_cpu -> d2h -> postprocess`
+
+#### 2026-03-12: dashboard 改成“结束原因 + NN cache”，timeline 页继续收窄到纯时间轴
+
+监控侧继续按 single-scheduler 当前最关心的问题收口：
+
+- dashboard 左侧不再保留“请求队列长度”
+  - 改为“沿树探索结束原因”的 60 秒历史图
+  - 结束原因直接来自 search thread 一次 playout 退出时的分类
+  - 目前覆盖：
+    - `submitted_gpu_task`
+    - `hit_nn_cache`
+    - `contention`
+    - `terminal`
+    - `no_legal_child`
+    - `edge_visit_catchup`
+    - `cycle_detected`
+    - `illegal_reinit`
+    - `unknown`
+- “推理执行概况”里新增 `NN Cache` 占用历史
+  - 文字同时展示：
+    - 当前非空 bucket 数
+    - 总 bucket 数
+    - `2^nnCacheSizePowerOfTwo`
+- `NN cache` 当前实现不是 LRU
+  - 它是固定大小 direct-mapped hash table
+  - 总槽位数就是 `2^nnCacheSizePowerOfTwo`
+  - 冲突时直接覆盖原 bucket
+  - 因此 realtime 里的 occupancy 表示“当前非空 bucket 数 / 总 bucket 数”
+
+实现上补了两组后端采样：
+
+- `GlobalPerfProfile::SearchLoopEndReason`
+  - 由 `SearchThread` 在 playout 退出路径上写入
+  - `window1s.search_end_reason_share` 每秒聚合一次
+- `NNCacheTable::occupiedCount`
+  - 只有空 bucket 首次变成非空时才 `+1`
+  - `window1s.nn_cache` 会导出：
+    - `current_entries`
+    - `capacity_entries`
+    - `size_power_of_two`
+    - `occupancy_share`
+
+timeline 页面也继续为“看时序”让路：
+
+- 删掉“每 GPU 的运行中推理图数”整块面板
+- 状态 pills 合并进标题栏，不再单独占一整节
+- 左侧 lane label 改成中文，并把 `Slot` 统一改名为 `Stream`
+- 给时间轴本体释放更多纵向空间

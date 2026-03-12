@@ -603,6 +603,87 @@ DASHBOARD_PAGE = """<!doctype html>
       height: 34px;
       display: block;
     }
+    .history-card {
+      padding: 7px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.7);
+      border: 1px solid var(--line);
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 16px minmax(0, 1fr) auto;
+      gap: 5px;
+    }
+    .history-card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: baseline;
+    }
+    .history-card-head h3 {
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.1;
+    }
+    .history-card-head strong {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .share-line-chart,
+    .percent-history-chart {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .share-line-series {
+      fill: none;
+      stroke-width: 2;
+      stroke-linejoin: round;
+      stroke-linecap: round;
+    }
+    .share-line-dot {
+      stroke: rgba(255,255,255,0.9);
+      stroke-width: 1.1;
+    }
+    .share-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 8px;
+      font-size: 9px;
+      color: var(--muted);
+      line-height: 1.2;
+    }
+    .share-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .share-legend i {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      display: inline-block;
+      border: 1px solid rgba(23,32,42,0.12);
+    }
+    .cache-footnote {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      font-size: 9px;
+      color: var(--muted);
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
+    .stacked-card-list {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      min-height: 0;
+    }
     .mono {
       font-family: var(--mono);
       white-space: nowrap;
@@ -710,8 +791,8 @@ DASHBOARD_PAGE = """<!doctype html>
         <div id="sparklines" class="chart-body spark-wrap"></div>
       </div>
       <div class="panel tile-depth">
-        <h2>搜索深度与请求队列</h2>
-        <p class="hint">展示实际提交到 GPU 的搜索深度，以及过去 1 秒请求队列长度时间占比</p>
+        <h2>搜索深度与结束原因</h2>
+        <p class="hint">展示实际提交到 GPU 的搜索深度，以及过去 60 秒单次沿树探索结束原因占比</p>
         <div id="depth-and-queue" class="chart-body"></div>
       </div>
       <div class="panel tile-search">
@@ -788,6 +869,39 @@ DASHBOARD_PAGE = """<!doctype html>
     const histogramYAxisPresets = {
       'depth': { minMax: 40, step: 10, formatter: fmtInt, shrinkRatio: 0.62, shrinkVotes: 8 },
       'queue': { fixedMax: 1.0, formatter: fmtPercent },
+    };
+    const searchEndReasonOrder = [
+      'submitted_gpu_task',
+      'hit_nn_cache',
+      'contention',
+      'terminal',
+      'no_legal_child',
+      'edge_visit_catchup',
+      'cycle_detected',
+      'illegal_reinit',
+      'unknown',
+    ];
+    const searchEndReasonLabels = {
+      submitted_gpu_task: '提交 GPU',
+      hit_nn_cache: '命中 NN 缓存',
+      contention: '竞争失败',
+      terminal: '终局',
+      no_legal_child: '无合法子',
+      edge_visit_catchup: 'edge catch-up',
+      cycle_detected: 'cycle',
+      illegal_reinit: '非法重算',
+      unknown: '未知',
+    };
+    const searchEndReasonColors = {
+      submitted_gpu_task: '#c2410c',
+      hit_nn_cache: '#0f766e',
+      contention: '#1d4ed8',
+      terminal: '#7c3aed',
+      no_legal_child: '#475569',
+      edge_visit_catchup: '#ea580c',
+      cycle_detected: '#be185d',
+      illegal_reinit: '#b45309',
+      unknown: '#94a3b8',
     };
     const timelineStageColors = {
       preprocess: '#0f766e',
@@ -1217,23 +1331,158 @@ DASHBOARD_PAGE = """<!doctype html>
       el.innerHTML = `<div class="pdf-grid" style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));">${series.map((item) => pdfCardHtml(item.key, item.label, item.stat)).join('')}</div>`;
     }
 
-    function renderDepthAndQueue(win) {
+    function normalizeReasonShares(items) {
+      const out = Object.create(null);
+      if (!Array.isArray(items)) return out;
+      for (const item of items) {
+        const reason = String(item?.reason || '');
+        if (!reason) continue;
+        out[reason] = {
+          count: Number(item?.count || 0),
+          value: Number(item?.value || 0),
+        };
+      }
+      return out;
+    }
+
+    function buildShareLineHistoryChart(history, order, colors, visibleReasons) {
+      if (!history || history.length === 0) {
+        return '<div class="waiting">暂无 60 秒结束原因历史</div>';
+      }
+      const seriesReasons = (visibleReasons || []).filter((reason) => order.includes(reason));
+      if (seriesReasons.length === 0) {
+        return '<div class="waiting">过去 60 秒还没有结束原因样本</div>';
+      }
+      const width = 330;
+      const height = 114;
+      const padLeft = 20;
+      const padRight = 8;
+      const padTop = 8;
+      const padBottom = 18;
+      const chartWidth = width - padLeft - padRight;
+      const chartHeight = height - padTop - padBottom;
+      const grid = [0.25, 0.5, 0.75, 1.0].map((ratio) => {
+        const y = padTop + chartHeight - chartHeight * ratio;
+        return `<line class="plot-grid-line" x1="${padLeft}" y1="${y.toFixed(1)}" x2="${(padLeft + chartWidth).toFixed(1)}" y2="${y.toFixed(1)}"></line>`;
+      }).join('');
+      const xForIndex = (idx) => (
+        history.length <= 1
+          ? padLeft + chartWidth / 2
+          : padLeft + idx * (chartWidth / (history.length - 1))
+      );
+      const lines = seriesReasons.map((reason) => {
+        const coords = history.map((sample, idx) => {
+          const shares = normalizeReasonShares(sample?.search_end_reason_share || []);
+          const value = clamp(Number(shares[reason]?.value || 0), 0, 1);
+          const x = xForIndex(idx);
+          const y = padTop + chartHeight - value * chartHeight;
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+        const latestShares = normalizeReasonShares(history[history.length - 1]?.search_end_reason_share || []);
+        const latestValue = clamp(Number(latestShares[reason]?.value || 0), 0, 1);
+        const dotX = xForIndex(history.length - 1);
+        const dotY = padTop + chartHeight - latestValue * chartHeight;
+        return `
+          <polyline class="share-line-series" points="${coords}" stroke="${colors[reason] || '#94a3b8'}"></polyline>
+          <circle class="share-line-dot" cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="2.4" fill="${colors[reason] || '#94a3b8'}"></circle>
+        `;
+      }).join('');
+      const tickEvery = Math.max(1, Math.round(Math.max(history.length - 1, 1) / 6));
+      const markers = history.map((sample, idx) => {
+        if (idx === 0 || idx === history.length - 1 || idx % tickEvery !== 0) return '';
+        const x = xForIndex(idx);
+        return `<line class="plot-grid-line" x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${(padTop + chartHeight).toFixed(1)}" opacity="0.18"></line>`;
+      }).join('');
+      const latestLabels = seriesReasons.map((reason) => {
+        const shares = normalizeReasonShares(history[history.length - 1]?.search_end_reason_share || []);
+        return {
+          reason,
+          value: Number(shares[reason]?.value || 0),
+        };
+      }).sort((a, b) => b.value - a.value);
+      const topLabel = latestLabels[0];
+      const labelY = topLabel ? (padTop + chartHeight - clamp(topLabel.value, 0, 1) * chartHeight - 4) : padTop + 10;
+      const labelText = topLabel ? `${searchEndReasonLabels[topLabel.reason] || topLabel.reason} ${fmtPercent(topLabel.value)}` : '';
+      return `
+        <svg class="share-line-chart" viewBox="0 0 ${width} ${height}">
+          ${grid}
+          ${markers}
+          <line class="plot-axis-line" x1="${padLeft}" y1="${(padTop + chartHeight).toFixed(1)}" x2="${(padLeft + chartWidth).toFixed(1)}" y2="${(padTop + chartHeight).toFixed(1)}"></line>
+          ${lines}
+          ${labelText ? `<text class="plot-label" x="${(padLeft + chartWidth - 2).toFixed(1)}" y="${Math.max(padTop + 8, labelY).toFixed(1)}" text-anchor="end">${labelText}</text>` : ''}
+          <text class="plot-label" x="${padLeft}" y="${(height - 4).toFixed(1)}" text-anchor="start">60s ago</text>
+          <text class="plot-label" x="${(padLeft + chartWidth).toFixed(1)}" y="${(height - 4).toFixed(1)}" text-anchor="end">now</text>
+          <text class="plot-label" x="2" y="${(padTop + 4).toFixed(1)}" text-anchor="start">100%</text>
+          <text class="plot-label" x="8" y="${(padTop + chartHeight + 4).toFixed(1)}" text-anchor="start">0%</text>
+        </svg>
+      `;
+    }
+
+    function buildPercentHistoryChart(points, stroke, fill) {
+      if (!points || points.length === 0) {
+        return '<div class="waiting">暂无 60 秒缓存占用历史</div>';
+      }
+      const width = 330;
+      const height = 114;
+      const padLeft = 20;
+      const padRight = 8;
+      const padTop = 8;
+      const padBottom = 18;
+      const chartWidth = width - padLeft - padRight;
+      const chartHeight = height - padTop - padBottom;
+      const coords = points.map((value, idx) => {
+        const x = points.length === 1 ? padLeft + chartWidth / 2 : padLeft + idx * (chartWidth / (points.length - 1));
+        const y = padTop + chartHeight - clamp(Number(value || 0), 0, 1) * chartHeight;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      const areaPoints = `${padLeft},${(padTop + chartHeight).toFixed(1)} ${coords} ${(padLeft + chartWidth).toFixed(1)},${(padTop + chartHeight).toFixed(1)}`;
+      const grid = [0.25, 0.5, 0.75, 1.0].map((ratio) => {
+        const y = padTop + chartHeight - chartHeight * ratio;
+        return `<line class="plot-grid-line" x1="${padLeft}" y1="${y.toFixed(1)}" x2="${(padLeft + chartWidth).toFixed(1)}" y2="${y.toFixed(1)}"></line>`;
+      }).join('');
+      return `
+        <svg class="percent-history-chart" viewBox="0 0 ${width} ${height}">
+          ${grid}
+          <line class="plot-axis-line" x1="${padLeft}" y1="${(padTop + chartHeight).toFixed(1)}" x2="${(padLeft + chartWidth).toFixed(1)}" y2="${(padTop + chartHeight).toFixed(1)}"></line>
+          <polygon class="plot-fill" points="${areaPoints}" fill="${fill}"></polygon>
+          <polyline class="plot-stroke" points="${coords}" stroke="${stroke}"></polyline>
+          <text class="plot-label" x="${padLeft}" y="${(height - 4).toFixed(1)}" text-anchor="start">60s ago</text>
+          <text class="plot-label" x="${(padLeft + chartWidth).toFixed(1)}" y="${(height - 4).toFixed(1)}" text-anchor="end">now</text>
+          <text class="plot-label" x="2" y="${(padTop + 4).toFixed(1)}" text-anchor="start">100%</text>
+          <text class="plot-label" x="8" y="${(padTop + chartHeight + 4).toFixed(1)}" text-anchor="start">0%</text>
+        </svg>
+      `;
+    }
+
+    function renderDepthAndQueue(win, history) {
       const depthHtml = `
         <div class="dock-card">
           <h3>搜索深度</h3>
           ${plotHistogramHtml('depth', win.search_depth_histogram || [], (v) => fmtInt(v), '过去 1 秒没有 playout 样本', '#0f766e', pdfAxisPresets.depth.minMax, pdfAxisPresets.depth.step)}
         </div>
       `;
-      const queueHtml = `
-        <div class="dock-card">
-          <h3>请求队列长度</h3>
-          ${plotHistogramHtml('queue', win.queue_length_time_share, fmtPercent, '暂无队列时间占比', '#c2410c', pdfAxisPresets.queue.minMax, pdfAxisPresets.queue.step)}
+      const latestReasons = normalizeReasonShares(win.search_end_reason_share || []);
+      const dominantReason = searchEndReasonOrder
+        .map((reason) => ({ reason, value: Number(latestReasons[reason]?.value || 0), count: Number(latestReasons[reason]?.count || 0) }))
+        .sort((a, b) => b.value - a.value)[0];
+      const visibleReasons = searchEndReasonOrder.filter((reason) =>
+        history.some((item) => Number(normalizeReasonShares(item?.search_end_reason_share || [])[reason]?.value || 0) > 0) ||
+        Number(latestReasons[reason]?.value || 0) > 0
+      );
+      const reasonHtml = `
+        <div class="history-card">
+          <div class="history-card-head">
+            <h3>沿树探索结束原因</h3>
+            <strong>${dominantReason && dominantReason.value > 0 ? `${searchEndReasonLabels[dominantReason.reason] || dominantReason.reason} ${fmtPercent(dominantReason.value)}` : '等待样本'}</strong>
+          </div>
+          ${buildShareLineHistoryChart(history, searchEndReasonOrder, searchEndReasonColors, visibleReasons)}
+          <div class="share-legend">${visibleReasons.map((reason) => `<span><i style="background:${searchEndReasonColors[reason] || '#94a3b8'}"></i>${searchEndReasonLabels[reason] || reason}</span>`).join('') || '<span>过去 60 秒还没有结束原因样本</span>'}</div>
         </div>
       `;
-      document.getElementById('depth-and-queue').innerHTML = `<div class="dock-stack">${depthHtml}${queueHtml}</div>`;
+      document.getElementById('depth-and-queue').innerHTML = `<div class="dock-stack">${depthHtml}${reasonHtml}</div>`;
     }
 
-    function renderInferencePhases(win, singleScheduler) {
+    function renderInferencePhases(win, singleScheduler, history) {
       if (!singleScheduler) {
         renderPdfBlock('inference-phases', [
           { key: 'infer.wait_task_submit_ms', label: '等待任务提交', stat: win.inference?.wait_task_submit_ms },
@@ -1247,9 +1496,27 @@ DASHBOARD_PAGE = """<!doctype html>
       }
 
       const inferStat = win.inference?.infer_ms;
-      const body = inferStat?.has_data
-        ? `<div class="pdf-grid" style="grid-template-columns:repeat(1, minmax(0, 1fr));">${pdfCardHtml('infer.infer_ms', '推理工作量(近似)', inferStat)}</div>`
+      const nnCache = win.nn_cache || {};
+      const cacheCurrent = Number(nnCache.current_entries || 0);
+      const cacheCapacity = Number(nnCache.capacity_entries || 0);
+      const cachePower = Number(nnCache.size_power_of_two ?? -1);
+      const cacheCard = `
+        <div class="history-card">
+          <div class="history-card-head">
+            <h3>NN Cache 占用</h3>
+            <strong>${fmtPercent(nnCache.occupancy_share || 0)}</strong>
+          </div>
+          ${buildPercentHistoryChart(history.map((item) => Number(item?.nn_cache?.occupancy_share || 0)), '#1d4ed8', 'rgba(29,78,216,0.18)')}
+          <div class="cache-footnote">
+            <span>current <strong>${fmtInt(cacheCurrent)}</strong> / total <strong>${fmtInt(cacheCapacity)}</strong></span>
+            <span>${cachePower >= 0 ? `2^${fmtInt(cachePower)}` : '2^N unavailable'}</span>
+          </div>
+        </div>
+      `;
+      const inferCard = inferStat?.has_data
+        ? pdfCardHtml('infer.infer_ms', '推理工作量(近似)', inferStat)
         : '<div class="waiting">过去 1 秒没有推理样本</div>';
+      const body = `<div class="stacked-card-list">${inferCard}${cacheCard}</div>`;
       document.getElementById('inference-phases').innerHTML = `
         <div class="panel-stack">
           <div class="panel-note">当前 TRT overlapping 路径下，realtime 监控只保留了 infer_ms 的近似值。它来自 scheduler 的等效工作量 / ETA 记账，不是 CUDA event 实测；其余 phase 目前仍是占位零值，所以这里不再展示。</div>
@@ -1633,13 +1900,13 @@ DASHBOARD_PAGE = """<!doctype html>
       }
       const win = latest.window1s || {};
       const singleScheduler = isSingleSchedulerMode(latest);
-      renderDepthAndQueue(win);
+      renderDepthAndQueue(win, state.history || []);
       renderPdfBlock('search-loop', [
         { key: 'search.total_ms', label: '总循环耗时', stat: win.search_loop?.total_ms },
         { key: 'search.search_ms', label: '搜索耗时', stat: win.search_loop?.search_ms },
         { key: 'search.wait_nn_ms', label: '等待推理耗时', stat: win.search_loop?.wait_nn_ms },
       ], 1);
-      renderInferencePhases(win, singleScheduler);
+      renderInferencePhases(win, singleScheduler, state.history || []);
       renderGpuBatches(win, singleScheduler);
       renderGpuStreams(win, singleScheduler);
       renderSparklines(state.history || []);
@@ -1771,7 +2038,7 @@ TIMELINE_PAGE = """<!doctype html>
       height: 100vh;
       padding: 14px;
       display: grid;
-      grid-template-rows: auto auto auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
       gap: 12px;
     }
     .panel {
@@ -1823,17 +2090,18 @@ TIMELINE_PAGE = """<!doctype html>
       font-weight: 700;
       white-space: nowrap;
     }
-    .statusbar {
+    .topbar-side {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
-      align-items: center;
+      gap: 10px;
+      align-content: start;
+      justify-items: end;
     }
     .status-meta {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
       align-items: center;
+      justify-content: end;
       color: var(--muted);
       font-size: 12px;
       font-family: var(--mono);
@@ -1884,86 +2152,9 @@ TIMELINE_PAGE = """<!doctype html>
       border-color: rgba(194,65,12,0.18);
       background: rgba(255,237,213,0.9);
     }
-    .timeline-streams-shell {
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      gap: 10px;
-      min-height: 0;
-    }
-    .timeline-section-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 14px;
-      align-items: baseline;
-      justify-content: space-between;
-    }
-    .timeline-section-head h2 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.1;
-    }
-    .timeline-section-head .hint {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .timeline-streams-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 10px;
-      min-height: 0;
-    }
-    .timeline-stream-card {
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.72);
-      min-height: 0;
-      overflow: hidden;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      gap: 8px;
-    }
-    .timeline-stream-card h3 {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.1;
-    }
-    .timeline-stream-card .sub {
-      color: var(--muted);
-      font-size: 11px;
-      font-family: var(--mono);
-    }
-    .timeline-histogram {
-      display: grid;
-      gap: 6px;
-    }
-    .timeline-hist-row {
-      display: grid;
-      grid-template-columns: 28px minmax(0, 1fr) 56px;
-      gap: 8px;
-      align-items: center;
-      font-size: 11px;
-      color: var(--muted);
-      font-family: var(--mono);
-    }
-    .timeline-hist-label, .timeline-hist-value {
-      white-space: nowrap;
-    }
-    .timeline-bar-bg {
-      height: 9px;
-      border-radius: 999px;
-      background: rgba(23,32,42,0.08);
-      overflow: hidden;
-    }
-    .timeline-bar-fill {
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, rgba(194,65,12,0.9), rgba(29,78,216,0.9));
-    }
     .timeline-shell {
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
       gap: 12px;
       min-height: 0;
     }
@@ -2118,28 +2309,19 @@ TIMELINE_PAGE = """<!doctype html>
       <div>
         <div class="eyebrow">KataGo Realtime Timeline</div>
         <h1>调度线程 / CUDA Stream 时间线</h1>
-        <p class="subtitle">独立页面只展示 sampled timeline。默认跟随最近窗口；可拖拽平移、滚轮水平缩放、切换 slot，并且支持暂停自动刷新后停在某个快照上慢慢看。</p>
+        <p class="subtitle">独立页面只展示 sampled timeline。默认跟随最近窗口；可拖拽平移、滚轮水平缩放，并支持暂停自动刷新后停在某个快照上慢慢看。</p>
       </div>
-      <a class="nav-link" href="/">返回 Dashboard</a>
-    </section>
-
-    <section class="panel statusbar">
-      <div id="timeline-status-meta" class="status-meta">
-        <div class="status-pill">等待快照</div>
+      <div class="topbar-side">
+        <a class="nav-link" href="/">返回 Dashboard</a>
+        <div id="timeline-status-meta" class="status-meta">
+          <div class="status-pill">等待快照</div>
+        </div>
+        <div class="controls">
+          <button id="timeline-pause-btn" type="button">暂停刷新</button>
+          <button id="timeline-refresh-btn" type="button">手动刷新</button>
+          <button id="timeline-latest-btn" type="button">回到最新</button>
+        </div>
       </div>
-      <div class="controls">
-        <button id="timeline-pause-btn" type="button">暂停刷新</button>
-        <button id="timeline-refresh-btn" type="button">手动刷新</button>
-        <button id="timeline-latest-btn" type="button">回到最新</button>
-      </div>
-    </section>
-
-    <section class="panel timeline-streams-shell">
-      <div class="timeline-section-head">
-        <h2>每 GPU 的运行中推理图数</h2>
-        <div class="hint">过去 1 秒不同 active infer graph 数的时间占比。这里只看 infer，不含 H2D / D2H stream。</div>
-      </div>
-      <div id="timeline-gpu-streams" class="timeline-streams-grid"></div>
     </section>
 
     <section class="panel timeline-shell">
@@ -2176,6 +2358,22 @@ TIMELINE_PAGE = """<!doctype html>
     };
     const timelineLaneNames = ['scheduler', 'h2d', 'infer', 'd2h'];
     const timelineStageNames = ['preprocess', 'h2d_cpu', 'h2d', 'launch_cpu', 'infer', 'd2h_cpu', 'd2h', 'postprocess'];
+    const timelineLaneLabels = {
+      scheduler: '调度线程',
+      h2d: 'H2D',
+      infer: '推理',
+      d2h: 'D2H',
+    };
+    const timelineStageLabels = {
+      preprocess: '预处理',
+      h2d_cpu: 'H2D 调用',
+      h2d: 'H2D',
+      launch_cpu: 'Launch 调用',
+      infer: '推理',
+      d2h_cpu: 'D2H 调用',
+      d2h: 'D2H',
+      postprocess: '后处理',
+    };
     const minTimelineSpanNs = 1e3;
     const timelineUiState = {
       spanNs: 50e6,
@@ -2259,65 +2457,26 @@ TIMELINE_PAGE = """<!doctype html>
     }
 
     function timelineSpanLabel(span) {
-      if (span.stage === 'preprocess') return `prep r${span.row}`;
-      if (span.stage === 'h2d_cpu') return `h2d cpu r${span.row}`;
+      if (span.stage === 'preprocess') return `预 r${span.row}`;
+      if (span.stage === 'h2d_cpu') return `H2D调 r${span.row}`;
       if (span.stage === 'h2d') return `h2d r${span.row}`;
-      if (span.stage === 'launch_cpu') return `launch cpu b${span.batch_uid}`;
-      if (span.stage === 'infer') return `infer b${span.batch_uid}`;
-      if (span.stage === 'd2h_cpu') return `d2h cpu b${span.batch_uid}`;
+      if (span.stage === 'launch_cpu') return `Launch调 b${span.batch_uid}`;
+      if (span.stage === 'infer') return `推理 b${span.batch_uid}`;
+      if (span.stage === 'd2h_cpu') return `D2H调 b${span.batch_uid}`;
       if (span.stage === 'd2h') return `d2h b${span.batch_uid}`;
-      if (span.stage === 'postprocess') return `post b${span.batch_uid}`;
-      return span.stage || 'event';
+      if (span.stage === 'postprocess') return `后 b${span.batch_uid}`;
+      return timelineStageLabels[span.stage] || span.stage || '事件';
     }
 
     function timelineSpanTitle(span, selectedSlot) {
-      const slotText = `GPU ${span.gpu} / Slot ${span.slot}`;
+      const slotText = `GPU ${span.gpu} / Stream ${span.slot}`;
       const batchText = span.batch_uid ? `batch=${span.batch_uid}` : 'batch=n/a';
       const rowText = span.row >= 0 ? `row=${span.row}` : 'row=-';
-      const laneText = span.lane || 'unknown';
-      const selectedText = selectedSlot && Number(span.slot) === Number(selectedSlot.slot) ? 'selected' : 'other-slot';
+      const laneText = timelineLaneLabels[span.lane] || span.lane || '未知';
+      const stageText = timelineStageLabels[span.stage] || span.stage || '未知';
+      const selectedText = selectedSlot && Number(span.slot) === Number(selectedSlot.slot) ? 'selected' : 'other-stream';
       const durationText = `duration=${fmtTimelineDurationUs(Number(span.end_ns || 0) - Number(span.start_ns || 0))}`;
-      return `${slotText}\\n${laneText} / ${span.stage}\\n${batchText} ${rowText}\\n${durationText}\\n${selectedText}`;
-    }
-
-    function renderTimelineGpuStreams(latest) {
-      const el = document.getElementById('timeline-gpu-streams');
-      const single = isSingleSchedulerMode(latest);
-      const items = latest?.window1s?.cuda_stream_active_time_share_by_gpu || [];
-      if (!latest || !single) {
-        el.innerHTML = '<div class="waiting">当前只对 TRT single-scheduler 路径展示 infer graph 并发统计。</div>';
-        return;
-      }
-      if (items.length === 0) {
-        el.innerHTML = '<div class="waiting">当前后端未提供 infer graph 并发样本。</div>';
-        return;
-      }
-      el.innerHTML = items.map((item) => {
-        const buckets = Array.isArray(item.buckets) ? item.buckets : [];
-        const maxValue = Math.max(...buckets.map((bucket) => Number(bucket.value || 0)), 1e-9);
-        const rows = buckets.length === 0
-          ? '<div class="waiting">暂无 infer graph 并发数据</div>'
-          : `<div class="timeline-histogram">${buckets.map((bucket) => {
-              const width = Math.max(2, Number(bucket.value || 0) / maxValue * 100);
-              return `
-                <div class="timeline-hist-row">
-                  <div class="timeline-hist-label">${bucket.bucket}</div>
-                  <div class="timeline-bar-bg"><div class="timeline-bar-fill" style="width:${width}%"></div></div>
-                  <div class="timeline-hist-value">${fmtPercent(bucket.value)}</div>
-                </div>
-              `;
-            }).join('')}</div>`;
-        const dominant = [...buckets].sort((a, b) => Number(b.value || 0) - Number(a.value || 0))[0];
-        return `
-          <div class="timeline-stream-card">
-            <div>
-              <h3>GPU ${item.gpu}</h3>
-              <div class="sub">主并发 ${dominant ? dominant.bucket : 'N/A'} | bucket 数 ${fmtInt(buckets.length)}</div>
-            </div>
-            ${rows}
-          </div>
-        `;
-      }).join('');
+      return `${slotText}\\n${laneText} / ${stageText}\\n${batchText} ${rowText}\\n${durationText}\\n${selectedText}`;
     }
 
     function updateStatusBar(state) {
@@ -2348,7 +2507,7 @@ TIMELINE_PAGE = """<!doctype html>
       const slots = timeline.slots || [];
       if (slots.length === 0) {
         view.innerHTML = '<div class="waiting">当前没有可观察的 logical slot</div>';
-        summary.innerHTML = '<span><strong>暂无 slot</strong></span>';
+        summary.innerHTML = '<span><strong>暂无 stream</strong></span>';
         return;
       }
 
@@ -2378,11 +2537,11 @@ TIMELINE_PAGE = """<!doctype html>
       const topPad = 28;
       const bottomPad = 28;
       const laneGap = 12;
-      const lanes = [{ id: 'scheduler', label: 'Scheduler Thread', slot: null, laneName: 'scheduler' }];
+      const lanes = [{ id: 'scheduler', label: '调度线程', slot: null, laneName: 'scheduler' }];
       for (const slot of orderedSlots) {
-        lanes.push({ id: `slot-${slot.slot}-h2d`, label: `GPU ${slot.gpu} / Slot ${slot.slot} H2D`, slot: Number(slot.slot), laneName: 'h2d' });
-        lanes.push({ id: `slot-${slot.slot}-infer`, label: `GPU ${slot.gpu} / Slot ${slot.slot} Infer`, slot: Number(slot.slot), laneName: 'infer' });
-        lanes.push({ id: `slot-${slot.slot}-d2h`, label: `GPU ${slot.gpu} / Slot ${slot.slot} D2H`, slot: Number(slot.slot), laneName: 'd2h' });
+        lanes.push({ id: `slot-${slot.slot}-h2d`, label: `GPU ${slot.gpu} / Stream ${slot.slot} H2D`, slot: Number(slot.slot), laneName: 'h2d' });
+        lanes.push({ id: `slot-${slot.slot}-infer`, label: `GPU ${slot.gpu} / Stream ${slot.slot} 推理`, slot: Number(slot.slot), laneName: 'infer' });
+        lanes.push({ id: `slot-${slot.slot}-d2h`, label: `GPU ${slot.gpu} / Stream ${slot.slot} D2H`, slot: Number(slot.slot), laneName: 'd2h' });
       }
       const chartWidth = Math.max(width - leftPad - rightPad, 300);
       const laneHeight = Math.max((height - topPad - bottomPad - laneGap * (lanes.length - 1)) / lanes.length, 34);
@@ -2494,7 +2653,7 @@ TIMELINE_PAGE = """<!doctype html>
       const droppedSpans = Number(timeline.dropped_spans || 0);
       const droppedSuffix = droppedSpans > 0 ? ` | clipped ${fmtInt(droppedSpans)}` : '';
       summary.innerHTML = `
-        <span><strong>${fmtInt(orderedSlots.length)} 个 slot 全部展开</strong></span>
+        <span><strong>${fmtInt(orderedSlots.length)} 条 stream 全部展开</strong></span>
         <span>窗口 ${fmtTimelineNsWithScale(timelineUiState.spanNs, axisScale)}</span>
         <span>窗口内 0 .. ${fmtTimelineNsWithScale(timelineUiState.spanNs, axisScale)}</span>
         <span>样本内 ${fmtTimelineNsWithScale(sampleOffsetStartNs, axisScale)} .. ${fmtTimelineNsWithScale(sampleOffsetEndNs, axisScale)}</span>
@@ -2518,14 +2677,14 @@ TIMELINE_PAGE = """<!doctype html>
           ${allBlockSvgs.join('')}
         </svg>
         <div class="timeline-legend">
-          <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>Preprocess</span>
-          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D CPU</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.preprocess}"></i>预处理</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.h2d_cpu}"></i>H2D 调用</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.h2d}"></i>H2D</span>
-          <span><i class="timeline-dot" style="background:${timelineStageColors.launch_cpu}"></i>Launch CPU</span>
-          <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>Infer</span>
-          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H CPU</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.launch_cpu}"></i>Launch 调用</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.infer}"></i>推理</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.d2h_cpu}"></i>D2H 调用</span>
           <span><i class="timeline-dot" style="background:${timelineStageColors.d2h}"></i>D2H</span>
-          <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>Post</span>
+          <span><i class="timeline-dot" style="background:${timelineStageColors.postprocess}"></i>后处理</span>
         </div>
       `;
     }
@@ -2541,11 +2700,9 @@ TIMELINE_PAGE = """<!doctype html>
         const state = await resp.json();
         latestRealtimeState = state;
         updateStatusBar(state);
-        renderTimelineGpuStreams(state?.latest || null);
         renderTimeline(state?.latest || null);
       } catch (err) {
         updateStatusBar(latestRealtimeState);
-        renderTimelineGpuStreams(latestRealtimeState?.latest || null);
         document.getElementById('timeline-view').innerHTML = `<div class="waiting">页面请求失败: ${String(err)}</div>`;
       }
     }
@@ -2649,6 +2806,8 @@ class MonitorState:
             "avg_batch_size": window.get("avg_batch_size", 0.0),
             "scheduler_idle_time_share": window.get("scheduler_idle_time_share", 0.0),
             "scheduler_idle_poll_avg_us": window.get("scheduler_idle_poll_avg_us", 0.0),
+            "search_end_reason_share": window.get("search_end_reason_share", []),
+            "nn_cache": window.get("nn_cache", {}),
             "search_threads": totals.get("search_threads", 0),
         }
         with self._lock:
