@@ -801,8 +801,8 @@ DASHBOARD_PAGE = """<!doctype html>
         <div id="sparklines" class="chart-body spark-wrap"></div>
       </div>
       <div class="panel tile-depth">
-        <h2>搜索深度与结束原因</h2>
-        <p class="hint">展示实际提交到 GPU 的搜索深度，以及过去 60 秒单次沿树探索结束原因占比</p>
+        <h2>请求深度与结束原因</h2>
+        <p class="hint">展示实际提交到 GPU 的请求深度，以及过去 60 秒单次沿树探索结束原因占比</p>
         <div id="depth-and-queue" class="chart-body"></div>
       </div>
       <div class="panel tile-search">
@@ -1467,7 +1467,7 @@ DASHBOARD_PAGE = """<!doctype html>
     function renderDepthAndQueue(win, history) {
       const depthHtml = `
         <div class="dock-card">
-          <h3>搜索深度</h3>
+          <h3>请求深度</h3>
           ${plotHistogramHtml('depth', win.search_depth_histogram || [], (v) => fmtInt(v), '过去 1 秒没有 playout 样本', '#0f766e', pdfAxisPresets.depth.minMax, pdfAxisPresets.depth.step)}
         </div>
       `;
