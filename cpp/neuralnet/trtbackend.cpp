@@ -3038,8 +3038,27 @@ void NeuralNet::trtInitializeSharedBuffer(
   for(int i = 0; i < computeHandle->getEngine()->getNbIOTensors(); i++) {
     auto name = computeHandle->getEngine()->getIOTensorName(i);
     auto dims = computeHandle->getEngine()->getTensorShape(name);
-    size_t bytes = accumulate(dims.d + 1, dims.d + dims.nbDims, buffers->maxBatchSize * sizeof(float), multiplies<size_t>());
+    auto mode = computeHandle->getEngine()->getTensorIOMode(name);
+
     void* deviceBuffer = nullptr;
+    size_t bytes = 0;
+
+    if(dims.nbDims <= 0) {
+      if(mode == nvinfer1::TensorIOMode::kOUTPUT) {
+        // 标量/无维输出，给一个最小占位
+        bytes = sizeof(float);
+      } else {
+        throw StringError("Invalid input tensor dims for tensor " + string(name));
+      }
+    } else {
+      bytes = buffers->maxBatchSize * sizeof(float);
+      for(int j = 1; j < dims.nbDims; j++) {
+        if(dims.d[j] < 0)
+          throw StringError("Dynamic/invalid dim for tensor " + string(name));
+        bytes *= (size_t)dims.d[j];
+      }
+    }
+
     CUDA_ERR("trtInitializeSharedBuffer", cudaMalloc(&deviceBuffer, bytes));
     buffers->trtDeviceBuffers.emplace(name, deviceBuffer);
   }
