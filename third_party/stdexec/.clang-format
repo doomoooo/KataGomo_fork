@@ -1,0 +1,176 @@
+Language: Cpp
+BasedOnStyle: WebKit
+AccessModifierOffset: -1
+AlignAfterOpenBracket: Align
+AlignArrayOfStructures: Right
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveBitFields: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: false
+AlignEscapedNewlines: Right
+AlignOperands: AlignAfterOperator
+AlignTrailingComments: true
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowBreakBeforeNoexceptSpecifier: Always
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+AlwaysBreakTemplateDeclarations: Yes
+AttributeMacros: [
+  STDEXEC_SYSTEM_CONTEXT_INLINE
+  STDEXEC_IMMOVABLE_NO_UNIQUE_ADDRESS
+]
+BinPackArguments: false
+BinPackParameters: false
+BitFieldColonSpacing: Both
+BreakAfterAttributes: Always
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: true
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeConceptDeclarations: true
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeComma
+BreakInheritanceList: BeforeComma
+BreakStringLiterals: true
+ColumnLimit: 100
+CompactNamespaces: false
+ConstructorInitializerIndentWidth: 2
+ContinuationIndentWidth: 2
+Cpp11BracedListStyle: true
+DerivePointerAlignment: true
+EmptyLineAfterAccessModifier: Never
+EmptyLineBeforeAccessModifier: Leave
+FixNamespaceComments: true
+IfMacros: [
+  'STDEXEC_CATCH'
+]
+IncludeBlocks: Preserve
+IndentAccessModifiers: false
+IndentCaseBlocks: false
+IndentCaseLabels: false
+IndentExternBlock: AfterExternBlock
+IndentGotoLabels: false
+IndentPPDirectives: AfterHash
+IndentWidth: 2
+IndentWrappedFunctionNames: false
+InsertTrailingCommas: None
+KeepEmptyLinesAtTheStartOfBlocks: false
+LambdaBodyIndentation: Signature
+LineEnding: LF
+MacroBlockBegin: "^STDEXEC_NAMESPACE_STD_BEGIN|STDEXEC_P2300_NAMESPACE_BEGIN$"
+MacroBlockEnd: "^STDEXEC_NAMESPACE_STD_END|STDEXEC_P2300_NAMESPACE_END$"
+Macros: [
+  'STDEXEC_CATCH_FALLTHROUGH= ',
+  'STDEXEC_EXPLICIT_THIS_BEGIN(...)=__VA_ARGS__',
+  'STDEXEC_EXPLICIT_THIS_END(...)=',
+  'STDEXEC_ATTRIBUTE(...)=__attribute__((__VA_ARGS__))',
+  'STDEXEC_IMMOVABLE_NO_UNIQUE_ADDRESS=[[no_unique_address]]',
+  'STDEXEC_MISSING_MEMBER(X,Y)=true',
+  'STDEXEC_DEFINE_MEMBER(X)=void foo() {}',
+  'STDEXEC_AUTO_RETURN(...)=->decltype(auto){ return __VA_ARGS__; }',
+]
+MaxEmptyLinesToKeep: 1
+NamespaceIndentation: All
+PackConstructorInitializers: Never
+PenaltyBreakAssignment: 100
+PenaltyBreakBeforeFirstCallParameter: 100
+PenaltyBreakComment: 0
+PenaltyBreakFirstLessLess: 0
+PenaltyBreakOpenParenthesis: 0
+PenaltyBreakScopeResolution: 1000
+PenaltyBreakString: 0
+PenaltyBreakTemplateDeclaration: 0
+PenaltyExcessCharacter: 500
+PenaltyIndentedWhitespace: 0
+PenaltyReturnTypeOnItsOwnLine: 0
+PointerAlignment: Left
+PPIndentWidth: 2
+QualifierAlignment: Custom
+QualifierOrder: [
+  "inline",
+  "friend",
+  "static",
+  "constexpr",
+  "type",
+  "const",
+  "volatile",
+]
+ReferenceAlignment: Pointer
+RemoveBracesLLVM: false
+RemoveSemicolon: false
+ReflowComments: false
+RequiresClausePosition: OwnLine
+RequiresExpressionIndentation: OuterScope
+IndentRequiresClause: true
+SeparateDefinitionBlocks: Leave
+ShortNamespaceLines: 0
+SkipMacroDefinitionBody: true
+SortIncludes: CaseSensitive
+SortUsingDeclarations: false
+SpaceAfterCStyleCast: true
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceAroundPointerQualifiers: After
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCaseColon: false
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: false
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterControlStatements: true
+  AfterForeachMacros: false
+  AfterFunctionDeclarationName: false
+  AfterFunctionDefinitionName: false
+  AfterIfMacros: false
+  AfterOverloadedOperator: false
+  AfterRequiresInClause: false
+  AfterRequiresInExpression: false
+  BeforeNonEmptyParentheses: false
+SpaceBeforeRangeBasedForLoopColon: false
+SpaceBeforeSquareBrackets: false
+SpaceInEmptyBlock: false
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: Never
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals: true
+SpacesInParentheses: false
+Standard: Latest
+StatementMacros: [
+  'STDEXEC_IF_HOST',
+  'STDEXEC_IF_DEVICE',
+]
+TabWidth: 0
+TypenameMacros: []
+UseTab: Never

@@ -1,11 +1,29 @@
-cmake_minimum_required(VERSION 3.18.2)
+cmake_minimum_required(VERSION 3.25.0)
 if(USE_BACKEND STREQUAL "METAL")
   project(katago LANGUAGES CXX Swift)
 else()
   project(katago)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(STDEXEC_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stdexec")
+if(NOT EXISTS "${STDEXEC_SOURCE_DIR}/CMakeLists.txt")
+  message(FATAL_ERROR "Vendored stdexec was not found at ${STDEXEC_SOURCE_DIR}. Clone it first.")
+endif()
+
+set(STDEXEC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(STDEXEC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(STDEXEC_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(STDEXEC_INSTALL OFF CACHE BOOL "" FORCE)
+set(STDEXEC_ENABLE_CUDA OFF CACHE BOOL "" FORCE)
+set(STDEXEC_ENABLE_ASIO OFF CACHE BOOL "" FORCE)
+set(STDEXEC_ENABLE_IO_URING OFF CACHE BOOL "" FORCE)
+set(STDEXEC_BUILD_SYSTEM_CONTEXT OFF CACHE BOOL "" FORCE)
+
+add_subdirectory("${STDEXEC_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/stdexec" EXCLUDE_FROM_ALL)
 
 include_directories(external)
 include_directories(SYSTEM external/tclap-1.2.5/include) #SYSTEM suppresses warnings from external library
@@ -238,6 +256,7 @@ add_executable(katago
   core/rand_helpers.cpp
   core/sha2.cpp
   core/test.cpp
+  core/stdexec_smoketest.cpp
   core/threadsafecounter.cpp
   core/threadsafequeue.cpp
   core/threadtest.cpp
@@ -337,6 +356,9 @@ add_executable(katago
   command/writetrainingdata.cpp
   main.cpp
   )
+
+target_link_libraries(katago STDEXEC::stdexec)
+target_compile_definitions(katago PRIVATE GHC_FILESYSTEM_ENFORCE_CPP17_API)
 
 if(USE_BACKEND STREQUAL "CUDA")
   target_compile_definitions(katago PRIVATE USE_CUDA_BACKEND)
