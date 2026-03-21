@@ -11,6 +11,21 @@ namespace GlobalPerfProfile {
     D2H
   };
 
+  enum class SchedulerWorkType {
+    SelectBatch,
+    H2DQuery,
+    PreprocessRow,
+    PackRow,
+    H2DSubmitRow,
+    LaunchBatch,
+    InferQuery,
+    D2HSubmitBatch,
+    D2HQuery,
+    PostprocessRow,
+    UnpackRow,
+    PublishRow
+  };
+
   void setEnabled(bool enabled);
   bool isEnabled();
 
@@ -22,6 +37,7 @@ namespace GlobalPerfProfile {
 
   void recordSearchLoop(double processMilliseconds, double waitMilliseconds);
   void recordSchedulerBusySpan(int64_t startNs, int64_t endNs);
+  void recordSchedulerWork(SchedulerWorkType type, double durationMs);
   void recordCudaStreamTask(
     CudaStreamType type,
     int streamIdx,
