@@ -33,6 +33,7 @@ cpp/tests/results/matchsgfs2/games.sgfs
 cpp/data/
 versions/
 cpp/build
+cpp/build-*/
 cpp/out
 /build*
 !/build.sh
@@ -86,6 +87,7 @@ for_release/
 
 # Local machine config (copy from env_sample.sh)
 env.sh
+.local/
 benchmark/
 
 tests/results/matchsgfs/
