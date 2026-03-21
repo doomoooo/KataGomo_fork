@@ -17,6 +17,7 @@ namespace {
   using Clock = std::chrono::steady_clock;
   static constexpr double BENCHMARK_SAMPLE_TRIM_SECONDS = 0.100;
   static constexpr int NUM_STREAM_TYPES = 3;
+  static constexpr int NUM_SCHEDULER_WORK_TYPES = 12;
 
   struct TimedSearchLoop {
     int64_t eventNs;
@@ -27,6 +28,11 @@ namespace {
   struct TimedInterval {
     int64_t startNs;
     int64_t endNs;
+  };
+
+  struct TimedValue {
+    int64_t eventNs;
+    double valueMs;
   };
 
   struct StreamTaskSample {
@@ -46,6 +52,7 @@ namespace {
 
     double schedulerBusySeconds = 0.0;
     double schedulerTotalSeconds = 0.0;
+    array<vector<double>, NUM_SCHEDULER_WORK_TYPES> schedulerWorkMs;
 
     array<double, NUM_STREAM_TYPES> streamActiveSeconds;
     array<double, NUM_STREAM_TYPES> streamCapacitySeconds;
@@ -55,6 +62,7 @@ namespace {
     int64_t benchmarkSampleStartNs = 0;
     vector<TimedSearchLoop> sampleSearchLoops;
     vector<TimedInterval> sampleSchedulerBusyIntervals;
+    array<vector<TimedValue>, NUM_SCHEDULER_WORK_TYPES> sampleSchedulerWork;
     array<vector<StreamTaskSample>, NUM_STREAM_TYPES> sampleStreamTasks;
     array<vector<int64_t>, NUM_STREAM_TYPES> sampleLastStreamEndNs;
 
@@ -84,8 +92,71 @@ namespace {
       return 1;
     case GlobalPerfProfile::CudaStreamType::D2H:
       return 2;
+    default:
+      return 0;
     }
-    return 0;
+  }
+
+  static int schedulerWorkTypeIndex(GlobalPerfProfile::SchedulerWorkType type) {
+    switch(type) {
+    case GlobalPerfProfile::SchedulerWorkType::SelectBatch:
+      return 0;
+    case GlobalPerfProfile::SchedulerWorkType::H2DQuery:
+      return 1;
+    case GlobalPerfProfile::SchedulerWorkType::PreprocessRow:
+      return 2;
+    case GlobalPerfProfile::SchedulerWorkType::PackRow:
+      return 3;
+    case GlobalPerfProfile::SchedulerWorkType::H2DSubmitRow:
+      return 4;
+    case GlobalPerfProfile::SchedulerWorkType::LaunchBatch:
+      return 5;
+    case GlobalPerfProfile::SchedulerWorkType::InferQuery:
+      return 6;
+    case GlobalPerfProfile::SchedulerWorkType::D2HSubmitBatch:
+      return 7;
+    case GlobalPerfProfile::SchedulerWorkType::D2HQuery:
+      return 8;
+    case GlobalPerfProfile::SchedulerWorkType::PostprocessRow:
+      return 9;
+    case GlobalPerfProfile::SchedulerWorkType::UnpackRow:
+      return 10;
+    case GlobalPerfProfile::SchedulerWorkType::PublishRow:
+      return 11;
+    default:
+      return 0;
+    }
+  }
+
+  static const char* schedulerWorkTypeLabel(GlobalPerfProfile::SchedulerWorkType type) {
+    switch(type) {
+    case GlobalPerfProfile::SchedulerWorkType::SelectBatch:
+      return "scheduler_select_batch_ms";
+    case GlobalPerfProfile::SchedulerWorkType::H2DQuery:
+      return "scheduler_h2d_query_ms";
+    case GlobalPerfProfile::SchedulerWorkType::PreprocessRow:
+      return "scheduler_preprocess_row_ms";
+    case GlobalPerfProfile::SchedulerWorkType::PackRow:
+      return "scheduler_pack_row_ms";
+    case GlobalPerfProfile::SchedulerWorkType::H2DSubmitRow:
+      return "scheduler_h2d_submit_row_ms";
+    case GlobalPerfProfile::SchedulerWorkType::LaunchBatch:
+      return "scheduler_launch_batch_ms";
+    case GlobalPerfProfile::SchedulerWorkType::InferQuery:
+      return "scheduler_infer_query_ms";
+    case GlobalPerfProfile::SchedulerWorkType::D2HSubmitBatch:
+      return "scheduler_d2h_submit_batch_ms";
+    case GlobalPerfProfile::SchedulerWorkType::D2HQuery:
+      return "scheduler_d2h_query_ms";
+    case GlobalPerfProfile::SchedulerWorkType::PostprocessRow:
+      return "scheduler_postprocess_row_ms";
+    case GlobalPerfProfile::SchedulerWorkType::UnpackRow:
+      return "scheduler_unpack_row_ms";
+    case GlobalPerfProfile::SchedulerWorkType::PublishRow:
+      return "scheduler_publish_row_ms";
+    default:
+      return "scheduler_unknown_ms";
+    }
   }
 
   static void clearSampleStateLocked(GlobalPerfState& state) {
@@ -93,6 +164,8 @@ namespace {
     state.benchmarkSampleStartNs = 0;
     state.sampleSearchLoops.clear();
     state.sampleSchedulerBusyIntervals.clear();
+    for(int i = 0; i < NUM_SCHEDULER_WORK_TYPES; i++)
+      state.sampleSchedulerWork[i].clear();
     for(int i = 0; i < NUM_STREAM_TYPES; i++) {
       state.sampleStreamTasks[i].clear();
       state.sampleLastStreamEndNs[i].assign((size_t)std::max(0, state.numInferenceSlots), 0);
@@ -104,6 +177,8 @@ namespace {
     state.searchLoopWaitMs.clear();
     state.schedulerBusySeconds = 0.0;
     state.schedulerTotalSeconds = 0.0;
+    for(int i = 0; i < NUM_SCHEDULER_WORK_TYPES; i++)
+      state.schedulerWorkMs[i].clear();
     for(int i = 0; i < NUM_STREAM_TYPES; i++) {
       state.streamActiveSeconds[i] = 0.0;
       state.streamCapacitySeconds[i] = 0.0;
@@ -269,6 +344,13 @@ void GlobalPerfProfile::endBenchmarkSample() {
       g_state.schedulerTotalSeconds += trimmedDurationSeconds;
     }
 
+    for(int i = 0; i < NUM_SCHEDULER_WORK_TYPES; i++) {
+      for(const TimedValue& sample: g_state.sampleSchedulerWork[i]) {
+        if(sample.eventNs >= trimmedStartNs && sample.eventNs <= trimmedEndNs)
+          g_state.schedulerWorkMs[i].push_back(sample.valueMs);
+      }
+    }
+
     for(int i = 0; i < NUM_STREAM_TYPES; i++) {
       if(g_state.numInferenceSlots > 0)
         g_state.streamCapacitySeconds[i] += trimmedDurationSeconds * (double)g_state.numInferenceSlots;
@@ -314,6 +396,19 @@ void GlobalPerfProfile::recordSchedulerBusySpan(int64_t startNs, int64_t endNs) 
   g_state.sampleSchedulerBusyIntervals.push_back(TimedInterval{startNs, endNs});
 }
 
+void GlobalPerfProfile::recordSchedulerWork(SchedulerWorkType type, double durationMs) {
+  if(!isEnabled() || durationMs < 0.0)
+    return;
+
+  lock_guard<mutex> lock(g_state.stateMutex);
+  if(!g_state.benchmarkSampleActive)
+    return;
+  g_state.sampleSchedulerWork[schedulerWorkTypeIndex(type)].push_back(TimedValue{
+    nowSteadyNs(),
+    durationMs
+  });
+}
+
 void GlobalPerfProfile::recordCudaStreamTask(
   CudaStreamType type,
   int streamIdx,
@@ -353,6 +448,7 @@ string GlobalPerfProfile::makeReport() {
   vector<double> searchWaitMs;
   double schedulerBusySeconds = 0.0;
   double schedulerTotalSeconds = 0.0;
+  array<vector<double>, NUM_SCHEDULER_WORK_TYPES> schedulerWorkMs;
   array<double, NUM_STREAM_TYPES> streamActiveSeconds;
   array<double, NUM_STREAM_TYPES> streamCapacitySeconds;
   array<vector<double>, NUM_STREAM_TYPES> streamSubmitWaitMs;
@@ -363,6 +459,7 @@ string GlobalPerfProfile::makeReport() {
     searchWaitMs = g_state.searchLoopWaitMs;
     schedulerBusySeconds = g_state.schedulerBusySeconds;
     schedulerTotalSeconds = g_state.schedulerTotalSeconds;
+    schedulerWorkMs = g_state.schedulerWorkMs;
     streamActiveSeconds = g_state.streamActiveSeconds;
     streamCapacitySeconds = g_state.streamCapacitySeconds;
     streamSubmitWaitMs = g_state.streamSubmitWaitMs;
@@ -378,6 +475,12 @@ string GlobalPerfProfile::makeReport() {
     schedulerTotalSeconds - schedulerBusySeconds,
     schedulerTotalSeconds
   ) << "\n";
+  for(int i = 0; i < NUM_SCHEDULER_WORK_TYPES; i++) {
+    out << formatPercentileLine(
+      schedulerWorkTypeLabel(static_cast<SchedulerWorkType>(i)),
+      schedulerWorkMs[i]
+    ) << "\n";
+  }
   out << formatShareLine("h2d_stream_occupancy", streamActiveSeconds[0], streamCapacitySeconds[0]) << "\n";
   out << formatShareLine("infer_stream_occupancy", streamActiveSeconds[1], streamCapacitySeconds[1]) << "\n";
   out << formatShareLine("d2h_stream_occupancy", streamActiveSeconds[2], streamCapacitySeconds[2]) << "\n";
