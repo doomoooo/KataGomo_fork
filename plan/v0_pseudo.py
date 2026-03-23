@@ -139,10 +139,12 @@ async def infer_coro(handle):
         cuda_set_device(gpu.id)
         device_mem = gpu.device_mem[stream.id]
         event = cuda_memcpy_async(device_mem, range(batch), handle.host_mem, stream)
+        # 以 v0.md 的 completion-point 顺序为准：
+        # D2H 真正完成后，再更新 estimate / timeline / search target。
+        await event_complete(event)
         update_gpu_estimate()
         reconcile_gpu_timeline()
         update_search_nn_target_num()
-        await event_complete(event)
     
     gpu = gpus[handle.slot.gpu_id]
     stream = gpu.streams[handle.slot.stream_id]
