@@ -52,6 +52,7 @@
 GPU 侧设计必须同时满足以下约束：
 
 - TensorRT-only fast path 允许存在，而且可以 backend-specific。
+- 必须支持异构多卡，不能假设所有 GPU 共享同一个 batch size、slot 数或 CUDA stream 配置。
 - 搜索协程仍然只有一个 yield 点，GPU 侧不能再引入第二个搜索侧挂起点。
 - GPU completion 对搜索侧的时序必须是：
   1. 更新 GPU 侧时间估计
@@ -107,7 +108,7 @@ NNRequestLayer::submit(request)
 
 职责：
 
-- 读取配置，创建所有 canonical GPU 的 runtime
+- 读取 `per-GPU` 配置，创建所有 canonical GPU 的 runtime
 - 暴露给 `NNRequestLayer` 的 backend submit 接口
 - 负责关闭、drain、错误传播
 
@@ -188,6 +189,41 @@ NNRequestLayer::submit(request)
 - 当前 batch 的时间样本元数据
 
 这样控制面只看状态，不必自己做每一行的 CPU 工作。
+
+#### 6.4.1 `GpuDeviceConfig`
+
+当前基线里，很多 TensorRT 关键参数仍然偏向“全局统一值”，例如：
+
+- `maxBatchSize`
+- `currentBatchSize`
+- `backendNumThreads`
+- `gpuIdxByServerThread`
+
+这在异构多卡环境里不够用。
+
+本版明确要求引入显式的 `GpuDeviceConfig`：
+
+```cpp
+struct GpuDeviceConfig {
+  int canonicalGpuIdx;
+  int maxBatchSize;
+  int preferredBatchSize;
+  int numInferSlots;
+  int packWorkers;
+  int postWorkers;
+};
+```
+
+其中：
+
+- `maxBatchSize / preferredBatchSize` 必须允许每张 GPU 不同
+- `numInferSlots` 代表该 GPU 上并行 TRT execution context 的数量
+- 第一阶段仍保持“每个 slot = 1 个 H2D stream + 1 个 infer stream + 1 个 D2H stream”
+
+因此用户真正配置的“每张卡不同 cudaStreams”，在架构上应表现为：
+
+- 不同 GPU 允许配置不同的 `numInferSlots`
+- 从而总 stream 数按 GPU 各自展开，而不是全局统一
 
 #### 6.5 `PackExecutor`
 
@@ -365,14 +401,73 @@ GPU 侧内部至少需要三类 scheduler：
 - 再发布新目标
 - 再唤醒搜索协程
 
-### 12. 多 GPU 扩展结论
+### 12. 异构多卡与多 GPU 扩展
+
+本版明确把异构多卡作为一等场景，而不是额外兼容项。
+
+例如当前环境如果是：
+
+- GPU 0: `5090D`
+- GPU 1: `4090`
+- GPU 2: `4090`
+
+那么设计上必须允许：
+
+- `5090D` 使用更大的 `preferredBatchSize`
+- `5090D` 使用更多 `numInferSlots`
+- `4090` 采用不同的 batch/slot 配置
+
+不能再使用：
+
+- 一个全局 `currentBatchSize`
+- 一个“所有 GPU 同构”的统一工作模型
+
+#### 12.1 全局目标如何从多张卡汇总
+
+异构多卡下，搜索侧看到的全局需求，不应来自某张“代表 GPU”的时间模型。
+
+正确做法是：
+
+- 每个 `GpuDeviceRuntime` 独立维护自己的 `TimingModel`
+- 每个 GPU 独立预测自己各 slot 的下一批 `ready-to-publish` 时间
+- 全局目标生成器对所有 GPU 的预测完成点做合并
+
+也就是说，全局需求模型的输入应是：
+
+- `schedule_gpu0(t)`
+- `schedule_gpu1(t)`
+- `schedule_gpu2(t)`
+
+而不是一个伪造的平均 GPU。
+
+这样：
+
+- 更快的 `5090D` 会自然贡献更密集的完成时刻
+- 它也会自然吃下更多 request
+- 两张 `4090` 则按各自能力参与，不需要被强行拉成和 `5090D` 一样的 batch/slot 策略
+
+#### 12.2 控制面拓扑
+
+异构多卡下，正确拓扑仍然是：
+
+- 一个 canonical GPU 一个 `GpuDeviceRuntime`
+
+但它们的配置不再相同。
+
+每个 GPU 自己维护：
+
+- 自己的 `GpuDeviceConfig`
+- 自己的 slot 集合
+- 自己的 buffer 池
+- 自己的时间模型
+- 自己的 pack/post 数据面规模
 
 本版明确反对继续保留“一个全局 scheduler 线程照看所有 GPU”的结构。
 
 正确扩展方向应是：
 
 - 一个 canonical GPU 一个 `GpuDeviceRuntime`
-- 每个 GPU 自己维护：
+- 每个 GPU 自己按自己的配置维护：
   - 控制 lane
   - slot 集合
   - buffer 池
@@ -405,9 +500,11 @@ GPU 侧内部至少需要三类 scheduler：
 
 1. 当前单线程 TensorRT scheduler 的根本问题，不是“它是单线程”，而是“它混合了承担控制面和 CPU 数据面”。
 2. GPU 侧必须拆成 per-GPU 串行控制面 + 并行 pack/post 数据面。
-3. 搜索侧看到的仍然只是一条 `submit() -> sender<NNEvalResult>` 边界。
-4. GPU completion 的模型更新点，应对齐“batch 全部 row 可 publish”的时刻，而不是只看 raw infer kernel 结束。
-5. 目标发布继续采用全局累计计数模型，而不是回退到局部 outstanding target。
+3. 异构多卡是硬约束，batch size / slot 数 / stream 数都必须支持 `per-GPU` 配置。
+4. 搜索侧看到的仍然只是一条 `submit() -> sender<NNEvalResult>` 边界。
+5. GPU completion 的模型更新点，应对齐“batch 全部 row 可 publish”的时刻，而不是只看 raw infer kernel 结束。
+6. 全局目标必须由多张卡各自的时间表合并得到，而不是伪造一个统一 GPU 模型。
+7. 目标发布继续采用全局累计计数模型，而不是回退到局部 outstanding target。
 
 ### 15. `v2` 需要继续细化的问题
 
@@ -418,3 +515,4 @@ GPU 侧内部至少需要三类 scheduler：
 - `BatchBuffer` 的最小状态集合是什么，哪些状态可以合并
 - `NNEvalResult` 的 finalize 有多少应该留在 GPU 侧，多少应回到搜索协程恢复后执行
 - 当前 `trtPackInputRow / trtUnpackOutputRow` 的 CPU 代价是否需要进一步拆成更细颗粒
+- `GpuDeviceConfig` 的最终来源应是配置文件、自动探测，还是两者结合
