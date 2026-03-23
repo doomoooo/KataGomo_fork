@@ -14,10 +14,10 @@
 - 单-yield 搜索协程
 - GPU completion 先重估目标、后唤醒协程
 
-但在真正实现前，还有两类边界情况必须先定规则：
+但在真正实现前，还有两类情况必须先定清楚：
 
 1. 窗口之间发生重叠时，目标数量应如何更新。
-2. 冷启动阶段无法打满 batch 时，GPU 和搜索侧应如何操作。
+2. 冷启动阶段看起来像“无法打满 batch”的情况，是否真的需要单独策略。
 
 这份文档只回答这两件事。
 
@@ -129,34 +129,50 @@ struct SearchSharedState {
 
 ### 3. 边界情况 B：冷启动时无法打满 batch
 
-#### 3.1 问题
+本节在复核 `v0` 之后，结论已经修正为：
 
-冷启动阶段天然缺少两类信息：
+- 这不是一个独立边界条件
+- 不需要为它引入专门的 warmup 调度策略
+- 真正需要额外处理的，只有估计器初值
 
-- GPU 侧还没有稳定的 infer 时间估计
-- 搜索侧还没有稳定的 `playoutCpuMs / requestSuccessProb`
+#### 3.1 重新审视问题
 
-这会带来一个非常直接的问题：
+上一版把冷启动当成一个特殊难题，隐含前提是：
 
-- 如果坚持“必须等满 batch 才 launch”，系统可能根本拿不到第一批样本
-- 如果完全放任 partial batch，又可能把初始估计带偏
+- GPU 调度器在 batch 不够满时，可能会继续等待
 
-因此冷启动不能沿用稳态策略。
+但这和 `v0` 想要的语义并不一致。
 
-#### 3.2 决策
+按照当前冻结的 GPU 侧规则：
 
-本版明确采用“两阶段策略”：
+- 如果 GPU 上仍有正在运行的 infer，那么继续等待新的 request，以便形成更合适的 batch
+- 如果 GPU 当前空闲，那么只要有 request ready，就立即接受当前 batch，不要求满 batch
 
-1. `bootstrap / warmup` 阶段
-2. `steady-state` 阶段
+在这条规则下，冷启动并不会卡住。
 
-冷启动阶段允许 partial batch，而且必须允许；否则无法破局。
+#### 3.2 正确结论
 
-#### 3.3 冷启动阶段的三个规则
+冷启动阶段的 partial batch 不是例外，而是正常规则的自然结果。
 
-##### 规则 1：所有估计器都要有先验值
+只要满足：
 
-`GammaEstimate` 不能从“未知”开始。
+- 至少有一个 GPU stream 当前空闲
+- ready queue 中至少有 1 个 request
+
+那么第一批 infer 就应该立即发出，即使 batch size 只有 1。
+
+因此：
+
+- 不需要单独的 `bootstrap / warmup` 调度模式
+- 不需要 `effectiveBatchGoal`
+- 不需要 `coldStartQueueDelayMs`
+- 也不需要一套“冷启动时先宽松、稳态时再收紧”的 batch 发射判定
+
+#### 3.3 冷启动真正需要的只有一件事：估计器初值
+
+虽然不需要单独调度模式，但冷启动仍然缺少历史样本。
+
+因此 `GammaEstimate` 仍然要有先验值。
 
 至少需要给出：
 
@@ -175,78 +191,31 @@ struct SearchSharedState {
 - `initialRequestSuccessProb` 不能是 `0`
 - `initialInferMs` 不能是未定义
 
-否则 target 公式会在启动时退化。
+否则第一轮目标估计会退化成未定义。
 
-##### 规则 2：冷启动使用 `effectiveBatchGoal`，不是名义满 batch
+这里尤其要注意：
 
-冷启动阶段不直接把 `preferredBatchSize` 当成硬目标，而是引入：
+- `initialInferMs` 的作用不是驱动“等满 batch”
+- 而是在第一批真实 completion 到来之前，给 GPU 时间模型一个保守的服务时间先验
 
-```cpp
-effectiveBatchGoal = f(warmupProgress)
-```
+也就是说，冷启动的第一轮因果链应当是：
 
-其中：
+1. GPU 侧看到空闲 stream，因此可用时间表里天然有一个 `t = 0` 的槽位。
+2. 搜索侧根据当前共享估计，开始生成新的 NN request。
+3. 只要 ready queue 出现第一个 request，空闲 GPU 就立即发出第一批 infer，即使 batch 不满。
+4. 第一批 completion 返回后，`initialInferMs` 开始被真实样本替换。
 
-- 刚启动时 `effectiveBatchGoal = 1`
-- 随着 GPU 样本和搜索样本增多，逐步向 `preferredBatchSize` 拉升
+#### 3.4 为什么这和 v0 更一致
 
-第一阶段推荐最简单的实现：
+这版修正后反而更贴近 `v0`：
 
-```text
-warmupProgress = clamp(min(gpuSamples, searchSamples) / warmupSampleCount, 0, 1)
-effectiveBatchGoal = 1 + floor((preferredBatchSize - 1) * warmupProgress)
-```
-
-这意味着：
-
-- 第一个 batch 可以合法是 size 1
-- 第二阶段可能是 size 2/3/4...
-- 样本足够后再回到满 batch 目标
-
-##### 规则 3：冷启动不能无限等待“更满一点”
-
-即使 `effectiveBatchGoal > readyRequests`，也不能无限等待。
-
-因此需要一个冷启动下的 partial launch 条件：
-
-- 若某个 infer stream 空闲
-- 且已有至少 1 个 ready request
-- 且满足以下之一：
-  - `readyRequests >= effectiveBatchGoal`
-  - `oldestReadyAgeMs >= coldStartQueueDelayMs`
-
-则允许 launch 当前 partial batch。
-
-这条规则的本质是：
-
-- 冷启动时优先拿样本
-- 稳态时优先逼近满 batch
-
-#### 3.4 何时退出冷启动
-
-本版先定义一个明确但简单的退出条件：
-
-- `gpuTimingSamples >= warmupSampleCount`
-- `searchPlayoutSamples >= warmupSampleCount`
-
-二者都满足之后，切到稳态策略：
-
-- `effectiveBatchGoal = preferredBatchSize`
-- 按正常窗口模型重估 `targetOutstandingNN`
-- partial launch 只保留正常的延迟/超时兜底，不再走 bootstrap 宽松规则
-
-#### 3.5 为什么这和 v0 相容
-
-这套策略仍然满足 `v0`：
-
-- 搜索协程的行为规则没变
+- 搜索协程的行为规则完全不变
 - GPU completion 仍然是唯一的重估时钟
-- 唯一变化是：冷启动时 GPU 侧使用更保守的 batch 目标和更宽松的 launch 条件
+- GPU 调度没有额外 warmup 分支，只有一条统一规则：
+  - 忙时等待更好的 batch
+  - 闲时立即接受当前 batch
 
-也就是说：
-
-- `v0` 的主架构不变
-- 只是 target 模型在 warmup 阶段采用特化版本
+因此，冷启动不是单独模式，而是正常调度规则在“样本仍很少”这一状态下的自然表现。
 
 ### 4. 对 v1 的直接补充
 
@@ -255,13 +224,10 @@ effectiveBatchGoal = 1 + floor((preferredBatchSize - 1) * warmupProgress)
 1. `SearchSharedState` 的 `epoch` 代表“当前权威窗口版本”，不是累加窗口队列。
 2. `targetOutstandingNN` 每次都按全量状态重算并覆盖，不做 delta 累加。
 3. `GammaEstimate` 需要支持初始化先验值。
-4. `TensorRTRuntime::TimingModel` 除了正式估计外，还需要维护：
-   - `gpuTimingSamples`
-   - `warmupProgress`
-   - `effectiveBatchGoal`
-5. `TensorRTRuntime` 的 launch 条件要区分：
-   - warmup 阶段
-   - steady-state 阶段
+4. `TensorRTRuntime::TimingModel` 不需要额外的 warmup batch 目标状态。
+5. `TensorRTRuntime` 的 batch 发射规则保持单一语义：
+   - 有运行中 infer 时，可以等待更多 request
+   - GPU 空闲时，只要有 ready request 就立即发射
 
 ### 5. `v2` 需要细化的问题
 
@@ -270,6 +236,5 @@ effectiveBatchGoal = 1 + floor((preferredBatchSize - 1) * warmupProgress)
 - completion 串行化路径放在 `TensorRTRuntime` 的哪个具体对象里
 - `epoch` 覆盖时搜索协程需要哪些最小同步保证
 - `GammaEstimate` 是否要显式暴露 sample count
-- `effectiveBatchGoal` 的爬坡函数是否需要非线性版本
-- `coldStartQueueDelayMs` 应该是固定值、相对 `inferMs` 的倍数，还是自适应值
-
+- `initialInferMs` 应该来自静态配置、机型配置，还是历史 profile
+- GPU “忙时可等待，闲时立即发射”在多 stream 下的精确定义应放在哪个对象里
