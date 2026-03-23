@@ -29,11 +29,6 @@ cur_hid = 0
 cur_hid_lock: mutex
 infer_handles: Array[InferHandle]
 
-# 动态更新的 recent_slot，更新时间点在任意 infer launch 和 finish
-recent_slot: Slot = (0, 0) # 需要是一个合法初值。这里只是示意。gpu 0 不一定在。
-# 保证 recent_slot 和实际 GPU 状态原子更新的锁。
-recent_slot_lock: mutex
-
 def main():
     # infer_handles 保证能容纳三倍 GPU 上最高并行量的位置数量。
     # search_nn_target_num 最多只会比 search_nn_current_num 多一倍任务总量（否则就越过了一个预测周期），所以三倍是安全的。
@@ -81,13 +76,13 @@ async def playout_gpu(data)
                 continue
             cur_hid_lock.unlock()
             if cur_handle.cur_row == 0: 
-                with recent_slot_lock:
-                    cur_handle.slot = recent_slot
+                cur_handle.slot = get_recent_slot(gpu_timeline)
                 cur_handle.ready.resize(gpus[cur_handle.slot.gpu_id].max_batch, False)
                 cur_handle.seal = False
             cur_row = cur_handle.cur_row
             cur_handle.cur_row += 1
             if cur_handle.cur_row == gpus[cur_handle.slot.gpu_id].max_batch:
+                reserve_gpu_timeline()
                 cur_handle.seal = True
             break
     if cur_row == 0:
@@ -138,8 +133,6 @@ async def infer_coro(handle):
         cuda_set_device(gpu.id)
         graph = gpu.graphs[stream.id][batch]
         event = cuda_graph_launch_async(graph, stream)
-        update_gpu_estimate() # 如果同一个 GPU 上有其它活动流，多启动一个流回压缩其它流的工作效率。所以需要更新。
-        update_recent_slot()
         await event_complete(event)
         
     async def d2h(handle, batch, gpu, stream):
@@ -147,11 +140,9 @@ async def infer_coro(handle):
         device_mem = gpu.device_mem[stream.id]
         event = cuda_memcpy_async(device_mem, range(batch), handle.host_mem, stream)
         update_gpu_estimate()
-        update_gpu_idle_state() # 这个位置可以获得所有 GPU 空闲的消息。
-        update_recent_slot()
+        reconcile_gpu_timeline()
         update_search_nn_target_num()
         await event_complete(event)
-        
     
     gpu = gpus[handle.slot.gpu_id]
     stream = gpu.streams[handle.slot.stream_id]
@@ -164,15 +155,15 @@ async def infer_coro(handle):
         with handle.lock:
             row = handle.cur_row
             if gpu.idle: # 有空闲 gpu，需要立即启动。给当前 handle 封顶，让后续的请求去下一个 handle。
+                if not handle.seal:
+                    reserve_gpu_timeline() # seal 当前 batch，用当前 estimate 把这次 workload 预先登记进 timeline。
                 handle.seal = True
-            if row == max_batch:
-                handle.seal = True
-            is_sealed = handle.seal
+            should_break = handle.seal
         if row > row_low:
             await ready(handle, range(row_low, row))
             h2d_event = h2d(handle, range(row_low, row))
             row_low = row
-        if is_sealed:
+        if should_break:
             break
     await event_complete(h2d_event) # 只要最后一次 event 完成，就说明前面的都完成了。
     await launch(handle, row, gpu, stream)
