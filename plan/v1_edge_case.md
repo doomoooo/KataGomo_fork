@@ -21,37 +21,51 @@
 
 这份文档只回答这两件事。
 
-### 2. 边界情况 A：窗口重叠
+### 2. 边界情况 A：窗口重叠与少量超发
 
 #### 2.1 问题
 
 `v1` 里已经定义：
 
 - 每次 GPU completion 之后，都会发布一个新的 `epoch`
-- 并基于新的时间估计计算下一窗口的 `targetOutstandingNN`
+- 并基于新的时间估计计算下一窗口的需求目标
 
-真正实现时会遇到两个重叠来源：
+真正实现时会遇到两类并发事实：
 
-1. 多个 infer stream 的完成时间天然交错。
-2. 上一个窗口尚未“自然结束”时，新的 completion 已经到来并要求重估。
+1. 多个 infer stream 的完成时间天然交错，导致窗口可能在上一窗口尚未“自然耗尽”时就被覆盖。
+2. 搜索协程在单次 playout 内不可打断，因此达到目标之后，仍可能有少量已经在途的 playout 再额外产出一两个 NN request。
 
-如果处理不清楚，就会出现两种错误：
+如果处理不清楚，就会出现三种错误：
 
 - 把旧窗口和新窗口的目标叠加，导致重复放量
 - 让旧窗口继续驱动搜索，导致新窗口发布后仍按过期目标生成 request
+- 把少量额外 NN request 视为异常，试图回滚或从局部 target 中“扣掉”
 
 #### 2.2 决策
 
 本版明确：
 
 - 窗口不是累加对象，而是“最新 completion 发布的权威快照”
-- 新窗口永远覆盖旧窗口，不对旧窗口做 delta 累加
-- 搜索侧看到的始终只有“当前权威窗口”
+- 目标不再用局部 `outstanding target` 表示
+- 正确性的权威状态改为“全局累计计数 + 当前窗口发布的绝对目标水位线”
 
-也就是说：
+也就是说，共享区里与 NN 需求相关的主状态应是：
 
-- `targetOutstandingNN` 是一个 stock target
-- 不是“本轮新增还要补多少”的增量 target
+- `issuedNNEvalCount`
+- `completedNNEvalCount`
+- `targetIssuedNNEvalCount`
+
+其中：
+
+- `issuedNNEvalCount` 表示全局累计已经逻辑提交的 NN request 数量
+- `completedNNEvalCount` 表示全局累计已经 publish completion 的 NN request 数量
+- `targetIssuedNNEvalCount` 表示当前窗口发布的绝对目标水位线
+
+搜索侧真正的放量条件是：
+
+- `issuedNNEvalCount < targetIssuedNNEvalCount`
+
+而不是比较一个局部的 `outstandingNN` 是否达到局部目标。
 
 #### 2.3 更新规则
 
@@ -62,41 +76,73 @@ GPU completion 事件必须经过单一串行点处理。第一阶段就直接�
 
 每处理一次 completion，按以下顺序执行：
 
-1. 读取当前 GPU 时钟、各 stream 新的可用时间、当前共享区统计值。
-2. 用最新快照从头计算新的 `targetOutstandingNN`。
-3. `epoch += 1`
-4. 覆盖写入：
-   - `targetOutstandingNN`
-   - `generationOpen`
-   - 任何本窗口附带的 metadata
-5. 再发布等待中的 completion sender
+1. 读取当前 GPU 时钟、各 stream 新的可用时间、以及共享区统计值。
+2. 更新 GPU 时间估计，并计算新的 `desiredOutstandingNN`。
+3. 递增 `completedNNEvalCount`。
+4. 计算新的：
+   - `targetIssuedNNEvalCount = completedNNEvalCount + desiredOutstandingNN`
+   - `generationOpen = (issuedNNEvalCount < targetIssuedNNEvalCount)`，若保留该提示位
+5. 发布新的 `epoch`。
+6. 再发布等待中的 completion sender。
 
 因此，窗口重叠时的规则非常简单：
 
 - 旧窗口失效
 - 新窗口取代它
-- 搜索侧永远只对当前 `epoch` 负责
+- 搜索侧永远只对当前 `epoch` 对应的绝对目标水位线负责
 
 #### 2.4 搜索侧如何响应窗口覆盖
 
 搜索协程需要遵守以下规则：
 
 - 任何“是否继续生成新 request”的决策，只能在 playout 边界读取共享区
-- 任何“是否还能再放一个 replacement”的决策，都必须以当前 `epoch` 的值为准
+- 任何“是否还能再放一个 replacement”的权威判断，都必须基于：
+  - 当前 `issuedNNEvalCount`
+  - 当前 `targetIssuedNNEvalCount`
 - 如果协程在等待 NN completion 期间窗口被覆盖，它不需要立即被取消
 - 它只需要在恢复后：
   - `apply_eval(...)`
-  - 再读取最新 `epoch / generationOpen / targetOutstandingNN`
+  - 再读取最新 `epoch / issuedNNEvalCount / targetIssuedNNEvalCount`
   - 然后按新窗口规则继续或退出
 
 因此，窗口覆盖只影响未来决策，不追溯撤销已经提交的 request。
 
-#### 2.5 为什么不做增量叠加
+#### 2.5 少量额外 NNEval 如何处理
+
+达到目标后出现少量额外 NN request，不是错误，而是单-yield 协程模型的自然结果。
+
+具体语义应当是：
+
+- 某个 playout 在边界产出 request 时，先递增 `issuedNNEvalCount`
+- 如果这次递增已经达到或超过 `targetIssuedNNEvalCount`，它可以关闭 `generationOpen` 这一提示位
+- 但那些已经在本地 CPU 相位中运行、尚未走到边界的其它 playout，仍可能再产出少量 request
+
+于是可能出现：
+
+- `issuedNNEvalCount > targetIssuedNNEvalCount`
+
+这不是异常，也不需要回滚。它表示：
+
+- 当前系统已经短暂超前于本窗口的目标水位线
+
+接下来的处理也不需要特殊分支：
+
+- 搜索侧因为 `issued >= targetIssued`，不会再主动生成新的 request
+- 下一次 GPU completion 会基于最新全局累计状态重新发布新的绝对目标水位线
+- 如果新的 `targetIssuedNNEvalCount` 仍然低于当前 `issuedNNEvalCount`，那就继续保持关闭，直到完成计数追上或新窗口提高目标
+
+因此，“窗口重叠”和“少量超发”是可以统一处理的：
+
+- 两者都不做回滚
+- 两者都通过“最新窗口覆盖 + 全局累计计数”自然吸收
+
+#### 2.6 为什么不做增量叠加
 
 不采用“新窗口对旧窗口做 +delta / -delta”的原因是：
 
 - 旧窗口本身就可能已经过时
 - 多 stream completion 的先后顺序会让 delta 语义非常脆弱
+- 少量超发也会使“旧窗口剩余额度”这种局部概念变得不可靠
 - 真正可靠的输入是“当前时刻的完整系统状态”，不是上一个窗口的残量
 
 所以更稳妥的做法是：
@@ -105,16 +151,17 @@ GPU completion 事件必须经过单一串行点处理。第一阶段就直接�
 - 基于最新全量状态重算
 - 用新结果整体覆盖旧窗口
 
-#### 2.6 对共享区的要求
+#### 2.7 对共享区的要求
 
 为支持这一点，共享区至少要有：
 
 ```cpp
 struct SearchSharedState {
   std::atomic<uint64_t> epoch;
-  std::atomic<int> targetOutstandingNN;
+  std::atomic<uint64_t> issuedNNEvalCount;
+  std::atomic<uint64_t> completedNNEvalCount;
+  std::atomic<uint64_t> targetIssuedNNEvalCount;
   std::atomic<bool> generationOpen;
-  std::atomic<int> outstandingNN;
   ...
 };
 ```
@@ -222,10 +269,16 @@ struct SearchSharedState {
 基于上述边界规则，`v1` 需要被理解为还隐含以下约束：
 
 1. `SearchSharedState` 的 `epoch` 代表“当前权威窗口版本”，不是累加窗口队列。
-2. `targetOutstandingNN` 每次都按全量状态重算并覆盖，不做 delta 累加。
-3. `GammaEstimate` 需要支持初始化先验值。
-4. `TensorRTRuntime::TimingModel` 不需要额外的 warmup batch 目标状态。
-5. `TensorRTRuntime` 的 batch 发射规则保持单一语义：
+2. 正确性的权威状态应是：
+   - `issuedNNEvalCount`
+   - `completedNNEvalCount`
+   - `targetIssuedNNEvalCount`
+   而不是局部 `outstanding target`。
+3. `targetIssuedNNEvalCount` 每次都按全量状态重算并覆盖，不做 delta 累加。
+4. 少量额外 NN request 是允许的，不能回滚；它们必须被计入全局累计计数。
+5. `GammaEstimate` 需要支持初始化先验值。
+6. `TensorRTRuntime::TimingModel` 不需要额外的 warmup batch 目标状态。
+7. `TensorRTRuntime` 的 batch 发射规则保持单一语义：
    - 有运行中 infer 时，可以等待更多 request
    - GPU 空闲时，只要有 ready request 就立即发射
 
@@ -237,4 +290,5 @@ struct SearchSharedState {
 - `epoch` 覆盖时搜索协程需要哪些最小同步保证
 - `GammaEstimate` 是否要显式暴露 sample count
 - `initialInferMs` 应该来自静态配置、机型配置，还是历史 profile
+- `generationOpen` 是否应保留为独立提示位，还是完全由计数比较即时导出
 - GPU “忙时可等待，闲时立即发射”在多 stream 下的精确定义应放在哪个对象里
