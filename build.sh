@@ -14,15 +14,18 @@ KATAGO_BIN="${KATAGO_BIN_PATH}"
 DEPLOY_DIR="$(dirname "${KATAGO_BIN}")"
 NUM_JOBS="${NUM_JOBS:-$(nproc)}"
 LOCAL_TOOLCHAIN_ROOT="${LOCAL_TOOLCHAIN_ROOT:-}"
+LOCAL_CMAKE_ROOT="${LOCAL_CMAKE_ROOT:-}"
 LOCAL_CC="${LOCAL_CC:-}"
 LOCAL_CXX="${LOCAL_CXX:-}"
 TOOLCHAIN_BASE_DIR="${TOOLCHAIN_BASE_DIR:-${SCRIPT_DIR}/.local/toolchains}"
 DOWNLOAD_BASE_DIR="${DOWNLOAD_BASE_DIR:-${SCRIPT_DIR}/.local/downloads}"
 PREFERRED_LLVM_VERSION="${PREFERRED_LLVM_VERSION:-22.1.1}"
+PREFERRED_CMAKE_VERSION="${PREFERRED_CMAKE_VERSION:-4.3.0}"
 MIN_CLANG_MAJOR="${MIN_CLANG_MAJOR:-20}"
 MIN_GCC_MAJOR="${MIN_GCC_MAJOR:-15}"
 ALLOW_OLD_COMPILER="${ALLOW_OLD_COMPILER:-0}"
 BOOTSTRAP_LLVM="${BOOTSTRAP_LLVM:-0}"
+BOOTSTRAP_CMAKE="${BOOTSTRAP_CMAKE:-0}"
 
 BASE_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fomit-frame-pointer"
 
@@ -52,6 +55,9 @@ Usage: $(basename "$0") [--help] [--bootstrap-llvm] [--llvm-version VERSION] [--
 
 Options:
   --help               Show this help message
+  --bootstrap-cmake    Download and unpack a local CMake
+  --cmake-version VER  CMake release used by --bootstrap-cmake (default: ${PREFERRED_CMAKE_VERSION})
+  --cmake-root DIR     Use a specific local CMake root instead of auto-discovery
   --bootstrap-llvm     Download and unpack a local LLVM toolchain
   --llvm-version VER   LLVM release used by --bootstrap-llvm (default: ${PREFERRED_LLVM_VERSION})
   --toolchain-root DIR Use a specific local toolchain root instead of auto-discovery
@@ -68,6 +74,20 @@ parse_args() {
             --bootstrap-llvm)
                 BOOTSTRAP_LLVM=1
                 shift
+                ;;
+            --bootstrap-cmake)
+                BOOTSTRAP_CMAKE=1
+                shift
+                ;;
+            --cmake-version)
+                [[ $# -ge 2 ]] || print_error "--cmake-version requires an argument"
+                PREFERRED_CMAKE_VERSION="$2"
+                shift 2
+                ;;
+            --cmake-root)
+                [[ $# -ge 2 ]] || print_error "--cmake-root requires an argument"
+                LOCAL_CMAKE_ROOT="$2"
+                shift 2
                 ;;
             --llvm-version)
                 [[ $# -ge 2 ]] || print_error "--llvm-version requires an argument"
@@ -122,6 +142,83 @@ find_latest_local_llvm_root() {
 
     find "${TOOLCHAIN_BASE_DIR}" -mindepth 1 -maxdepth 1 -type d -name 'llvm-*' -printf '%f\n' \
         | sort -V | tail -n 1
+}
+
+find_latest_local_cmake_root() {
+    if [[ ! -d "${TOOLCHAIN_BASE_DIR}" ]]; then
+        return 1
+    fi
+
+    find "${TOOLCHAIN_BASE_DIR}" -mindepth 1 -maxdepth 1 -type d -name 'cmake-*' -printf '%f\n' \
+        | sort -V | tail -n 1
+}
+
+ensure_local_cmake_tool() {
+    local version="$1"
+    local install_root="${TOOLCHAIN_BASE_DIR}/cmake-${version}"
+    local os
+    local arch
+    local asset
+    local url
+    local archive
+    local partial_archive
+    local tmp_extract
+    local extracted_root
+
+    if [[ -x "${install_root}/bin/cmake" ]]; then
+        print_info "CMake ${version} is already available at ${install_root}"
+        return 0
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        print_error "curl is required to bootstrap a local CMake"
+    fi
+
+    os="$(uname -s)"
+    arch="$(uname -m)"
+    case "${os}/${arch}" in
+        Linux/x86_64)
+            asset="cmake-${version}-linux-x86_64.tar.gz"
+            ;;
+        Linux/aarch64)
+            asset="cmake-${version}-linux-aarch64.tar.gz"
+            ;;
+        *)
+            print_error "Automatic CMake bootstrap is only implemented for Linux x86_64 and Linux aarch64"
+            ;;
+    esac
+
+    url="https://github.com/Kitware/CMake/releases/download/v${version}/${asset}"
+    archive="${DOWNLOAD_BASE_DIR}/${asset}"
+    partial_archive="${archive}.partial"
+    tmp_extract="${TOOLCHAIN_BASE_DIR}/.extract-cmake-${version}.$$"
+
+    mkdir -p "${TOOLCHAIN_BASE_DIR}" "${DOWNLOAD_BASE_DIR}"
+
+    if [[ ! -f "${archive}" ]]; then
+        if [[ -f "${partial_archive}" ]]; then
+            print_info "Resuming CMake ${version} download from ${partial_archive}"
+        else
+            print_info "Downloading CMake ${version} from ${url}"
+        fi
+        curl -L --fail --retry 5 --retry-all-errors -C - --output "${partial_archive}" "${url}"
+        mv "${partial_archive}" "${archive}"
+    else
+        print_info "Reusing downloaded archive ${archive}"
+    fi
+
+    print_info "Extracting CMake ${version} into ${install_root}"
+    rm -rf "${tmp_extract}" "${install_root}"
+    mkdir -p "${tmp_extract}"
+    tar -xzf "${archive}" -C "${tmp_extract}"
+    extracted_root="$(find "${tmp_extract}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    if [[ -z "${extracted_root}" ]]; then
+        rm -rf "${tmp_extract}"
+        print_error "Failed to extract CMake ${version}"
+    fi
+
+    mv "${extracted_root}" "${install_root}"
+    rm -rf "${tmp_extract}"
 }
 
 ensure_local_llvm_toolchain() {
@@ -275,10 +372,42 @@ resolve_local_toolchain_root() {
     fi
 }
 
+resolve_local_cmake_root() {
+    local latest_cmake_dir
+
+    if [[ -n "${LOCAL_CMAKE_ROOT}" ]]; then
+        return 0
+    fi
+
+    latest_cmake_dir="$(find_latest_local_cmake_root || true)"
+    if [[ -n "${latest_cmake_dir}" ]]; then
+        LOCAL_CMAKE_ROOT="${TOOLCHAIN_BASE_DIR}/${latest_cmake_dir}"
+        print_info "Auto-selected local CMake: ${LOCAL_CMAKE_ROOT}"
+    fi
+}
+
+select_cmake_bin() {
+    if [[ -n "${LOCAL_CMAKE_ROOT}" ]]; then
+        if [[ ! -x "${LOCAL_CMAKE_ROOT}/bin/cmake" ]]; then
+            print_error "Requested local CMake root does not contain bin/cmake: ${LOCAL_CMAKE_ROOT}"
+        fi
+        printf '%s' "${LOCAL_CMAKE_ROOT}/bin/cmake"
+        return 0
+    fi
+
+    if command -v cmake >/dev/null 2>&1; then
+        command -v cmake
+        return 0
+    fi
+
+    print_error "cmake was not found and no local CMake root was configured"
+}
+
 configure_and_build() {
     local build_dir="$1"
     local c_flags_release="$2"
     local cxx_flags_release="$3"
+    local selected_cmake=""
     local -a compiler_args=()
     local -a toolchain_linker_args=()
     local selected_cxx=""
@@ -354,10 +483,14 @@ configure_and_build() {
         fi
     fi
 
+    selected_cmake="$(select_cmake_bin)"
+    print_info "Using CMake: ${selected_cmake}"
+    print_info "CMake version: $("${selected_cmake}" --version | head -n 1)"
+
     rm -rf "${build_dir}"
     mkdir -p "${build_dir}"
     print_info "Configuring CMake in ${build_dir}"
-    cmake -S "${SCRIPT_DIR}/cpp" -B "${build_dir}" \
+    "${selected_cmake}" -S "${SCRIPT_DIR}/cpp" -B "${build_dir}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
         -DCMAKE_C_FLAGS_RELEASE="${c_flags_release}" \
@@ -374,7 +507,7 @@ configure_and_build() {
     fi
 
     print_info "Compiling KataGomo in ${build_dir} with ${NUM_JOBS} jobs"
-    cmake --build "${build_dir}" --parallel "${NUM_JOBS}"
+    "${selected_cmake}" --build "${build_dir}" --parallel "${NUM_JOBS}"
     if [ $? -ne 0 ]; then
         print_error "Compilation failed for ${build_dir}"
     fi
@@ -396,8 +529,13 @@ main() {
         ensure_local_llvm_toolchain "${PREFERRED_LLVM_VERSION}"
         LOCAL_TOOLCHAIN_ROOT="${TOOLCHAIN_BASE_DIR}/llvm-${PREFERRED_LLVM_VERSION}"
     fi
+    if [[ "${BOOTSTRAP_CMAKE}" == "1" ]]; then
+        ensure_local_cmake_tool "${PREFERRED_CMAKE_VERSION}"
+        LOCAL_CMAKE_ROOT="${TOOLCHAIN_BASE_DIR}/cmake-${PREFERRED_CMAKE_VERSION}"
+    fi
 
     resolve_local_toolchain_root
+    resolve_local_cmake_root
 
     print_info "Preparing build environment"
     mkdir -p "${BUILD_DIR}"
