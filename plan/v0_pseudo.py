@@ -15,6 +15,7 @@ class Slot:
 class InferHandle:
     cur_row: int = 0
     ready: vector<bool> # packed 
+    seal: bool = False
     slot: Slot
     host_mem: bytes
     complete: Awaitable
@@ -25,10 +26,11 @@ class Request:
 
 # infer handle 的环形队列    
 cur_hid = 0
+cur_hid_lock: mutex
 infer_handles: Array[InferHandle]
 
 # 动态更新的 recent_slot，更新时间点在任意 infer launch 和 finish
-recent_slot: Slot = [0, 0] # 需要是一个合法初值。这里只是示意。gpu 0 不一定在。
+recent_slot: Slot = (0, 0) # 需要是一个合法初值。这里只是示意。gpu 0 不一定在。
 # 保证 recent_slot 和实际 GPU 状态原子更新的锁。
 recent_slot_lock: mutex
 
@@ -48,16 +50,15 @@ def main():
 async def playout(node)
     if node is root and search_coro_pause:
         await search_coro_notice
-    
     expand_child()
     if can_expand_child:
-        playout(child) # 遵循目前的递归写法。如果有需要可以改成非递归。
+        await playout(child) # 遵循目前的递归写法。如果有需要可以改成非递归。
     elif need_nn_eval:
         search_nn_current_num += 1
         if search_nn_current_num >= search_nn_target_num:
             search_coro_pause = True
         this_thread.add_task(playout(root))
-        await gpu(data) # 需要进行一次 nn eval。为保证调度稳定，需保证返回时仍在相同线程。
+        await playout_gpu(data) # 需要进行一次 nn eval。为保证调度稳定，需保证返回时仍在相同线程。
         
     update(node)
     
@@ -71,18 +72,23 @@ async def playout(node)
     
 async def playout_gpu(data)
     # 找到第一个有空位的 infer_handle，并在同一个临界区内完成 row 预留。
+    cur_hid_lock.lock()
     while True:
         cur_handle = infer_handles[cur_hid]
         with cur_handle.lock:
-            if cur_handle.cur_row != 0 and cur_handle.cur_row == gpus[cur_handle.slot.gpu_id].max_batch: # 这个 infer batch 已经封顶
+            if cur_handle.seal:
                 cur_hid = next(cur_hid)
                 continue
+            cur_hid_lock.unlock()
             if cur_handle.cur_row == 0: 
                 with recent_slot_lock:
                     cur_handle.slot = recent_slot
                 cur_handle.ready.resize(gpus[cur_handle.slot.gpu_id].max_batch, False)
+                cur_handle.seal = False
             cur_row = cur_handle.cur_row
             cur_handle.cur_row += 1
+            if cur_handle.cur_row == gpus[cur_handle.slot.gpu_id].max_batch:
+                cur_handle.seal = True
             break
     if cur_row == 0:
         # 第一个用这个 infer_handle 的 playout，启动一下这个 infer_handle 的 infer 任务。
@@ -96,6 +102,13 @@ async def playout_gpu(data)
     await cur_handle.complete
     # 做后处理
     post_process(cur_handle.host_mem.get(cur_row), data)
+    # batch 完成后，cur_row 转为 gc counter。最后一个离开的协程负责复位 handle。
+    with cur_handle.lock:
+        cur_handle.cur_row -= 1
+        if cur_handle.cur_row == 0:
+            cur_handle.ready.fill(False)
+            cur_handle.seal = False
+            cur_handle.complete.reset()
     
     return data
 
@@ -106,7 +119,7 @@ async def infer_coro(handle):
         if event.is_finished:
             return
         await event_complete(event) # bump back task to infinite spining loop
-        
+            
     async def ready(handle, rows_range):
         for row in rows_range
             if not handle.ready[row]:
@@ -147,22 +160,23 @@ async def infer_coro(handle):
     row_low = 0
     
     while True:
-        is_idle = False
+        await sleep(0)
         with handle.lock:
             row = handle.cur_row
             if gpu.idle: # 有空闲 gpu，需要立即启动。给当前 handle 封顶，让后续的请求去下一个 handle。
-                is_idle = True
-                handle.cur_row = max_batch
-        await ready(handle, range(row_low, row))
-        h2d_event = h2d(handle, range(row_low, row))
-        row_low = row
-        if is_idle or row == max_batch:
+                handle.seal = True
+            if row == max_batch:
+                handle.seal = True
+            is_sealed = handle.seal
+        if row > row_low:
+            await ready(handle, range(row_low, row))
+            h2d_event = h2d(handle, range(row_low, row))
+            row_low = row
+        if is_sealed:
             break
     await event_complete(h2d_event) # 只要最后一次 event 完成，就说明前面的都完成了。
-    
     await launch(handle, row, gpu, stream)
     await d2h(handle, row, gpu, stream)
 
     handle.complete.notify_all()
-    handle.complete.reset()
     
