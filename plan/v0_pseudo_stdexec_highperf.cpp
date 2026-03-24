@@ -107,10 +107,18 @@ struct IntrusiveQueue {
 };
 
 struct LaneWakeEvent {
-  // 伪 awaitable：
-  // - 若队列已有工作则立即返回
-  // - 否则 park 当前 lane main loop
-  auto async_wait() -> /* awaitable<void> */ int;
+  // 无丢通知版本：
+  // - notify_one() 先 seq.fetch_add(1)，再做唤醒
+  // - waiter 先读 observed_seq，再检查队列是否为空
+  // - 若为空，则 async_wait(observed_seq)
+  // - async_wait() 只有在 seq 仍等于 observed_seq 时才真正 park
+  //
+  // 这样就算 push+notify 发生在“empty check”和“park”之间，
+  // async_wait(observed_seq) 也会因为看到 seq 已变化而立即返回，不会睡死。
+  std::atomic<uint32_t> seq{0};
+
+  uint32_t prepare_wait() const;
+  auto async_wait(uint32_t observed_seq) -> /* awaitable<void> */ int;
   void notify_one();
 };
 
@@ -143,6 +151,7 @@ struct PauseWaitNode {
   PauseWaitNode* next = nullptr;
   SearchLane* lane = nullptr;
   SearchPlayoutFrame* frame = nullptr;
+  uint32_t observed_resume_epoch = 0;
 };
 
 struct BatchDoneEvent {
@@ -167,16 +176,30 @@ struct BatchDoneEvent {
 };
 
 struct PauseGate {
+  // 每次 resume/notify_all 都先把 epoch 递增。
+  // waiter 只有在“自己观察到的 paused 状态”和“resume_epoch”都没变化时才允许 park。
+  std::atomic<uint32_t> resume_epoch{0};
   std::atomic<PauseWaitNode*> waiters{nullptr};
 
   // 若 paused_flag 已经是 false，则直接返回 false。
-  // 否则把 frame park 在 gate 上并返回 true。
+  // 否则：
+  // 1. 先读取 observed_epoch
+  // 2. 把 node.frame / node.lane / node.observed_resume_epoch 填好
+  // 3. 把 node 挂入 waiters
+  // 4. 再次检查 paused_flag 和 resume_epoch
+  // 5. 只有当 paused 仍为 true 且 resume_epoch 未变化时，才返回 true
+  //
+  // 也就是说，PauseGate 与 BatchDoneEvent 一样要求“双检查”协议，
+  // 避免 notify_all() 落在“观察 paused”和“真正 park”之间时丢唤醒。
   bool park_if_paused(std::atomic<bool>& paused_flag,
                       PauseWaitNode& node,
                       SearchLane& lane,
                       SearchPlayoutFrame& frame);
 
-  // 搜索可继续时，统一把所有 waiter frame 压回各自 lane。
+  // 搜索可继续时：
+  // - 先 resume_epoch.fetch_add(1)
+  // - 再 detach waiters 链表
+  // - 最后把所有 waiter frame 压回各自 lane
   void notify_all();
 };
 
@@ -362,7 +385,7 @@ struct Runtime {
 
 int max_batch_for(Runtime& rt, Slot slot);
 std::size_t total_stream_batch_capacity(std::vector<Gpu> const& gpus);
-bool gpu_is_idle(Gpu& gpu);
+bool slot_is_idle(Runtime& rt, Slot slot);
 Slot get_recent_slot(GpuTimeline& timeline);
 
 void update_gpu_estimate(Runtime& rt, InferHandle& handle, int batch_rows);
@@ -374,9 +397,14 @@ void* row_host_ptr(PinnedHostBuffer& mem, int row);
 void pre_process(NnInput& in, void* host_ptr);
 void post_process(void* host_ptr, NnOutput& out);
 
-CudaEvent h2d_async(InferHandle& handle, int row_low, int row_high, Gpu& gpu);
-CudaEvent infer_async(InferHandle& handle, int batch_rows, Gpu& gpu);
-CudaEvent d2h_async(InferHandle& handle, int batch_rows, Gpu& gpu);
+// 高性能版仍然必须保留 v0 的 slot 粒度：
+// slot = {gpu_id, stream_id}。
+//
+// 因此 infer 侧的 idle 检查、H2D、graph launch、D2H
+// 都必须以 slot 为参数，而不是只看 gpu。
+CudaEvent h2d_async(InferHandle& handle, int row_low, int row_high, Slot slot);
+CudaEvent infer_async(InferHandle& handle, int batch_rows, Slot slot);
+CudaEvent d2h_async(InferHandle& handle, int batch_rows, Slot slot);
 bool cuda_event_finished(CudaEvent const& ev);
 
 // ============================================================
@@ -693,9 +721,10 @@ auto search_lane_main(Runtime& rt, SearchLane& lane) -> exec::task<void> {
   spawn_root_frame(lane);
 
   for (;;) {
+    const uint32_t observed_seq = lane.work_ready.prepare_wait();
     SearchPlayoutFrame* frame = lane.runq.pop();
     if (frame == nullptr) {
-      co_await lane.work_ready.async_wait();
+      co_await lane.work_ready.async_wait(observed_seq);
       continue;
     }
     step_search_frame(rt, lane, *frame);
@@ -711,14 +740,14 @@ bool progress_active_handle(Runtime& rt, InferHandle& handle) {
     unpack_open_state(handle.open_state.load(std::memory_order_acquire));
   const uint32_t generation = s.generation;
 
-  Gpu& gpu = rt.gpus[handle.bound_slot.gpu_id];
+  const Slot slot = handle.bound_slot;
 
   switch (handle.stage) {
     case DriverStage::PumpOpen: {
       // ------------------------------------------------------
-      // 1. GPU idle 封 batch
+      // 1. 当前 slot idle 封 batch
       // ------------------------------------------------------
-      if (!s.sealed && gpu_is_idle(gpu)) {
+      if (!s.sealed && slot_is_idle(rt, slot)) {
         OpenStateView want = s;
         want.sealed = true;
 
@@ -742,7 +771,7 @@ bool progress_active_handle(Runtime& rt, InferHandle& handle) {
       if (now.claimed_rows > handle.pumped_rows &&
           handle.ready.all_ready(handle.pumped_rows, now.claimed_rows)) {
         handle.last_h2d_event =
-          h2d_async(handle, handle.pumped_rows, now.claimed_rows, gpu);
+          h2d_async(handle, handle.pumped_rows, now.claimed_rows, slot);
         handle.pumped_rows = now.claimed_rows;
       }
 
@@ -762,7 +791,7 @@ bool progress_active_handle(Runtime& rt, InferHandle& handle) {
       if (!cuda_event_finished(handle.last_h2d_event))
         return true;
 
-      handle.infer_done_event = infer_async(handle, handle.final_rows, gpu);
+      handle.infer_done_event = infer_async(handle, handle.final_rows, slot);
       handle.stage = DriverStage::WaitInfer;
       return true;
     }
@@ -771,7 +800,7 @@ bool progress_active_handle(Runtime& rt, InferHandle& handle) {
       if (!cuda_event_finished(handle.infer_done_event))
         return true;
 
-      handle.d2h_done_event = d2h_async(handle, handle.final_rows, gpu);
+      handle.d2h_done_event = d2h_async(handle, handle.final_rows, slot);
       handle.stage = DriverStage::WaitD2H;
       return true;
     }
@@ -812,7 +841,11 @@ auto infer_lane_main(Runtime& rt) -> exec::task<void> {
     }
 
     if (local.empty()) {
-      co_await rt.infer_lane.work_ready.async_wait();
+      const uint32_t observed_seq = rt.infer_lane.work_ready.prepare_wait();
+      if (!rt.infer_lane.activeq.empty()) {
+        continue;
+      }
+      co_await rt.infer_lane.work_ready.async_wait(observed_seq);
       continue;
     }
 
