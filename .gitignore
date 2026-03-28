@@ -33,10 +33,14 @@ cpp/tests/results/matchsgfs2/games.sgfs
 cpp/data/
 versions/
 cpp/build
+cpp/build-vscode
 cpp/out
 /build*
 !/build.sh
 !/build_pgo.sh
+.local
+third_party
+exp
 
 export_model_cuda.sh
 mixmodels.sh
