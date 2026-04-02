@@ -1,0 +1,91 @@
+device 1: NVIDIA GeForce RTX 4090 bus=0000:E1:00.0
+warmup=100 iterations=2000
+schemes=blocking,waiter,query,callback
+
+=== kernel_us=0 ===
+
+cudaEventSynchronize(caller)
+total_us                         avg=6.55       p50=6.47       p95=6.65       p99=6.97       max=27.37
+gpu_us                           avg=2.52       p50=2.34       p95=3.07       p99=3.07       max=19.46
+tax_us                           avg=4.03       p50=4.15       p95=4.49       p99=4.63       max=24.43
+
+cudaEventSynchronize(waiter_thread)
+total_us                         avg=13.92      p50=13.84      p95=14.36      p99=16.37      max=24.03
+gpu_us                           avg=2.54       p50=2.40       p95=3.07       p99=3.07       max=12.29
+tax_us                           avg=11.38      p50=11.35      p95=12.12      p99=12.75      max=21.98
+
+cudaEventQuery(busy_poll)
+total_us                         avg=6.52       p50=6.48       p95=6.62       p99=6.81       max=14.32
+gpu_us                           avg=2.45       p50=2.27       p95=3.07       p99=3.07       max=3.07
+tax_us                           avg=4.07       p50=4.24       p95=4.50       p99=4.61       max=12.27
+
+cudaLaunchHostFunc
+total_us                         avg=20.30      p50=20.01      p95=21.94      p99=27.34      max=113.17
+gpu_us                           avg=2.78       p50=2.94       p95=3.07       p99=4.22       max=25.73
+tax_us                           avg=17.52      p50=17.21      p95=19.06      p99=23.58      max=110.23
+
+=== kernel_us=10 ===
+
+cudaEventSynchronize(caller)
+total_us                         avg=16.49      p50=16.38      p95=16.82      p99=18.56      max=43.71
+gpu_us                           avg=12.41      p50=12.29      p95=13.06      p99=13.18      max=23.55
+tax_us                           avg=4.08       p50=4.06       p95=4.43       p99=4.85       max=31.42
+
+cudaEventSynchronize(waiter_thread)
+total_us                         avg=19.51      p50=19.38      p95=20.31      p99=22.31      max=30.17
+gpu_us                           avg=12.40      p50=12.29      p95=13.06      p99=13.22      max=16.70
+tax_us                           avg=7.11       p50=7.07       p95=7.78       p99=9.77       max=17.88
+
+cudaEventQuery(busy_poll)
+total_us                         avg=16.40      p50=16.38      p95=16.52      p99=16.81      max=24.99
+gpu_us                           avg=12.40      p50=12.29      p95=13.02      p99=13.09      max=21.15
+tax_us                           avg=4.01       p50=4.06       p95=4.27       p99=4.40       max=9.83
+
+cudaLaunchHostFunc
+total_us                         avg=36.78      p50=35.55      p95=41.07      p99=45.82      max=105.85
+gpu_us                           avg=12.53      p50=12.29      p95=13.18      p99=14.37      max=79.87
+tax_us                           avg=24.25      p50=23.17      p95=28.43      p99=32.77      max=70.83
+
+=== kernel_us=100 ===
+
+cudaEventSynchronize(caller)
+total_us                         avg=101.02     p50=99.42      p95=106.45     p99=106.55     max=111.90
+gpu_us                           avg=97.04      p50=95.42      p95=102.40     p99=102.56     max=106.34
+tax_us                           avg=3.98       p50=4.06       p95=4.31       p99=4.58       max=16.67
+
+cudaEventSynchronize(waiter_thread)
+total_us                         avg=102.80     p50=102.49     p95=105.59     p99=109.23     max=129.85
+gpu_us                           avg=95.61      p50=95.30      p95=96.26      p99=98.30      max=117.57
+tax_us                           avg=7.20       p50=7.07       p95=8.97       p99=11.94      max=34.61
+
+cudaEventQuery(busy_poll)
+total_us                         avg=99.42      p50=99.40      p95=99.58      p99=99.67      max=111.64
+gpu_us                           avg=95.46      p50=95.23      p95=96.10      p99=96.19      max=107.52
+tax_us                           avg=3.96       p50=4.10       p95=4.29       p99=4.39       max=4.61
+
+cudaLaunchHostFunc
+total_us                         avg=119.32     p50=118.96     p95=121.49     p99=126.34     max=160.03
+gpu_us                           avg=95.52      p50=95.23      p95=96.19      p99=96.26      max=107.52
+tax_us                           avg=23.80      p50=23.50      p95=25.71      p99=30.01      max=64.80
+
+=== kernel_us=1000 ===
+
+cudaEventSynchronize(caller)
+total_us                         avg=938.36     p50=938.15     p95=938.77     p99=944.51     max=961.03
+gpu_us                           avg=934.16     p50=933.89     p95=934.85     p99=936.96     max=949.25
+tax_us                           avg=4.19       p50=4.15       p95=4.65       p99=8.29       max=14.73
+
+cudaEventSynchronize(waiter_thread)
+total_us                         avg=942.44     p50=941.49     p95=945.14     p99=951.80     max=1212.37
+gpu_us                           avg=934.22     p50=933.89     p95=934.91     p99=938.82     max=955.33
+tax_us                           avg=8.22       p50=7.51       p95=10.14      p99=15.42      max=277.59
+
+cudaEventQuery(busy_poll)
+total_us                         avg=938.81     p50=938.18     p95=942.73     p99=948.67     max=968.42
+gpu_us                           avg=934.47     p50=933.89     p95=936.90     p99=940.03     max=956.77
+tax_us                           avg=4.34       p50=4.18       p95=5.36       p99=9.18       max=27.30
+
+cudaLaunchHostFunc
+total_us                         avg=963.02     p50=962.36     p95=969.62     p99=978.97     max=1086.29
+gpu_us                           avg=934.89     p50=934.56     p95=937.22     p99=941.92     max=964.61
+tax_us                           avg=28.12      p50=27.64      p95=33.60      p99=42.11      max=152.40
