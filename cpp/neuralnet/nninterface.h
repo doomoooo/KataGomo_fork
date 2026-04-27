@@ -143,6 +143,7 @@ namespace NeuralNet {
 
 #ifdef USE_TENSORRT_BACKEND
   // TensorRT-only async slot helpers used by the overlapping scheduler design.
+  void trtSetDevice(ComputeHandle* computeHandle);
   void trtInitializeSharedBuffer(
     ComputeHandle* computeHandle,
     InputBuffers* buffers

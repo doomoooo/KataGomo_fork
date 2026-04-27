@@ -2995,6 +2995,12 @@ void NeuralNet::getOutput(
     unpackOutputRow(inputBuffers, inputBufs[row], outputs[row], row, nnXLen, nnYLen, modelVersion, isOnnx, trtPolicyChannels, policyProbsTmp);
 }
 
+static void setInputBuffersDevice(const char* opName, const InputBuffers* buffers) {
+  if(buffers->trtGpuIdx >= 0) {
+    CUDA_ERR(opName, cudaSetDevice(buffers->trtGpuIdx));
+  }
+}
+
 static bool queryCudaEvent(const char* opName, cudaEvent_t event) {
   if(event == nullptr)
     return true;
@@ -3031,6 +3037,10 @@ static void enqueueCudaTimedSection(
   enqueueFunc();
   if(section.endEvent != nullptr)
     CUDA_ERR(opName, cudaEventRecord(section.endEvent, stream));
+}
+
+void NeuralNet::trtSetDevice(ComputeHandle* computeHandle) {
+  computeHandle->setDevice("trtSetDevice");
 }
 
 void NeuralNet::trtInitializeSharedBuffer(
@@ -3160,6 +3170,7 @@ void NeuralNet::trtEnqueueInputRowCopy(
 bool NeuralNet::trtQueryInputCopiesDone(InputBuffers* buffers) {
   if(!buffers->trtH2DPending)
     return false;
+  setInputBuffersDevice("trtQueryInputCopiesDone", buffers);
   bool done = queryCudaEvent("trtQueryInputCopiesDone", buffers->trtH2DDoneEvent);
   if(!done)
     return false;
@@ -3224,6 +3235,7 @@ void NeuralNet::trtLaunchInferenceAsync(
 bool NeuralNet::trtQueryInferenceDone(InputBuffers* buffers) {
   if(!buffers->trtInferPending)
     return false;
+  setInputBuffersDevice("trtQueryInferenceDone", buffers);
   bool done = queryCudaEvent("trtQueryInferenceDone", buffers->trtInferDoneEvent);
   if(!done)
     return false;
@@ -3279,6 +3291,7 @@ void NeuralNet::trtEnqueueOutputCopiesAsync(
 bool NeuralNet::trtQueryOutputCopiesDone(InputBuffers* buffers) {
   if(!buffers->trtD2HPending)
     return false;
+  setInputBuffersDevice("trtQueryOutputCopiesDone", buffers);
   bool done = queryCudaEvent("trtQueryOutputCopiesDone", buffers->trtD2HDoneEvent);
   if(!done)
     return false;

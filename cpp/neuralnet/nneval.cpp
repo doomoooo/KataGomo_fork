@@ -828,6 +828,7 @@ void NNEvaluator::serveTrtScheduler(const string& randSeedThisThread) {
         state->buffers.push_back(SchedulerState::BufferState());
         SchedulerState::BufferState& buffer = state->buffers.back();
         buffer.bufferIdx = (int)state->buffers.size() - 1;
+        NeuralNet::trtSetDevice(referenceSlot.gpuHandle);
         buffer.serverBuf = new NNServerBuf(*this, loadedModel);
         NeuralNet::trtInitializeSharedBuffer(referenceSlot.gpuHandle, buffer.serverBuf->inputBuffers);
         for(int slotIdx: device.slotIndices)
