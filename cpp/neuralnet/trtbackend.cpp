@@ -1268,15 +1268,22 @@ struct ComputeContext::DeviceTrtState {
       }
       for (int i = 0; i < network->getNbLayers(); i++) {
           ILayer* layer = network->getLayer(i);
-          std::string lname = layer->getName() ? layer->getName() : "";
           if (layer == nullptr)
               continue;
+
+          std::string lname = layer->getName() ? layer->getName() : "";
+          LayerType layerType = layer->getType();
+          bool isQuantizeOrDequantize = layerType == LayerType::kQUANTIZE || layerType == LayerType::kDEQUANTIZE;
 
           if (
               lname.find("norm") != std::string::npos && lname.find("final") != std::string::npos) {
               const char* name = layer->getName();
-              logger->write(std::string("Force FP32 on softmax layer: ") + (name ? name : "<unnamed>"));
+              if(isQuantizeOrDequantize) {
+                logger->write(std::string("Skip forcing FP32 on Q/DQ layer: ") + (name ? name : "<unnamed>"));
+                continue;
+              }
 
+              logger->write(std::string("Force FP32 on softmax layer: ") + (name ? name : "<unnamed>"));
               layer->setPrecision(DataType::kFLOAT);
               for (int j = 0; j < layer->getNbOutputs(); j++) {
                   layer->setOutputType(j, DataType::kFLOAT);
