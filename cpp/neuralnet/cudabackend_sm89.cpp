@@ -1,4 +1,5 @@
 #include "../neuralnet/cudabackend_sm89.h"
+#include "../neuralnet/cudabackend_sm89_forward.h"
 
 #include "../neuralnet/cudaincludes.h"
 #include "../neuralnet/cudaerrorcheck.h"
@@ -21,6 +22,7 @@ static bool getBoolOpt(ConfigParser& cfg, const string& key, bool defaultValue) 
 Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm89Backend", true);
+  o.useForward = getBoolOpt(cfg, "cudaSm89Forward", true);
   o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", false);
   o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", false);
   o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", false);
@@ -64,10 +66,16 @@ Sm89Model::Sm89Model(
   useNHWC(useNHWC_),
   options(options_),
   logger(NULL),
-  loggedFallback(false)
+  loggedFallback(false),
+  forward(nullptr),
+  forwardActive(false)
 {
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm89Model: null construction argument");
+  if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
+    forward = std::make_unique<Sm89Forward>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC);
+    forwardActive = true;
+  }
   // Stage 0 scaffold: apply() delegates to the official model until stages land.
 }
 
@@ -112,6 +120,24 @@ void Sm89Model::apply(
   (void)ownershipBuf;
   (void)workspaceBuf;
   (void)workspaceBytes;
+
+  if(forwardActive) {
+    forward->apply(
+      batchSize,
+      requireExactNNLen,
+      inputBuf,
+      inputGlobalBuf,
+      inputMetaBuf,
+      policyPassBuf,
+      policyBuf,
+      valueBuf,
+      scoreValueBuf,
+      ownershipBuf,
+      workspaceBuf,
+      workspaceBytes
+    );
+    return;
+  }
 
   if(!loggedFallback) {
     if(logger != NULL)

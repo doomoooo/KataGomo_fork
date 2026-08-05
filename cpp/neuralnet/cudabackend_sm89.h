@@ -50,6 +50,9 @@ typedef void (*OfficialApplyFn)(
 struct Options {
   // Master switch. When false, SM89 keeps the official backend path entirely (A/B control).
   bool enabled = true;
+  // Stage-1 standalone forward. When true and the model is supported, Sm89Model runs its own
+  // SM89-specific forward instead of the official fallback.
+  bool useForward = true;
 
   // Historical optimization switches; defaults are conservative so the scaffold is bit-identical.
   // Each stage lands behind its own switch and is validated before flipping its default.
@@ -74,6 +77,8 @@ bool isSm89Arch(int majorComputeCapability, int minorComputeCapability);
 
 // Reads all cuda*Sm89* / cuda* config keys relevant to the SM89 path.
 Options parseOptions(ConfigParser& cfg);
+
+class Sm89Forward;
 
 // The SM89 model implementation. The official model is kept alive by the caller and is used as
 // the correctness fallback until each stage of the rebuild lands.
@@ -133,6 +138,8 @@ class Sm89Model {
   Options options;
   Logger* logger;
   bool loggedFallback;
+  std::unique_ptr<Sm89Forward> forward;
+  bool forwardActive;
 
   // TODO(rebuild): device weight buffers, AOT kernel handles, per-GPU shared-weight caches,
   // persisting-L2 access-policy windows, scratch/workspace plan.
