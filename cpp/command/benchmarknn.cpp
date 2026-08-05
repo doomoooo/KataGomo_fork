@@ -161,7 +161,7 @@ int MainCmds::benchmarknn(const vector<string>& args) {
         cout << setprecision(10) << result.perServerNNEvalsPerSec[i];
       }
       cout << "],";
-      cout << "\"combinedWallSeconds\":" << setprecision(10) << result.combinedWallSeconds << ",";
+      cout << "\"combinedPerBatchMs\":" << setprecision(10) << result.combinedWallSeconds * 1000.0 << ",";
       cout << "\"combinedNNEvalsPerSec\":" << setprecision(10) << result.combinedNNEvalsPerSec;
       cout << "}" << endl;
     }
@@ -184,7 +184,8 @@ int MainCmds::benchmarknn(const vector<string>& args) {
              << " ms/batch, " << setprecision(10) << result.perServerNNEvalsPerSec[i]
              << " nnEval/s" << endl;
       }
-      cout << "combined wall time: " << setprecision(6) << result.combinedWallSeconds << " s" << endl;
+      cout << "combined per-batch wall time (max server median): "
+           << setprecision(6) << result.combinedWallSeconds * 1000.0 << " ms" << endl;
       cout << "combined throughput: " << setprecision(10) << result.combinedNNEvalsPerSec
            << " nnEval/s" << endl;
     }

@@ -3,7 +3,6 @@
 #include "../core/test.h"
 
 #include <algorithm>
-#include <chrono>
 #include <exception>
 #include <mutex>
 #include <thread>
@@ -466,7 +465,6 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   std::exception_ptr firstError;
   std::mutex errorMutex;
 
-  std::chrono::steady_clock::time_point wallStart = std::chrono::steady_clock::now();
   std::vector<std::thread> threads;
   threads.reserve(numThreads);
   for(int threadIdx = 0; threadIdx < numThreads; threadIdx++) {
@@ -560,11 +558,12 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
 
   for(std::thread& t : threads)
     t.join();
-  std::chrono::steady_clock::time_point wallEnd = std::chrono::steady_clock::now();
 
   if(firstError != nullptr)
     std::rethrow_exception(firstError);
 
+  double combinedNNEvalsPerSec = 0.0;
+  double maxMedianSeconds = 0.0;
   for(int threadIdx = 0; threadIdx < numThreads; threadIdx++) {
     std::vector<double>& times = result.perServerIterationSeconds[threadIdx];
     if(times.size() != (size_t)numIterations)
@@ -577,14 +576,15 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
       : 0.5 * (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]);
     result.perServerMedianSeconds[threadIdx] = median;
     result.perServerNNEvalsPerSec[threadIdx] = batchSize / median;
+    combinedNNEvalsPerSec += result.perServerNNEvalsPerSec[threadIdx];
+    maxMedianSeconds = std::max(maxMedianSeconds, median);
   }
 
-  result.combinedWallSeconds =
-    std::chrono::duration<double>(wallEnd - wallStart).count();
-  const double totalRows =
-    (double)numThreads * (double)batchSize * (double)numIterations;
-  result.combinedNNEvalsPerSec =
-    result.combinedWallSeconds > 0.0 ? totalRows / result.combinedWallSeconds : 0.0;
+  // Per-server medians are measured while all servers run concurrently, so total throughput is the
+  // sum of per-server throughputs. combinedWallSeconds is the per-batch wall time of the slowest
+  // server (i.e. one concurrent batch), deliberately excluding model load and warmup.
+  result.combinedWallSeconds = maxMedianSeconds;
+  result.combinedNNEvalsPerSec = combinedNNEvalsPerSec;
 
   return result;
 }
