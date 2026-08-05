@@ -30,6 +30,7 @@
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/desc.h"
 #include "../neuralnet/cudabackend_sm120.h"
+#include "../neuralnet/cudabackend_sm89.h"
 
 #include "../core/simpleallocator.h"
 #include "../core/test.h"
@@ -3357,6 +3358,8 @@ struct ComputeContext {
   bool cudaDisableGraphSDPA;
   // Whether 1x1 NHWC convs use the cuBLAS GEMM path. Auto = matmul iff FP16.
   enabled_t use1x1MatmulMode;
+  // SM89-specific backend options; only used when a server thread is on a SM89 device.
+  Sm89Backend::Options sm89Options;
   // SM120-specific backend options; only used when a server thread is on a SM120 device.
   Sm120Backend::Options sm120Options;
 };
@@ -3388,6 +3391,7 @@ ComputeContext* NeuralNet::createComputeContext(
     cfg.contains("cudaDisableGraphSDPA") ? cfg.getBool("cudaDisableGraphSDPA") : false;
   context->use1x1MatmulMode =
     cfg.contains("cudaUse1x1Matmul") ? cfg.getEnabled("cudaUse1x1Matmul") : enabled_t::Auto;
+  context->sm89Options = Sm89Backend::parseOptions(cfg);
   context->sm120Options = Sm120Backend::parseOptions(cfg);
   return context;
 }
@@ -3411,6 +3415,8 @@ struct ComputeHandle {
   const bool usingNHWC;
   // Set only on SM120 devices; routes apply() to the SM120-specific path.
   std::unique_ptr<Sm120Backend::Sm120Model> sm120Model;
+  // Set only on SM89 devices; routes apply() to the SM89-specific path.
+  std::unique_ptr<Sm89Backend::Sm89Model> sm89Model;
 
   ComputeHandle(
     const ComputeContext* context,
@@ -3448,6 +3454,14 @@ struct ComputeHandle {
         context->sm120Options
       );
     }
+    if(Sm89Backend::isSm89Arch(majorComputeCapability, minorComputeCapability) &&
+       context->sm89Options.enabled) {
+      sm89Model = std::make_unique<Sm89Backend::Sm89Model>(
+        model.get(), &applyOfficialModel, cudaHandles.get(), &(loadedModel->modelDesc),
+        maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
+        context->sm89Options
+      );
+    }
 
     //Synchronize after creating buffers and copying all the weights, just in case
     CUDA_ERR("ComputeHandle", cudaDeviceSynchronize());
@@ -3477,6 +3491,15 @@ struct ComputeHandle {
   ) const {
     if(sm120Model != nullptr) {
       sm120Model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+    }
+    else if(sm89Model != nullptr) {
+      sm89Model->apply(
         cudaHandles_, scratch_, batchSize, requireExactNNLen_,
         inputBuf, inputGlobalBuf, inputMetaBuf,
         policyPassBuf, policyBuf,
@@ -3588,6 +3611,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   gpuHandle->cudaHandles->cudaDisableGraphSDPA = context->cudaDisableGraphSDPA;
   if(gpuHandle->sm120Model != nullptr)
     gpuHandle->sm120Model->setLogger(logger);
+  if(gpuHandle->sm89Model != nullptr)
+    gpuHandle->sm89Model->setLogger(logger);
   return gpuHandle;
 }
 
