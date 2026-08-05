@@ -447,18 +447,18 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   if(debugSkipNeuralNet || loadedModel == NULL || computeContext == NULL)
     throw StringError("benchmarknn requires a real neural net model");
 
-  const int numThreads = (int)gpuIdxByServerThread.size();
+  const int numServerThreads = (int)gpuIdxByServerThread.size();
   const int batchSize = maxBatchSize;
-  if(numThreads <= 0 || batchSize <= 0)
+  if(numServerThreads <= 0 || batchSize <= 0)
     throw StringError("benchmarknn: invalid server/batch topology");
 
   NNEvalBenchmarkResult result;
   result.batchSize = batchSize;
-  result.numServerThreads = numThreads;
+  result.numServerThreads = numServerThreads;
   result.numIterations = numIterations;
-  result.perServerIterationSeconds.assign(numThreads, {});
-  result.perServerMedianSeconds.assign(numThreads, 0.0);
-  result.perServerNNEvalsPerSec.assign(numThreads, 0.0);
+  result.perServerIterationSeconds.assign(numServerThreads, {});
+  result.perServerMedianSeconds.assign(numServerThreads, 0.0);
+  result.perServerNNEvalsPerSec.assign(numServerThreads, 0.0);
   result.combinedWallSeconds = 0.0;
   result.combinedNNEvalsPerSec = 0.0;
 
@@ -466,8 +466,8 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   std::mutex errorMutex;
 
   std::vector<std::thread> threads;
-  threads.reserve(numThreads);
-  for(int threadIdx = 0; threadIdx < numThreads; threadIdx++) {
+  threads.reserve(numServerThreads);
+  for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
     threads.emplace_back([&, threadIdx]() {
       try {
         // Mirror NNEvaluator::serve: one compute handle + input buffers per configured NN server
@@ -564,7 +564,7 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
 
   double combinedNNEvalsPerSec = 0.0;
   double maxMedianSeconds = 0.0;
-  for(int threadIdx = 0; threadIdx < numThreads; threadIdx++) {
+  for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
     std::vector<double>& times = result.perServerIterationSeconds[threadIdx];
     if(times.size() != (size_t)numIterations)
       throw StringError("benchmarknn: server thread produced an unexpected number of timings");
