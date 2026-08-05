@@ -114,7 +114,9 @@ int MainCmds::benchmarknn(const vector<string>& args) {
   logger.write("Using batch size " + Global::intToString(maxBatchSize));
 
   const int expectedConcurrentEvals = maxBatchSize;
-  const bool defaultRequireExactNNLen = false;
+  // Full-board fixed-size inputs: the mask is all ones, so exact-NN-length
+  // semantics are identical and the SM120 FA4 AOT path (no mask) can run.
+  const bool defaultRequireExactNNLen = true;
   const bool disableFP16 = false;
 
   NNEvaluator* nnEval = NULL;

@@ -169,7 +169,9 @@ int MainCmds::replaynn(const vector<string>& args) {
     19;
 
   const int expectedConcurrentEvals = maxBatchSize;
-  const bool defaultRequireExactNNLen = false;
+  // Full-board corpus rows: exact-NN-length semantics are identical to the
+  // masked path for full boards and enable the SM120 FA4 AOT attention path.
+  const bool defaultRequireExactNNLen = true;
   const bool disableFP16 = false;
 
   NNEvaluator* nnEval = NULL;

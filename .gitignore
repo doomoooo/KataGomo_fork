@@ -1,4 +1,8 @@
 *.[oa]
+# The FA4 SM120 AOT host object is a checked-in build artifact: the binary is
+# distributed without the CuTe DSL/Python toolchain, and CMake links this object
+# directly (see cpp/neuralnet/fa4_aot/).
+!cpp/neuralnet/fa4_aot/fa4_sm120_b13.o
 *.exe
 *~
 __pycache__

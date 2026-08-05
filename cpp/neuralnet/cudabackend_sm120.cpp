@@ -2,9 +2,12 @@
 
 #include "../neuralnet/cudaincludes.h"
 #include "../neuralnet/cudaerrorcheck.h"
+#include "fa4_aot/fa4_sm120_b13.h"
 
 #include "../core/global.h"
 #include "../core/logger.h"
+
+#include <cmath>
 
 using namespace std;
 
@@ -56,6 +59,50 @@ Options parseOptions(ConfigParser& cfg) {
   return o;
 }
 
+bool applyAttention(
+  void* ctx,
+  CudaHandles* cudaHandles,
+  ScratchBuffers* scratch,
+  void* qBuf,
+  void* kBuf,
+  void* vBuf,
+  void* maskBuf,
+  void* attnOutBuf,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream,
+  void* workspaceBuf,
+  size_t workspaceBytes
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->attention(
+    cudaHandles, scratch, qBuf, kBuf, vBuf, maskBuf, attnOutBuf,
+    batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim,
+    usingFP16, stream, workspaceBuf, workspaceBytes
+  );
+}
+
+struct Sm120Model::Fa4State {
+  fa4_Kernel_Module_t module;
+  bool loaded;
+
+  Fa4State() : module(), loaded(false) {}
+  ~Fa4State() {
+    if(loaded) {
+      // cudaLibraryUnload is not guaranteed to succeed after a device reset;
+      // this runs in the normal destructor path before NeuralNet::globalCleanup.
+      cudaLibraryUnload(module.module);
+    }
+  }
+};
+
 Sm120Model::Sm120Model(
   void* officialApplyContext_,
   OfficialApplyFn officialApply_,
@@ -81,7 +128,9 @@ Sm120Model::Sm120Model(
   useNHWC(useNHWC_),
   options(options_),
   logger(NULL),
-  loggedFallback(false)
+  loggedFallback(false),
+  loggedFa4(false),
+  fa4State(nullptr)
 {
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm120Model: null construction argument");
@@ -155,6 +204,75 @@ void Sm120Model::apply(
     workspaceBuf,
     workspaceBytes
   );
+}
+
+bool Sm120Model::attention(
+  CudaHandles* cudaHandles,
+  ScratchBuffers* scratch,
+  void* qBuf,
+  void* kBuf,
+  void* vBuf,
+  void* maskBuf,
+  void* attnOutBuf,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream,
+  void* workspaceBuf,
+  size_t workspaceBytes
+) {
+  (void)scratch;
+  (void)workspaceBuf;
+  (void)workspaceBytes;
+
+  // Stage 1 gate: FP16, MHA (numKVHeads == numHeads), head dim 32, no mask
+  // (full-board requireExactNNLen paths), 19x19 sequence length, and the FA4
+  // switch on. Everything else falls back to the official attention path.
+  if(!options.useFlashAttention)
+    return false;
+  if(options.flashAttentionAccum != "both16")
+    return false;
+  if(!usingFP16)
+    return false;
+  if(maskBuf != NULL)
+    return false;
+  if(numHeads != numKVHeads || qHeadDim != 32 || vHeadDim != 32 || seqLen != 361)
+    return false;
+  if(batchSize < 1 || batchSize > maxBatchSize)
+    return false;
+
+  if(fa4State == NULL)
+    fa4State = std::make_unique<Fa4State>();
+  if(!fa4State->loaded) {
+    fa4_Kernel_Module_Load(&fa4State->module);
+    fa4State->loaded = true;
+  }
+
+  fa4_Tensor_mQ_t tq = {qBuf, {batchSize, seqLen, numHeads, qHeadDim}, {seqLen * numHeads * qHeadDim, numHeads * qHeadDim, qHeadDim}};
+  fa4_Tensor_mK_t tk = {kBuf, {batchSize, seqLen, numKVHeads, qHeadDim}, {seqLen * numKVHeads * qHeadDim, numKVHeads * qHeadDim, qHeadDim}};
+  fa4_Tensor_mV_t tv = {vBuf, {batchSize, seqLen, numKVHeads, vHeadDim}, {seqLen * numKVHeads * vHeadDim, numKVHeads * vHeadDim, vHeadDim}};
+  fa4_Tensor_mO_t to = {attnOutBuf, {batchSize, seqLen, numHeads, vHeadDim}, {seqLen * numHeads * vHeadDim, numHeads * vHeadDim, vHeadDim}};
+
+  float scale = 1.0f / std::sqrt((float)qHeadDim);
+  int32_t ret = cute_dsl_fa4_wrapper(&fa4State->module, &tq, &tk, &tv, &to, scale, stream);
+
+  if(ret != 0) {
+    if(logger != NULL)
+      logger->write("SM120 backend: FA4 AOT attention launch failed, falling back to official path");
+    return false;
+  }
+  CUDA_ERR("Sm120Attention", cudaPeekAtLastError());
+
+  if(!loggedFa4) {
+    if(logger != NULL)
+      logger->write("SM120 backend: FA4 AOT attention active (FP32 accumulator; both16 pending)");
+    loggedFa4 = true;
+  }
+  return true;
 }
 
 } // namespace Sm120Backend

@@ -1,6 +1,7 @@
 #ifndef KATAGO_CUDA_BACKEND_SM120_H
 #define KATAGO_CUDA_BACKEND_SM120_H
 
+#include "../neuralnet/cudaincludes.h"
 #include "../core/config_parser.h"
 #include "../neuralnet/desc.h"
 
@@ -15,8 +16,9 @@
 // thin dispatch: ComputeHandle builds a Sm120Model on SM120 and routes apply() through it.
 //
 // Rebuild roadmap (from /workspace/cuda-optimization-history.md, final accepted config):
-//   0. scaffold: Sm120Model delegates to the official model (bit-identical)  [current state]
+//   0. scaffold: Sm120Model delegates to the official model (bit-identical)  [done]
 //   1. FA4 both16 attention (fixed B19/S361/H12/D32, noncausal, shape fallback to official)
+//      [checkpoint: FA4 AOT attention integrated; AOT artifact currently FP32 accum]
 //   2. wide QKV CuTe AOT C384->QKV1152, batch-shared RoPE, fused residual epilogues
 //   3. TileLang fused FFN + linear2/out-projection AOT
 //   4. RMSNorm/silu/head custom kernels, initial-conv frontend, persisting-L2, weight sharing
@@ -44,6 +46,31 @@ typedef void (*OfficialApplyFn)(
   float* valueBuf,
   float* scoreValueBuf,
   void* ownershipBuf,
+  void* workspaceBuf,
+  size_t workspaceBytes
+);
+
+// Hook installed on SM120 compute handles. Called from the official attention
+// block (thin dispatch only) with the already-computed Q/K/V buffers in BSHD
+// layout. Returns true if the attention output was produced and the official
+// SDPA/custom path must be skipped; false means fall back to the official path.
+typedef bool (*Sm120AttentionFn)(
+  void* ctx,
+  CudaHandles* cudaHandles,
+  ScratchBuffers* scratch,
+  void* qBuf,
+  void* kBuf,
+  void* vBuf,
+  void* maskBuf,
+  void* attnOutBuf,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream,
   void* workspaceBuf,
   size_t workspaceBytes
 );
@@ -86,6 +113,28 @@ bool isSm120Arch(int majorComputeCapability, int minorComputeCapability);
 
 // Reads all cuda*Sm120* / cuda* config keys relevant to the SM120 path. Unknown accum values throw.
 Options parseOptions(ConfigParser& cfg);
+
+// Attention hook implementation (FA4 AOT on SM120, see fa4_aot/).
+bool applyAttention(
+  void* ctx,
+  CudaHandles* cudaHandles,
+  ScratchBuffers* scratch,
+  void* qBuf,
+  void* kBuf,
+  void* vBuf,
+  void* maskBuf,
+  void* attnOutBuf,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream,
+  void* workspaceBuf,
+  size_t workspaceBytes
+);
 
 // The SM120 model implementation. The official model is kept alive by the caller and is used as
 // the correctness fallback until each stage of the rebuild lands.
@@ -131,6 +180,27 @@ class Sm120Model {
     size_t workspaceBytes
   );
 
+  // FA4 AOT attention dispatch; called through the Sm120AttentionFn hook.
+  bool attention(
+    CudaHandles* cudaHandles,
+    ScratchBuffers* scratch,
+    void* qBuf,
+    void* kBuf,
+    void* vBuf,
+    void* maskBuf,
+    void* attnOutBuf,
+    int batchSize,
+    int seqLen,
+    int numHeads,
+    int numKVHeads,
+    int qHeadDim,
+    int vHeadDim,
+    bool usingFP16,
+    cudaStream_t stream,
+    void* workspaceBuf,
+    size_t workspaceBytes
+  );
+
  private:
   void* officialApplyContext;
   OfficialApplyFn officialApply;
@@ -145,6 +215,10 @@ class Sm120Model {
   Options options;
   Logger* logger;
   bool loggedFallback;
+  bool loggedFa4;
+
+  struct Fa4State;
+  std::unique_ptr<Fa4State> fa4State;
 
   // TODO(rebuild): device weight buffers, AOT kernel handles, per-GPU shared-weight caches,
   // persisting-L2 access-policy windows, scratch/workspace plan.

@@ -318,6 +318,10 @@ struct CudaHandles {
   // Controls whether 1x1 NHWC convs run as a cuBLAS GEMM (vs cuDNN). Auto = matmul iff FP16.
   // True/False force the choice regardless of precision.
   enabled_t use1x1MatmulMode;
+  // SM120 attention hook (thin dispatch). Null on non-SM120 handles; the
+  // implementation lives entirely in cudabackend_sm120.cpp.
+  Sm120Backend::Sm120AttentionFn sm120Attention;
+  void* sm120AttentionContext;
 
   CudaHandles(int major, int minor)
     : majorComputeCapability(major),
@@ -327,7 +331,9 @@ struct CudaHandles {
       isWarmup(false),
       cudaDisableGraphSDPA(false),
       loggedGraphSDPADisabled(false),
-      use1x1MatmulMode(enabled_t::Auto)
+      use1x1MatmulMode(enabled_t::Auto),
+      sm120Attention(NULL),
+      sm120AttentionContext(NULL)
   {
     CUBLAS_ERR("CudaHandles",cublasCreate(&cublas));
     CUDNN_ERR("CudaHandles",cudnnCreate(&cudnn));
@@ -1864,6 +1870,30 @@ struct TransformerAttentionBlock {
     SizedBuf<void*> attnOutBuf(scratch->allocator, (size_t)numHeads * vHeadDim * seqLen * batchSize * bytesPerElt);
 
     bool usedSDPA = false;
+    // Thin SM120 dispatch: the FA4 AOT kernel lives in cudabackend_sm120.cpp.
+    if(cudaHandles->sm120Attention != NULL &&
+       cudaHandles->sm120Attention(
+         cudaHandles->sm120AttentionContext,
+         cudaHandles,
+         scratch,
+         qBuf.buf,
+         kBuf.buf,
+         vBuf.buf,
+         maskBuf,
+         attnOutBuf.buf,
+         batchSize,
+         seqLen,
+         numHeads,
+         numKVHeads,
+         qHeadDim,
+         vHeadDim,
+         usingFP16,
+         cudaHandles->stream,
+         workspaceBuf,
+         workspaceBytes
+       )) {
+      usedSDPA = true;
+    }
 #if KATAGO_CUDA_HAS_SDPA
     SDPAGraphCache* sdpaCache = cudaHandles->sdpaCache.get();
     // Report once if cudaDisableGraphSDPA is the only reason we are not taking the cudnn graph SDPA path,
@@ -1874,7 +1904,7 @@ struct TransformerAttentionBlock {
         cudaHandles->logger->write(
           "Cuda backend: cudaDisableGraphSDPA is set, using the custom attention kernel instead of the cudnn graph SDPA path that would otherwise have been used");
     }
-    if(usingFP16 && sdpaCache != NULL && !cudaHandles->cudaDisableGraphSDPA) {
+    if(!usedSDPA && usingFP16 && sdpaCache != NULL && !cudaHandles->cudaDisableGraphSDPA) {
       bool hasMask = (maskBuf != NULL);
       SDPAGraphKey sdpaKey = {numHeads, numKVHeads, qHeadDim, vHeadDim, seqLen, batchSize, hasMask, usingFP16};
       auto plan = sdpaCache->getOrBuildPlan(cudaHandles->cudnn, sdpaKey, cudaHandles->logger, cudaHandles->isWarmup);
@@ -3447,6 +3477,8 @@ struct ComputeHandle {
         maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
         context->sm120Options
       );
+      cudaHandles->sm120Attention = &Sm120Backend::applyAttention;
+      cudaHandles->sm120AttentionContext = sm120Model.get();
     }
 
     //Synchronize after creating buffers and copying all the weights, just in case

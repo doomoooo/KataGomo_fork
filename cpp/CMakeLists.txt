@@ -70,6 +70,7 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm120.cpp
+    neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
   )
@@ -391,7 +392,10 @@ if(USE_BACKEND STREQUAL "CUDA")
   include_directories(SYSTEM external/cudnn-frontend/include) #SYSTEM suppresses warnings inside the vendored header-only cudnn_frontend library
   # cudnn_frontend's experimental OSS engine headers reference NVRTC symbols at link time
   # (we don't actually use those engines, but the references are pulled in by the header-only includes).
-  target_link_libraries(katago CUDA::cublas ${CUDNN_LIBRARY} CUDA::nvrtc)
+  # SM120 FA4 AOT: the DSL host object embeds the cubin and needs the small
+  # `_cuda*` bridge (fa4_cuda_bridge.cpp) plus the CUDA driver API.
+  target_link_libraries(katago CUDA::cublas ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
+  target_link_libraries(katago ${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/fa4_sm120_b13.o)
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   target_compile_definitions(katago PRIVATE USE_TENSORRT_BACKEND)
   find_package(CUDAToolkit REQUIRED)
