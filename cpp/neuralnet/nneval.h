@@ -27,6 +27,8 @@ struct NNEvalBenchmarkResult {
   std::vector<double> perServerNNEvalsPerSec;
   double combinedWallSeconds;
   double combinedNNEvalsPerSec;
+  double actualWallSeconds;
+  double actualWallPerForwardMs;
 };
 
 class NNCacheTable {
@@ -230,6 +232,16 @@ class NNEvaluator {
   // search. One compute handle + input buffers are created per NN server thread, each on its own
   // CUDA stream, and the forward passes run concurrently.
   NNEvalBenchmarkResult benchmarkPureForward(int numWarmups, int numIterations);
+
+  // Accessors used by the replay command (replaynn) to drive the same compute handles and input
+  // buffers that the benchmark path uses, without going through search or the eval queue.
+  ComputeContext* getComputeContext() const { return computeContext; }
+  LoadedModel* getLoadedModel() const { return loadedModel; }
+  bool getInputsUseNHWC() const { return inputsUseNHWC; }
+  int getGpuIdxByServerThread(int threadIdx) const {
+    testAssert(threadIdx >= 0 && threadIdx < (int)gpuIdxByServerThread.size());
+    return gpuIdxByServerThread[threadIdx];
+  }
 
  private:
   const std::string modelName;

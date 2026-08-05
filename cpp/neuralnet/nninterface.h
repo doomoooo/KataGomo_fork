@@ -27,6 +27,22 @@ struct InputBuffers;
 // A handle to the loaded neural network model.
 struct LoadedModel;
 
+// Raw per-head output pointers filled by getRawNNOutputs() after a getOutput() call. All arrays
+// are host memory owned by the InputBuffers; the layout of the policy arrays depends on the
+// backend (CUDA: NHWC position-major with numPolicyChannels floats per position; TensorRT: NCHW
+// channel-major). The element counts are per single row.
+struct RawNNOutputs {
+  const float* policyPassResults;
+  const float* policyResults;
+  const float* valueResults;
+  const float* scoreValueResults;
+  const float* ownershipResults;
+  size_t numPolicyChannels;
+  size_t numValueChannels;
+  size_t numScoreValueChannels;
+  size_t numOwnershipChannels;
+};
+
 // Generic interface to neural net inference.
 // There is a single CUDA backend.
 namespace NeuralNet {
@@ -121,6 +137,11 @@ namespace NeuralNet {
     NNResultBuf** inputBufs,
     std::vector<NNOutput*>& outputs
   );
+
+  // After getOutput, expose the raw per-head result arrays (logits before any postprocessing)
+  // for the most recent forward pass. Backends own the concrete InputBuffers layout, so they
+  // fill this struct.
+  void getRawNNOutputs(InputBuffers* buffers, RawNNOutputs& out);
 
   // Benchmark the pure device forward pass only. Host input arrays in `buffers` must already be
   // populated (e.g. by one getOutput call). One-time H2D preparation is performed here before the

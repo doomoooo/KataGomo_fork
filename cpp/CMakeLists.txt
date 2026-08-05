@@ -61,6 +61,10 @@ if(USE_BACKEND STREQUAL "CUDA")
   message(STATUS "-DUSE_BACKEND=CUDA, using CUDA backend.")
 
   enable_language(CUDA)
+  # nvcc implicitly includes cuda_runtime.h before any user header, so defining this
+  # macro inside cudaincludes.h is too late for .cu files. It must be a command-line
+  # definition to make <<<>>> launches use each thread's per-thread default stream.
+  add_compile_definitions(CUDA_API_PER_THREAD_DEFAULT_STREAM)
 
   set(CUDA_STANDARD 11)
   set(NEURALNET_BACKEND_SOURCES
@@ -289,6 +293,7 @@ add_executable(katago
   neuralnet/sgfmetadata.cpp
   neuralnet/modelversion.cpp
   neuralnet/nneval.cpp
+  neuralnet/npzreader.cpp
   neuralnet/desc.cpp
   neuralnet/debugprint.cpp
   ${NEURALNET_BACKEND_SOURCES}
@@ -354,6 +359,7 @@ add_executable(katago
   command/analysis.cpp
   command/benchmark.cpp
   command/benchmarknn.cpp
+  command/replaynn.cpp
   command/contribute.cpp
   command/evalsgf.cpp
   command/gatekeeper.cpp
@@ -700,4 +706,3 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "C
 endif()
 
 target_include_directories(katago PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-

@@ -162,7 +162,9 @@ int MainCmds::benchmarknn(const vector<string>& args) {
       }
       cout << "],";
       cout << "\"combinedPerBatchMs\":" << setprecision(10) << result.combinedWallSeconds * 1000.0 << ",";
-      cout << "\"combinedNNEvalsPerSec\":" << setprecision(10) << result.combinedNNEvalsPerSec;
+      cout << "\"combinedNNEvalsPerSec\":" << setprecision(10) << result.combinedNNEvalsPerSec << ",";
+      cout << "\"actualWallSeconds\":" << setprecision(10) << result.actualWallSeconds << ",";
+      cout << "\"actualWallPerForwardMs\":" << setprecision(10) << result.actualWallPerForwardMs;
       cout << "}" << endl;
     }
     else {
@@ -188,6 +190,9 @@ int MainCmds::benchmarknn(const vector<string>& args) {
            << setprecision(6) << result.combinedWallSeconds * 1000.0 << " ms" << endl;
       cout << "combined throughput: " << setprecision(10) << result.combinedNNEvalsPerSec
            << " nnEval/s" << endl;
+      cout << "actual wall time across server threads: "
+           << setprecision(6) << result.actualWallSeconds << " s ("
+           << result.actualWallPerForwardMs << " ms per forward incl. warmup)" << endl;
     }
   }
   catch(...) {

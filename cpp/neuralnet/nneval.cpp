@@ -3,6 +3,8 @@
 #include "../core/test.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <exception>
 #include <mutex>
 #include <thread>
@@ -461,9 +463,17 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   result.perServerNNEvalsPerSec.assign(numServerThreads, 0.0);
   result.combinedWallSeconds = 0.0;
   result.combinedNNEvalsPerSec = 0.0;
+  result.actualWallSeconds = 0.0;
+  result.actualWallPerForwardMs = 0.0;
 
   std::exception_ptr firstError;
   std::mutex errorMutex;
+  std::atomic<bool> anyError(false);
+
+  std::atomic<int> readyCount(0);
+  std::atomic<bool> startFlag(false);
+  std::chrono::steady_clock::time_point wallStart;
+  std::chrono::steady_clock::time_point wallEnd;
 
   std::vector<std::thread> threads;
   threads.reserve(numServerThreads);
@@ -529,6 +539,10 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
           for(NNOutput* out : outputs)
             delete out;
 
+          readyCount.fetch_add(1);
+          while(!startFlag.load())
+            std::this_thread::yield();
+
           std::vector<double> times;
 #if defined(USE_CUDA_BACKEND) || defined(USE_TENSORRT_BACKEND)
           if(!NeuralNet::benchmarkOutput(
@@ -549,6 +563,7 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
         NeuralNet::freeComputeHandle(handle);
       }
       catch(...) {
+        anyError.store(true);
         std::lock_guard<std::mutex> lock(errorMutex);
         if(firstError == nullptr)
           firstError = std::current_exception();
@@ -556,11 +571,21 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
     });
   }
 
+  while(readyCount.load() < numServerThreads && !anyError.load())
+    std::this_thread::yield();
+  wallStart = std::chrono::steady_clock::now();
+  startFlag.store(true);
+
   for(std::thread& t : threads)
     t.join();
+  wallEnd = std::chrono::steady_clock::now();
 
   if(firstError != nullptr)
     std::rethrow_exception(firstError);
+
+  result.actualWallSeconds = std::chrono::duration<double>(wallEnd - wallStart).count();
+  result.actualWallPerForwardMs =
+    result.actualWallSeconds / (double)(numWarmups + numIterations) * 1000.0;
 
   double combinedNNEvalsPerSec = 0.0;
   double maxMedianSeconds = 0.0;

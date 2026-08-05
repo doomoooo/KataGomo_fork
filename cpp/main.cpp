@@ -33,6 +33,7 @@ static void printHelp(const vector<string>& args) {
 gtp : Runs GTP engine that can be plugged into any standard Go GUI for play/analysis.
 benchmark : Test speed with different numbers of search threads.
 benchmarknn : Benchmark pure neural-net forward throughput (no preprocessing, postprocessing, H2D/D2H, or search).
+replaynn : Replay a fixed .npz input corpus and dump raw per-head logits for accuracy regression.
 genconfig : User-friendly interface to generate a config with rules and automatic performance tuning.
 
 contribute : Connect to online distributed KataGo training and run perpetually contributing selfplay games.
@@ -81,6 +82,8 @@ static int handleSubcommand(const string& subcommand, const vector<string>& args
     return MainCmds::benchmark(subArgs);
   else if(subcommand == "benchmarknn")
     return MainCmds::benchmarknn(subArgs);
+  else if(subcommand == "replaynn")
+    return MainCmds::replaynn(subArgs);
   else if(subcommand == "contribute")
     return MainCmds::contribute(subArgs);
   else if(subcommand == "evalsgf")

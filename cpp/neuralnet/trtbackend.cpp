@@ -1894,6 +1894,18 @@ void NeuralNet::freeInputBuffers(InputBuffers* inputBuffers) {
   delete inputBuffers;
 }
 
+void NeuralNet::getRawNNOutputs(InputBuffers* inputBuffers, RawNNOutputs& out) {
+  out.policyPassResults = inputBuffers->policyPassResults.get();
+  out.policyResults = inputBuffers->policyResults.get();
+  out.valueResults = inputBuffers->valueResults.get();
+  out.scoreValueResults = inputBuffers->scoreValueResults.get();
+  out.ownershipResults = inputBuffers->ownershipResults.get();
+  out.numPolicyChannels = inputBuffers->singlePolicyPassResultElts;
+  out.numValueChannels = inputBuffers->singleValueResultElts;
+  out.numScoreValueChannels = inputBuffers->singleScoreValueResultElts;
+  out.numOwnershipChannels = inputBuffers->singleOwnershipResultElts;
+}
+
 void NeuralNet::getOutput(
   ComputeHandle* gpuHandle,
   InputBuffers* inputBuffers,
