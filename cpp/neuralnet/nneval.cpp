@@ -487,6 +487,7 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
             gpuIdxByServerThread[threadIdx],
             threadIdx
           );
+          maybeWarmupComputeHandle(handle, threadIdx);
 
           // Fill all rows with a fixed empty board so every iteration runs the same real inputs.
           Board board(nnXLen, nnYLen);
