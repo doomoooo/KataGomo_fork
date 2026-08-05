@@ -353,6 +353,7 @@ add_executable(katago
   command/commandline.cpp
   command/analysis.cpp
   command/benchmark.cpp
+  command/benchmarknn.cpp
   command/contribute.cpp
   command/evalsgf.cpp
   command/gatekeeper.cpp

@@ -3887,6 +3887,126 @@ void NeuralNet::getOutput(
 
 }
 
+static void cudaUploadBenchmarkInputs(ComputeHandle* gpuHandle, InputBuffers* inputBuffers, int batchSize) {
+  Buffers* buffers = gpuHandle->buffers.get();
+  const int numMetaFeatures = (int)inputBuffers->singleInputMetaElts;
+  if(!gpuHandle->usingFP16) {
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputBuf, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice));
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputGlobalBuf, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice));
+    if(numMetaFeatures > 0) {
+      CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputMetaBuf, inputBuffers->userInputMetaBuffer, inputBuffers->singleInputMetaBytes*batchSize, cudaMemcpyHostToDevice));
+    }
+  }
+  else {
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputBufFloat, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice));
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputGlobalBufFloat, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice));
+    if(numMetaFeatures > 0) {
+      CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputMetaBufFloat, inputBuffers->userInputMetaBuffer, inputBuffers->singleInputMetaBytes*batchSize, cudaMemcpyHostToDevice));
+    }
+
+    customCudaCopyToHalf((const float*)buffers->inputBufFloat,(half*)buffers->inputBuf,inputBuffers->singleInputElts*batchSize);
+    CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    customCudaCopyToHalf((const float*)buffers->inputGlobalBufFloat,(half*)buffers->inputGlobalBuf,inputBuffers->singleInputGlobalElts*batchSize);
+    CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    if(numMetaFeatures > 0) {
+      customCudaCopyToHalf((const float*)buffers->inputMetaBufFloat,(half*)buffers->inputMetaBuf,inputBuffers->singleInputMetaElts*batchSize);
+      CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    }
+  }
+}
+
+bool NeuralNet::benchmarkOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  int numWarmups,
+  int numIterations,
+  vector<double>& iterationSeconds
+) {
+  assert(batchSize > 0 && batchSize <= inputBuffers->maxBatchSize);
+  if(numWarmups < 0 || numIterations <= 0)
+    throw StringError("benchmarkOutput: invalid warmup/iteration count");
+
+  iterationSeconds.clear();
+
+  // One-time H2D preparation, excluded from the timed loop.
+  cudaUploadBenchmarkInputs(gpuHandle, inputBuffers, batchSize);
+
+  Buffers* buffers = gpuHandle->buffers.get();
+  ScratchBuffers* scratch = gpuHandle->scratch.get();
+
+  for(int w = 0; w < numWarmups; w++) {
+    gpuHandle->model->apply(
+      gpuHandle->cudaHandles.get(),
+      scratch,
+      batchSize,
+      gpuHandle->requireExactNNLen,
+      buffers->inputBuf,
+      buffers->inputGlobalBuf,
+      buffers->inputMetaBuf,
+      buffers->policyPassBuf,
+      buffers->policyBuf,
+      buffers->valueBuf,
+      buffers->scoreValueBuf,
+      buffers->ownershipBuf,
+      buffers->workspaceBuf,
+      buffers->workspaceBytes
+    );
+  }
+  CUDA_ERR("benchmarkOutput",cudaDeviceSynchronize());
+
+  std::vector<cudaEvent_t> startEvents(numIterations);
+  std::vector<cudaEvent_t> endEvents(numIterations);
+  for(int i = 0; i < numIterations; i++) {
+    CUDA_ERR("benchmarkOutput",cudaEventCreate(&startEvents[i]));
+    CUDA_ERR("benchmarkOutput",cudaEventCreate(&endEvents[i]));
+  }
+
+  try {
+    for(int i = 0; i < numIterations; i++) {
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(startEvents[i]));
+      gpuHandle->model->apply(
+        gpuHandle->cudaHandles.get(),
+        scratch,
+        batchSize,
+        gpuHandle->requireExactNNLen,
+        buffers->inputBuf,
+        buffers->inputGlobalBuf,
+        buffers->inputMetaBuf,
+        buffers->policyPassBuf,
+        buffers->policyBuf,
+        buffers->valueBuf,
+        buffers->scoreValueBuf,
+        buffers->ownershipBuf,
+        buffers->workspaceBuf,
+        buffers->workspaceBytes
+      );
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(endEvents[i]));
+    }
+    CUDA_ERR("benchmarkOutput",cudaDeviceSynchronize());
+
+    iterationSeconds.reserve(numIterations);
+    for(int i = 0; i < numIterations; i++) {
+      float milliseconds = 0.0f;
+      CUDA_ERR("benchmarkOutput",cudaEventElapsedTime(&milliseconds,startEvents[i],endEvents[i]));
+      iterationSeconds.push_back((double)milliseconds / 1000.0);
+    }
+  }
+  catch(...) {
+    for(int i = 0; i < numIterations; i++) {
+      cudaEventDestroy(startEvents[i]);
+      cudaEventDestroy(endEvents[i]);
+    }
+    throw;
+  }
+
+  for(int i = 0; i < numIterations; i++) {
+    cudaEventDestroy(startEvents[i]);
+    cudaEventDestroy(endEvents[i]);
+  }
+  return true;
+}
+
 //TESTING ----------------------------------------------------------------------------------
 
 

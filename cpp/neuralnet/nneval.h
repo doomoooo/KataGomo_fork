@@ -2,6 +2,7 @@
 #define NEURALNET_NNEVAL_H_
 
 #include <memory>
+#include <vector>
 
 #include "../core/global.h"
 #include "../core/commontypes.h"
@@ -16,6 +17,17 @@
 #include "../search/mutexpool.h"
 
 class NNEvaluator;
+
+struct NNEvalBenchmarkResult {
+  int batchSize;
+  int numServerThreads;
+  int numIterations;
+  std::vector<std::vector<double>> perServerIterationSeconds;
+  std::vector<double> perServerMedianSeconds;
+  std::vector<double> perServerNNEvalsPerSec;
+  double combinedWallSeconds;
+  double combinedNNEvalsPerSec;
+};
 
 class NNCacheTable {
   struct Entry {
@@ -212,6 +224,12 @@ class NNEvaluator {
   uint64_t numCacheHits() const;
 
   void clearStats();
+
+  // Pure-network benchmark honoring the evaluator's configured batch size, NN server threads, and
+  // per-server GPU assignment. Does not include feature generation, postprocessing, H2D/D2H, or
+  // search. One compute handle + input buffers are created per NN server thread, each on its own
+  // CUDA stream, and the forward passes run concurrently.
+  NNEvalBenchmarkResult benchmarkPureForward(int numWarmups, int numIterations);
 
  private:
   const std::string modelName;

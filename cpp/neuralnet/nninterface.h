@@ -122,6 +122,19 @@ namespace NeuralNet {
     std::vector<NNOutput*>& outputs
   );
 
+  // Benchmark the pure device forward pass only. Host input arrays in `buffers` must already be
+  // populated (e.g. by one getOutput call). One-time H2D preparation is performed here before the
+  // timed loop; the loop repeatedly runs the backend forward on device without H2D/D2H copies or
+  // postprocessing, recording one GPU-visible elapsed time (seconds) per iteration into
+  // `iterationSeconds`. Returns false for backends that cannot run this pure-device benchmark.
+  bool benchmarkOutput(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int batchSize,
+    int numWarmups,
+    int numIterations,
+    std::vector<double>& iterationSeconds
+  );
 
   // FOR TESTING -----------------------------------------------------------------------
   // For all of the below, the input buffers must have exactly the size expected of the input for the operation.
