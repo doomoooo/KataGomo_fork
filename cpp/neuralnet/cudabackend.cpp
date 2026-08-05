@@ -29,6 +29,7 @@
 #include "../neuralnet/sgfmetadata.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/desc.h"
+#include "../neuralnet/cudabackend_sm120.h"
 
 #include "../core/simpleallocator.h"
 #include "../core/test.h"
@@ -3164,6 +3165,35 @@ struct Model {
 
 };
 
+// Trampoline used by Sm120Backend::Sm120Model to delegate to the official backend apply().
+// Keeps the internal Model type opaque to cudabackend_sm120.cpp.
+static void applyOfficialModel(
+  void* ctx,
+  CudaHandles* cudaHandles_,
+  ScratchBuffers* scratch,
+  int batchSize,
+  bool requireExactNNLen,
+  void* inputBuf,
+  void* inputGlobalBuf,
+  void* inputMetaBuf,
+  float* policyPassBuf,
+  float* policyBuf,
+  float* valueBuf,
+  float* scoreValueBuf,
+  void* ownershipBuf,
+  void* workspaceBuf,
+  size_t workspaceBytes
+) {
+  Model* model = (Model*)ctx;
+  model->apply(
+    cudaHandles_, scratch, batchSize, requireExactNNLen,
+    inputBuf, inputGlobalBuf, inputMetaBuf,
+    policyPassBuf, policyBuf,
+    valueBuf, scoreValueBuf, ownershipBuf,
+    workspaceBuf, workspaceBytes
+  );
+}
+
 
 //------------------------------------------------------------------------------
 
@@ -3327,6 +3357,8 @@ struct ComputeContext {
   bool cudaDisableGraphSDPA;
   // Whether 1x1 NHWC convs use the cuBLAS GEMM path. Auto = matmul iff FP16.
   enabled_t use1x1MatmulMode;
+  // SM120-specific backend options; only used when a server thread is on a SM120 device.
+  Sm120Backend::Options sm120Options;
 };
 
 ComputeContext* NeuralNet::createComputeContext(
@@ -3356,6 +3388,7 @@ ComputeContext* NeuralNet::createComputeContext(
     cfg.contains("cudaDisableGraphSDPA") ? cfg.getBool("cudaDisableGraphSDPA") : false;
   context->use1x1MatmulMode =
     cfg.contains("cudaUse1x1Matmul") ? cfg.getEnabled("cudaUse1x1Matmul") : enabled_t::Auto;
+  context->sm120Options = Sm120Backend::parseOptions(cfg);
   return context;
 }
 
@@ -3376,6 +3409,8 @@ struct ComputeHandle {
   const bool requireExactNNLen;
   const bool inputsUseNHWC;
   const bool usingNHWC;
+  // Set only on SM120 devices; routes apply() to the SM120-specific path.
+  std::unique_ptr<Sm120Backend::Sm120Model> sm120Model;
 
   ComputeHandle(
     const ComputeContext* context,
@@ -3405,10 +3440,59 @@ struct ComputeHandle {
     scratch = std::make_unique<ScratchBuffers>(maxBatchSize, nnXLen, nnYLen, useFP16);
     buffers = std::make_unique<Buffers>(cudaHandles.get(), *model, *scratch);
 
+    if(Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+       context->sm120Options.enabled) {
+      sm120Model = std::make_unique<Sm120Backend::Sm120Model>(
+        model.get(), &applyOfficialModel, cudaHandles.get(), &(loadedModel->modelDesc),
+        maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
+        context->sm120Options
+      );
+    }
+
     //Synchronize after creating buffers and copying all the weights, just in case
     CUDA_ERR("ComputeHandle", cudaDeviceSynchronize());
   }
   ~ComputeHandle() {
+  }
+
+  void apply(
+    CudaHandles* cudaHandles_,
+    ScratchBuffers* scratch_,
+    int batchSize,
+    bool requireExactNNLen_,
+
+    void* inputBuf,
+    void* inputGlobalBuf,
+    void* inputMetaBuf,
+
+    float* policyPassBuf,
+    float* policyBuf,
+
+    float* valueBuf,
+    float* scoreValueBuf,
+    void* ownershipBuf,
+
+    void* workspaceBuf,
+    size_t workspaceBytes
+  ) const {
+    if(sm120Model != nullptr) {
+      sm120Model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+    }
+    else {
+      model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+    }
   }
 
   ComputeHandle() = delete;
@@ -3502,6 +3586,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   );
   gpuHandle->cudaHandles->logger = logger;
   gpuHandle->cudaHandles->cudaDisableGraphSDPA = context->cudaDisableGraphSDPA;
+  if(gpuHandle->sm120Model != nullptr)
+    gpuHandle->sm120Model->setLogger(logger);
   return gpuHandle;
 }
 
@@ -3773,7 +3859,7 @@ void NeuralNet::getOutput(
     }
   }
 
-  gpuHandle->model->apply(
+  gpuHandle->apply(
     gpuHandle->cudaHandles.get(),
     scratch,
     batchSize,
@@ -3955,7 +4041,7 @@ bool NeuralNet::benchmarkOutput(
   ScratchBuffers* scratch = gpuHandle->scratch.get();
 
   for(int w = 0; w < numWarmups; w++) {
-    gpuHandle->model->apply(
+    gpuHandle->apply(
       gpuHandle->cudaHandles.get(),
       scratch,
       batchSize,
@@ -3984,7 +4070,7 @@ bool NeuralNet::benchmarkOutput(
   try {
     for(int i = 0; i < numIterations; i++) {
       CUDA_ERR("benchmarkOutput",cudaEventRecord(startEvents[i], gpuHandle->cudaHandles->stream));
-      gpuHandle->model->apply(
+      gpuHandle->apply(
         gpuHandle->cudaHandles.get(),
         scratch,
         batchSize,
