@@ -33,7 +33,7 @@ os.environ.setdefault("FLASH_ATTENTION_CUTE_DSL_CACHE_DIR", os.path.join(OUT_DIR
 
 import torch  # noqa: E402
 import cutlass.cute as cute  # noqa: E402
-from cutlass import Float16  # noqa: E402
+from cutlass import Float16, Float32  # noqa: E402
 
 torch.cuda.set_device(2)
 
@@ -74,6 +74,15 @@ v = torch.randn(B, S, H, D, device="cuda", dtype=torch.float16)
 out = torch.empty_like(q)
 scale = 1.0 / (D ** 0.5)
 
+# Accumulator modes: fp32/qk16/pv16/both16 (QK/PV accumulator data types).
+#   FA4_QK_ACC=fp16 -> QK MMA accumulator FP16 (qk16)
+#   FA4_PV_ACC=fp16 -> PV MMA accumulator FP16 (pv16)
+# The default remains FP32 so `build_aot.py` reproduces the original checkpoint.
+QK_ACC = os.environ.get("FA4_QK_ACC", "fp32")
+PV_ACC = os.environ.get("FA4_PV_ACC", "fp32")
+qk_acc_dtype = Float16 if QK_ACC == "fp16" else Float32
+pv_acc_dtype = Float16 if PV_ACC == "fp16" else Float32
+
 fa_fwd = FlashAttentionForwardSm120(
     Float16, D, D, 1,
     is_causal=False,
@@ -87,6 +96,8 @@ fa_fwd = FlashAttentionForwardSm120(
     score_mod=None,
     mask_mod=None,
     has_aux_tensors=False,
+    qk_acc_dtype=qk_acc_dtype,
+    pv_acc_dtype=pv_acc_dtype,
 )
 
 q_t, k_t, v_t, o_t = [to_cute_tensor(t) for t in (q, k, v, out)]
@@ -100,4 +111,4 @@ compiled = cute.compile(
 )
 
 compiled.export_to_c(OUT_DIR, "fa4_sm120_b13", "fa4")
-print("AOT export OK ->", OUT_DIR)
+print(f"AOT export OK (QK_ACC={QK_ACC}, PV_ACC={PV_ACC}) ->", OUT_DIR)
