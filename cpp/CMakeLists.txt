@@ -71,6 +71,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm89.cpp
     neuralnet/cudabackend_sm89_forward.cpp
+    neuralnet/cudabackend_sm89_kernels.cu
     neuralnet/cudabackend_sm120.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu

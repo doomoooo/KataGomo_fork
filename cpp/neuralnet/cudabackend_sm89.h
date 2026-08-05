@@ -58,7 +58,7 @@ struct Options {
   // Each stage lands behind its own switch and is validated before flipping its default.
   bool useWideQKV = true;
   bool useWideFFN = true;
-  bool useFusedResidual = false;
+  bool useFusedResidual = true;
   bool useMatmulLt = false;
   bool useFusedQKRoPE = false;
   bool useBatchSharedRoPE = false;

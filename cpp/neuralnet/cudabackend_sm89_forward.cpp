@@ -4,6 +4,7 @@
 #endif
 
 #include "../neuralnet/cudabackend_sm89_forward.h"
+#include "../neuralnet/cudabackend_sm89_kernels.h"
 
 #include "../neuralnet/cudaerrorcheck.h"
 #include "../neuralnet/cudahelpers.h"
@@ -334,6 +335,33 @@ struct Sm89MatMul {
     else {
       const half* alpha = (const half*)scratch->oneBuf;
       const half* beta = (const half*)scratch->zeroBuf;
+      CUBLAS_ERR(name.c_str(),cublasHgemm(
+        ctx->cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+        outChannels, batchSize, inChannels,
+        alpha, (const half*)matBuf, outChannels,
+        (const half*)inputBuf, inChannels,
+        beta, (half*)outputBuf, outChannels
+      ));
+    }
+  }
+
+  // C = A*B + C (beta=1), for fused residual epilogues.
+  void applyAccumulate(Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* inputBuf, void* outputBuf) const {
+    assert(inChannels > 0 && outChannels > 0);
+    if(!usingFP16) {
+      const float alpha = 1.0f;
+      const float beta = 1.0f;
+      CUBLAS_ERR(name.c_str(),cublasSgemm(
+        ctx->cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+        outChannels, batchSize, inChannels,
+        &alpha, (const float*)matBuf, outChannels,
+        (const float*)inputBuf, inChannels,
+        &beta, (float*)outputBuf, outChannels
+      ));
+    }
+    else {
+      const half* alpha = (const half*)scratch->oneBuf;
+      const half* beta = (const half*)scratch->oneBuf;
       CUBLAS_ERR(name.c_str(),cublasHgemm(
         ctx->cublas, CUBLAS_OP_N, CUBLAS_OP_N,
         outChannels, batchSize, inChannels,
@@ -696,6 +724,7 @@ struct Sm89AttentionBlock {
   const int nnYLen;
   const bool usingFP16;
   const bool usingNHWC;
+  const bool useFusedResidual;
   const Sm89TransformerRMSNorm preLN;
   const Sm89MatMul qProj;
   const Sm89MatMul kProj;
@@ -713,7 +742,7 @@ struct Sm89AttentionBlock {
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -724,6 +753,7 @@ struct Sm89AttentionBlock {
       nnYLen(nnY),
       usingFP16(useFP16),
       usingNHWC(useNHWC),
+      useFusedResidual(useFusedResidual_),
       preLN(&desc->preLN, useFP16),
       qProj(&desc->qProj, useFP16),
       kProj(&desc->kProj, useFP16),
@@ -879,11 +909,18 @@ struct Sm89AttentionBlock {
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
 
-    outProj.apply(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf);
-    if(!usingFP16)
-      customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels);
-    else
-      customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels);
+    if(useFusedResidual && usingFP16) {
+      outProj.applyAccumulate(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkBuf);
+      if(maskBuf != NULL)
+        sm89MaskZeroNHWC((half*)trunkBuf, (const half*)maskBuf, batchSize, seqLen, inChannels, ctx->stream);
+    }
+    else {
+      outProj.apply(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf);
+      if(!usingFP16)
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels);
+      else
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels);
+    }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
   }
 };
@@ -896,6 +933,7 @@ struct Sm89FFNBlock {
   const int nnYLen;
   const bool usingFP16;
   const bool usingNHWC;
+  const bool useFusedResidual;
   const Sm89TransformerRMSNorm preLN;
   const Sm89MatMul linear1;
   const Sm89MatMul linearGate;
@@ -907,7 +945,7 @@ struct Sm89FFNBlock {
   Sm89FFNBlock(const Sm89FFNBlock&) = delete;
   Sm89FFNBlock& operator=(const Sm89FFNBlock&) = delete;
 
-  Sm89FFNBlock(const TransformerFFNDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideFFN)
+  Sm89FFNBlock(const TransformerFFNDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideFFN, bool useFusedResidual_)
     : name(desc->name),
       numChannels(desc->numChannels),
       ffnChannels(desc->ffnChannels),
@@ -915,6 +953,7 @@ struct Sm89FFNBlock {
       nnYLen(nnY),
       usingFP16(useFP16),
       usingNHWC(useNHWC),
+      useFusedResidual(useFusedResidual_),
       preLN(&desc->preLN, useFP16),
       linear1(&desc->linear1, useFP16),
       linearGate(&desc->linearGate, useFP16),
@@ -986,11 +1025,18 @@ struct Sm89FFNBlock {
       customCudaSwiGLU((const half*)ffnBuf, (const half*)gateBuf, (half*)ffnBuf, totalSize);
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
 
-    linear2.apply(ctx, scratch, matBatchSize, ffnBuf, trunkScratchBuf);
-    if(!usingFP16)
-      customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
-    else
-      customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
+    if(useFusedResidual && usingFP16) {
+      linear2.applyAccumulate(ctx, scratch, matBatchSize, ffnBuf, trunkBuf);
+      if(maskBuf != NULL)
+        sm89MaskZeroNHWC((half*)trunkBuf, (const half*)maskBuf, batchSize, seqLen, numChannels, ctx->stream);
+    }
+    else {
+      linear2.apply(ctx, scratch, matBatchSize, ffnBuf, trunkScratchBuf);
+      if(!usingFP16)
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
+      else
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
+    }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
   }
 };
@@ -1026,7 +1072,8 @@ struct Sm89NestedBlock {
     bool useFP16,
     bool useNHWC,
     bool useWideQKV_,
-    bool useWideFFN_
+    bool useWideFFN_,
+    bool useFusedResidual_
   )
     : name(desc->name),
       nnXLen(nnX),
@@ -1045,7 +1092,7 @@ struct Sm89NestedBlock {
       int kind = desc->blocks[i].first;
       if(kind == TRANSFORMER_ATTENTION_BLOCK_KIND) {
         auto block = std::make_shared<Sm89AttentionBlock>(
-          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideQKV_
+          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideQKV_, useFusedResidual_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf, workspaceBuf, workspaceBytes);
@@ -1053,7 +1100,7 @@ struct Sm89NestedBlock {
       }
       else if(kind == TRANSFORMER_FFN_BLOCK_KIND) {
         auto block = std::make_shared<Sm89FFNBlock>(
-          (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideFFN_
+          (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideFFN_, useFusedResidual_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           (void)workspaceBuf;
@@ -1119,7 +1166,8 @@ struct Sm89Trunk {
     bool useFP16,
     bool useNHWC,
     bool useWideQKV_,
-    bool useWideFFN_
+    bool useWideFFN_,
+    bool useFusedResidual_
   )
     : name(desc->name),
       trunkNumChannels(desc->trunkNumChannels),
@@ -1139,7 +1187,7 @@ struct Sm89Trunk {
       blocks.push_back(std::make_shared<Sm89NestedBlock>(
         ctx,
         (const NestedBottleneckResidualBlockDesc*)desc->blocks[i].second.get(),
-        maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_
+        maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_
       ));
     }
     if(desc->trunkNormKind != TRUNK_NORM_KIND_STANDARD)
@@ -1402,6 +1450,7 @@ struct Sm89Forward::Impl {
   const bool inputsUseNHWC;
   const bool useWideQKV;
   const bool useWideFFN;
+  const bool useFusedResidual;
   Sm89Ctx ctx;
   Sm89Scratch scratch;
   Sm89Trunk trunk;
@@ -1419,7 +1468,8 @@ struct Sm89Forward::Impl {
     bool useFP16,
     bool useNHWC,
     bool useWideQKV_,
-    bool useWideFFN_
+    bool useWideFFN_,
+    bool useFusedResidual_
   )
     : maxBatchSize(maxBatchSize_),
       nnXLen(nnXLen_),
@@ -1430,9 +1480,10 @@ struct Sm89Forward::Impl {
       inputsUseNHWC(inputsUseNHWC_),
       useWideQKV(useWideQKV_),
       useWideFFN(useWideFFN_),
+      useFusedResidual(useFusedResidual_),
       ctx(),
       scratch(useFP16),
-      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useWideQKV_, useWideFFN_),
+      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_),
       policyHead(&ctx, &desc->policyHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       valueHead(&ctx, &desc->valueHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       convWorkspace(NULL),
@@ -1538,9 +1589,10 @@ Sm89Forward::Sm89Forward(
   bool useFP16,
   bool useNHWC,
   bool useWideQKV,
-  bool useWideFFN
+  bool useWideFFN,
+  bool useFusedResidual
 )
-  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, useWideQKV, useWideFFN))
+  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual))
 {}
 
 Sm89Forward::~Sm89Forward() = default;
