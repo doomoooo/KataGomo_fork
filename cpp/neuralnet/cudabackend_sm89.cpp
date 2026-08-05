@@ -23,8 +23,8 @@ Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm89Backend", true);
   o.useForward = getBoolOpt(cfg, "cudaSm89Forward", true);
-  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", false);
-  o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", false);
+  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", true);
+  o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", true);
   o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", false);
   o.useMatmulLt = getBoolOpt(cfg, "cudaUseMatmulLt", false);
   o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
@@ -73,7 +73,10 @@ Sm89Model::Sm89Model(
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm89Model: null construction argument");
   if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
-    forward = std::make_unique<Sm89Forward>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC);
+    forward = std::make_unique<Sm89Forward>(
+      desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
+      options.useWideQKV, options.useWideFFN
+    );
     forwardActive = true;
   }
   // Stage 0 scaffold: apply() delegates to the official model until stages land.

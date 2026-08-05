@@ -701,6 +701,8 @@ struct Sm89AttentionBlock {
   const Sm89MatMul kProj;
   const Sm89MatMul vProj;
   const Sm89MatMul outProj;
+  void* qkvWeightsBuf;
+  bool useQKVBatched;
   void* ropeCosTable;
   void* ropeSinTable;
   float* ropeFreqsBuf;
@@ -711,7 +713,7 @@ struct Sm89AttentionBlock {
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -727,6 +729,8 @@ struct Sm89AttentionBlock {
       kProj(&desc->kProj, useFP16),
       vProj(&desc->vProj, useFP16),
       outProj(&desc->outProj, useFP16),
+      qkvWeightsBuf(NULL),
+      useQKVBatched(false),
       ropeCosTable(NULL),
       ropeSinTable(NULL),
       ropeFreqsBuf(NULL),
@@ -735,6 +739,22 @@ struct Sm89AttentionBlock {
   {
     if(!useNHWC)
       throw StringError("Sm89AttentionBlock: transformer blocks require NHWC");
+    int qTotalDim = numHeads * qHeadDim;
+    int kTotalDim = numKVHeads * qHeadDim;
+    int vTotalDim = numKVHeads * vHeadDim;
+    if(useWideQKV && useFP16 && qTotalDim == kTotalDim && kTotalDim == vTotalDim) {
+      int outTotal = qTotalDim + kTotalDim + vTotalDim;
+      MatMulLayerDesc wideDesc;
+      wideDesc.name = name + ":wideQKV";
+      wideDesc.inChannels = inChannels;
+      wideDesc.outChannels = outTotal;
+      wideDesc.weights.reserve((size_t)outTotal * inChannels);
+      wideDesc.weights.insert(wideDesc.weights.end(), desc->qProj.weights.begin(), desc->qProj.weights.end());
+      wideDesc.weights.insert(wideDesc.weights.end(), desc->kProj.weights.begin(), desc->kProj.weights.end());
+      wideDesc.weights.insert(wideDesc.weights.end(), desc->vProj.weights.begin(), desc->vProj.weights.end());
+      CudaUtils::mallocAndCopyToDevice(name + ":qkvW", wideDesc.weights, qkvWeightsBuf, useFP16);
+      useQKVBatched = true;
+    }
     if(desc->useRope) {
       if(desc->learnableRope) {
         testAssert((int)desc->ropeFreqs.size() == (size_t)desc->numKVHeads * ropeNumPairs * 2);
@@ -756,6 +776,7 @@ struct Sm89AttentionBlock {
     if(ropeCosTable != NULL) cudaFree(ropeCosTable);
     if(ropeSinTable != NULL) cudaFree(ropeSinTable);
     if(ropeFreqsBuf != NULL) cudaFree(ropeFreqsBuf);
+    if(qkvWeightsBuf != NULL) cudaFree(qkvWeightsBuf);
   }
 
   void apply(
@@ -779,31 +800,48 @@ struct Sm89AttentionBlock {
 
     preLN.apply(batchSize, seqLen, trunkBuf, trunkScratchBuf, maskBuf);
 
-    SizedBuf<void*> qBuf(&scratch->allocator, (size_t)qTotalDim * matBatchSize * bytesPerElt);
-    SizedBuf<void*> kBuf(&scratch->allocator, (size_t)kTotalDim * matBatchSize * bytesPerElt);
-    SizedBuf<void*> vBuf(&scratch->allocator, (size_t)vTotalDim * matBatchSize * bytesPerElt);
-    qProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, qBuf.buf);
-    kProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, kBuf.buf);
-    vProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, vBuf.buf);
+    SizedBuf<void*> qkvBuf(&scratch->allocator, (size_t)(qTotalDim + kTotalDim + vTotalDim) * matBatchSize * bytesPerElt);
+    void* qBuf = qkvBuf.buf;
+    void* kBuf = (char*)qkvBuf.buf + (size_t)qTotalDim * matBatchSize * bytesPerElt;
+    void* vBuf = (char*)qkvBuf.buf + (size_t)(qTotalDim + kTotalDim) * matBatchSize * bytesPerElt;
+    if(useQKVBatched) {
+      const half alpha = __float2half(1.0f);
+      const half beta = __float2half(0.0f);
+      CUBLAS_ERR(name.c_str(),cublasHgemmStridedBatched(
+        ctx->cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+        qTotalDim, matBatchSize, inChannels,
+        &alpha,
+        (const half*)qkvWeightsBuf, qTotalDim, (int64_t)qTotalDim * inChannels,
+        (const half*)trunkScratchBuf, inChannels, 0,
+        &beta,
+        (half*)qkvBuf.buf, qTotalDim, (int64_t)qTotalDim * matBatchSize,
+        3
+      ));
+    }
+    else {
+      qProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, qBuf);
+      kProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, kBuf);
+      vProj.apply(ctx, scratch, matBatchSize, trunkScratchBuf, vBuf);
+    }
 
     if(ropeFreqsBuf != NULL) {
       if(!usingFP16) {
-        customCudaApplyRoPELearnableRecompute((float*)qBuf.buf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-        customCudaApplyRoPELearnableRecompute((float*)kBuf.buf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
       }
       else {
-        customCudaApplyRoPELearnableRecompute((half*)qBuf.buf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-        customCudaApplyRoPELearnableRecompute((half*)kBuf.buf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((half*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((half*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
       }
     }
     else if(ropeCosTable != NULL) {
       if(!usingFP16) {
-        customCudaApplyRoPE((float*)qBuf.buf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
-        customCudaApplyRoPE((float*)kBuf.buf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((float*)qBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((float*)kBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
       }
       else {
-        customCudaApplyRoPE((half*)qBuf.buf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
-        customCudaApplyRoPE((half*)kBuf.buf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((half*)qBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((half*)kBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
       }
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
@@ -816,9 +854,9 @@ struct Sm89AttentionBlock {
       auto plan = sdpaCache->getPlan(key);
       if(plan != nullptr) {
         std::unordered_map<int64_t, void*> variant_pack = {
-          {1, qBuf.buf},
-          {2, kBuf.buf},
-          {3, vBuf.buf},
+          {1, qBuf},
+          {2, kBuf},
+          {3, vBuf},
           {4, attnOutBuf.buf},
         };
         SizedBuf<void*> biasBuf(&scratch->allocator, maskBuf != NULL ? (size_t)batchSize * seqLen * seqLen * sizeof(half) : 1);
@@ -835,9 +873,9 @@ struct Sm89AttentionBlock {
 #endif
     if(!usedSDPA) {
       if(!usingFP16)
-        customCudaFlashAttention((const float*)qBuf.buf, (const float*)kBuf.buf, (const float*)vBuf.buf, (const float*)maskBuf, (float*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
+        customCudaFlashAttention((const float*)qBuf, (const float*)kBuf, (const float*)vBuf, (const float*)maskBuf, (float*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
       else
-        customCudaFlashAttention((const half*)qBuf.buf, (const half*)kBuf.buf, (const half*)vBuf.buf, (const half*)maskBuf, (half*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
+        customCudaFlashAttention((const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (const half*)maskBuf, (half*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
 
@@ -862,12 +900,14 @@ struct Sm89FFNBlock {
   const Sm89MatMul linear1;
   const Sm89MatMul linearGate;
   const Sm89MatMul linear2;
+  void* ffnWeightsBuf;
+  bool useFFNBatched;
 
   Sm89FFNBlock() = delete;
   Sm89FFNBlock(const Sm89FFNBlock&) = delete;
   Sm89FFNBlock& operator=(const Sm89FFNBlock&) = delete;
 
-  Sm89FFNBlock(const TransformerFFNDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC)
+  Sm89FFNBlock(const TransformerFFNDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideFFN)
     : name(desc->name),
       numChannels(desc->numChannels),
       ffnChannels(desc->ffnChannels),
@@ -878,12 +918,30 @@ struct Sm89FFNBlock {
       preLN(&desc->preLN, useFP16),
       linear1(&desc->linear1, useFP16),
       linearGate(&desc->linearGate, useFP16),
-      linear2(&desc->linear2, useFP16)
+      linear2(&desc->linear2, useFP16),
+      ffnWeightsBuf(NULL),
+      useFFNBatched(false)
   {
     if(!desc->useSwiGLU)
       throw StringError("Sm89FFNBlock: non-SwiGLU FFN not supported");
     if(!useNHWC)
       throw StringError("Sm89FFNBlock: transformer blocks require NHWC");
+    if(useWideFFN && useFP16) {
+      MatMulLayerDesc wideDesc;
+      wideDesc.name = name + ":wideLinear1Gate";
+      wideDesc.inChannels = numChannels;
+      wideDesc.outChannels = ffnChannels * 2;
+      wideDesc.weights.reserve((size_t)ffnChannels * 2 * numChannels);
+      wideDesc.weights.insert(wideDesc.weights.end(), desc->linear1.weights.begin(), desc->linear1.weights.end());
+      wideDesc.weights.insert(wideDesc.weights.end(), desc->linearGate.weights.begin(), desc->linearGate.weights.end());
+      CudaUtils::mallocAndCopyToDevice(name + ":ffnW", wideDesc.weights, ffnWeightsBuf, useFP16);
+      useFFNBatched = true;
+    }
+  }
+
+  ~Sm89FFNBlock() {
+    if(ffnWeightsBuf != NULL)
+      cudaFree(ffnWeightsBuf);
   }
 
   void apply(
@@ -899,19 +957,36 @@ struct Sm89FFNBlock {
     size_t bytesPerElt = usingFP16 ? sizeof(half) : sizeof(float);
     preLN.apply(batchSize, seqLen, trunkBuf, trunkScratchBuf, maskBuf);
 
-    SizedBuf<void*> ffnBuf(&scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
-    SizedBuf<void*> gateBuf(&scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
-    linear1.apply(ctx, scratch, matBatchSize, trunkScratchBuf, ffnBuf.buf);
-    linearGate.apply(ctx, scratch, matBatchSize, trunkScratchBuf, gateBuf.buf);
+    SizedBuf<void*> ffnGateBuf(&scratch->allocator, (size_t)ffnChannels * 2 * matBatchSize * bytesPerElt);
+    if(useFFNBatched) {
+      const half alpha = __float2half(1.0f);
+      const half beta = __float2half(0.0f);
+      CUBLAS_ERR(name.c_str(),cublasHgemmStridedBatched(
+        ctx->cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+        ffnChannels, matBatchSize, numChannels,
+        &alpha,
+        (const half*)ffnWeightsBuf, ffnChannels, (int64_t)ffnChannels * numChannels,
+        (const half*)trunkScratchBuf, numChannels, 0,
+        &beta,
+        (half*)ffnGateBuf.buf, ffnChannels, (int64_t)ffnChannels * matBatchSize,
+        2
+      ));
+    }
+    else {
+      linear1.apply(ctx, scratch, matBatchSize, trunkScratchBuf, ffnGateBuf.buf);
+      linearGate.apply(ctx, scratch, matBatchSize, trunkScratchBuf, (char*)ffnGateBuf.buf + (size_t)ffnChannels * matBatchSize * bytesPerElt);
+    }
+    void* ffnBuf = ffnGateBuf.buf;
+    void* gateBuf = (char*)ffnGateBuf.buf + (size_t)ffnChannels * matBatchSize * bytesPerElt;
 
     int totalSize = (int)((size_t)ffnChannels * matBatchSize);
     if(!usingFP16)
-      customCudaSwiGLU((const float*)ffnBuf.buf, (const float*)gateBuf.buf, (float*)ffnBuf.buf, totalSize);
+      customCudaSwiGLU((const float*)ffnBuf, (const float*)gateBuf, (float*)ffnBuf, totalSize);
     else
-      customCudaSwiGLU((const half*)ffnBuf.buf, (const half*)gateBuf.buf, (half*)ffnBuf.buf, totalSize);
+      customCudaSwiGLU((const half*)ffnBuf, (const half*)gateBuf, (half*)ffnBuf, totalSize);
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
 
-    linear2.apply(ctx, scratch, matBatchSize, ffnBuf.buf, trunkScratchBuf);
+    linear2.apply(ctx, scratch, matBatchSize, ffnBuf, trunkScratchBuf);
     if(!usingFP16)
       customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
     else
@@ -930,6 +1005,8 @@ struct Sm89NestedBlock {
   const int maxBatchSize;
   const bool usingFP16;
   const bool usingNHWC;
+  const bool useWideQKV;
+  const bool useWideFFN;
   const Sm89BatchNorm preBN;
   const Sm89Conv preConv;
   const Sm89BatchNorm postBN;
@@ -947,7 +1024,9 @@ struct Sm89NestedBlock {
     int nnX,
     int nnY,
     bool useFP16,
-    bool useNHWC
+    bool useNHWC,
+    bool useWideQKV_,
+    bool useWideFFN_
   )
     : name(desc->name),
       nnXLen(nnX),
@@ -955,6 +1034,8 @@ struct Sm89NestedBlock {
       maxBatchSize(maxBatchSize),
       usingFP16(useFP16),
       usingNHWC(useNHWC),
+      useWideQKV(useWideQKV_),
+      useWideFFN(useWideFFN_),
       preBN(&desc->preBN, &desc->preActivation, nnX, nnY, useFP16, useNHWC),
       preConv(ctx, &desc->preConv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
       postBN(&desc->postBN, &desc->postActivation, nnX, nnY, useFP16, useNHWC),
@@ -964,7 +1045,7 @@ struct Sm89NestedBlock {
       int kind = desc->blocks[i].first;
       if(kind == TRANSFORMER_ATTENTION_BLOCK_KIND) {
         auto block = std::make_shared<Sm89AttentionBlock>(
-          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC
+          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideQKV_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf, workspaceBuf, workspaceBytes);
@@ -972,7 +1053,7 @@ struct Sm89NestedBlock {
       }
       else if(kind == TRANSFORMER_FFN_BLOCK_KIND) {
         auto block = std::make_shared<Sm89FFNBlock>(
-          (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC
+          (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideFFN_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           (void)workspaceBuf;
@@ -1036,7 +1117,9 @@ struct Sm89Trunk {
     int nnX,
     int nnY,
     bool useFP16,
-    bool useNHWC
+    bool useNHWC,
+    bool useWideQKV_,
+    bool useWideFFN_
   )
     : name(desc->name),
       trunkNumChannels(desc->trunkNumChannels),
@@ -1056,7 +1139,7 @@ struct Sm89Trunk {
       blocks.push_back(std::make_shared<Sm89NestedBlock>(
         ctx,
         (const NestedBottleneckResidualBlockDesc*)desc->blocks[i].second.get(),
-        maxBatchSize_, nnX, nnY, useFP16, useNHWC
+        maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_
       ));
     }
     if(desc->trunkNormKind != TRUNK_NORM_KIND_STANDARD)
@@ -1317,6 +1400,8 @@ struct Sm89Forward::Impl {
   const bool usingFP16;
   const bool usingNHWC;
   const bool inputsUseNHWC;
+  const bool useWideQKV;
+  const bool useWideFFN;
   Sm89Ctx ctx;
   Sm89Scratch scratch;
   Sm89Trunk trunk;
@@ -1332,7 +1417,9 @@ struct Sm89Forward::Impl {
     int nnYLen_,
     bool inputsUseNHWC_,
     bool useFP16,
-    bool useNHWC
+    bool useNHWC,
+    bool useWideQKV_,
+    bool useWideFFN_
   )
     : maxBatchSize(maxBatchSize_),
       nnXLen(nnXLen_),
@@ -1341,9 +1428,11 @@ struct Sm89Forward::Impl {
       usingFP16(useFP16),
       usingNHWC(useNHWC),
       inputsUseNHWC(inputsUseNHWC_),
+      useWideQKV(useWideQKV_),
+      useWideFFN(useWideFFN_),
       ctx(),
       scratch(useFP16),
-      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
+      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useWideQKV_, useWideFFN_),
       policyHead(&ctx, &desc->policyHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       valueHead(&ctx, &desc->valueHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       convWorkspace(NULL),
@@ -1447,9 +1536,11 @@ Sm89Forward::Sm89Forward(
   int nnYLen,
   bool inputsUseNHWC,
   bool useFP16,
-  bool useNHWC
+  bool useNHWC,
+  bool useWideQKV,
+  bool useWideFFN
 )
-  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC))
+  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, useWideQKV, useWideFFN))
 {}
 
 Sm89Forward::~Sm89Forward() = default;

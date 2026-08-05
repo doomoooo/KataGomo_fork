@@ -56,8 +56,8 @@ struct Options {
 
   // Historical optimization switches; defaults are conservative so the scaffold is bit-identical.
   // Each stage lands behind its own switch and is validated before flipping its default.
-  bool useWideQKV = false;
-  bool useWideFFN = false;
+  bool useWideQKV = true;
+  bool useWideFFN = true;
   bool useFusedResidual = false;
   bool useMatmulLt = false;
   bool useFusedQKRoPE = false;
