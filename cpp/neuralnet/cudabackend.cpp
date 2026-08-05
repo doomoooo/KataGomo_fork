@@ -297,6 +297,10 @@ struct SDPAGraphCache {
 struct CudaHandles {
   cublasHandle_t cublas;
   cudnnHandle_t cudnn;
+  // Each NN server thread owns a private stream. cuBLAS/cuDNN default to the legacy stream (NULL),
+  // so they must be explicitly bound to this stream; custom kernels launched from this thread already
+  // land on the same per-thread default stream because CUDA_API_PER_THREAD_DEFAULT_STREAM is defined.
+  cudaStream_t stream;
   const int majorComputeCapability;
   const int minorComputeCapability;
   std::unique_ptr<SDPAGraphCache> sdpaCache;
@@ -326,6 +330,9 @@ struct CudaHandles {
   {
     CUBLAS_ERR("CudaHandles",cublasCreate(&cublas));
     CUDNN_ERR("CudaHandles",cudnnCreate(&cudnn));
+    stream = cudaStreamPerThread;
+    CUBLAS_ERR("CudaHandles",cublasSetStream(cublas, stream));
+    CUDNN_ERR("CudaHandles",cudnnSetStream(cudnn, stream));
   }
 
   ~CudaHandles() {
@@ -3964,7 +3971,7 @@ bool NeuralNet::benchmarkOutput(
 
   try {
     for(int i = 0; i < numIterations; i++) {
-      CUDA_ERR("benchmarkOutput",cudaEventRecord(startEvents[i]));
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(startEvents[i], gpuHandle->cudaHandles->stream));
       gpuHandle->model->apply(
         gpuHandle->cudaHandles.get(),
         scratch,
@@ -3981,7 +3988,7 @@ bool NeuralNet::benchmarkOutput(
         buffers->workspaceBuf,
         buffers->workspaceBytes
       );
-      CUDA_ERR("benchmarkOutput",cudaEventRecord(endEvents[i]));
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(endEvents[i], gpuHandle->cudaHandles->stream));
     }
     CUDA_ERR("benchmarkOutput",cudaDeviceSynchronize());
 
