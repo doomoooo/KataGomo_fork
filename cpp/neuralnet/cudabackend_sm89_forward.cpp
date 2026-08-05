@@ -733,6 +733,7 @@ struct Sm89AttentionBlock {
   const bool usingNHWC;
   const bool useFusedResidual;
   const bool useRMSNormOpt;
+  const bool useFusedQKRoPE;
   const Sm89TransformerRMSNorm preLN;
   const Sm89MatMul qProj;
   const Sm89MatMul kProj;
@@ -750,7 +751,7 @@ struct Sm89AttentionBlock {
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -763,6 +764,7 @@ struct Sm89AttentionBlock {
       usingNHWC(useNHWC),
       useFusedResidual(useFusedResidual_),
       useRMSNormOpt(useRMSNormOpt_),
+      useFusedQKRoPE(useFusedQKRoPE_),
       preLN(&desc->preLN, useFP16, useRMSNormOpt_),
       qProj(&desc->qProj, useFP16),
       kProj(&desc->kProj, useFP16),
@@ -864,7 +866,13 @@ struct Sm89AttentionBlock {
     }
 
     if(ropeFreqsBuf != NULL) {
-      if(!usingFP16) {
+      if(useFusedQKRoPE && usingFP16 && sm89ApplyRoPEQKHalf(
+        (half*)qBuf, (half*)kBuf, ropeFreqsBuf,
+        batchSize, seqLen, numHeads, numKVHeads, qHeadDim, nnXLen, ctx->stream
+      )) {
+        // handled
+      }
+      else if(!usingFP16) {
         customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
         customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
       }
@@ -1085,7 +1093,8 @@ struct Sm89NestedBlock {
     bool useWideQKV_,
     bool useWideFFN_,
     bool useFusedResidual_,
-    bool useRMSNormOpt_
+    bool useRMSNormOpt_,
+    bool useFusedQKRoPE_
   )
     : name(desc->name),
       nnXLen(nnX),
@@ -1104,7 +1113,7 @@ struct Sm89NestedBlock {
       int kind = desc->blocks[i].first;
       if(kind == TRANSFORMER_ATTENTION_BLOCK_KIND) {
         auto block = std::make_shared<Sm89AttentionBlock>(
-          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideQKV_, useFusedResidual_, useRMSNormOpt_
+          ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16, useNHWC, useWideQKV_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf, workspaceBuf, workspaceBytes);
@@ -1180,7 +1189,8 @@ struct Sm89Trunk {
     bool useWideQKV_,
     bool useWideFFN_,
     bool useFusedResidual_,
-    bool useRMSNormOpt_
+    bool useRMSNormOpt_,
+    bool useFusedQKRoPE_
   )
     : name(desc->name),
       trunkNumChannels(desc->trunkNumChannels),
@@ -1200,7 +1210,7 @@ struct Sm89Trunk {
       blocks.push_back(std::make_shared<Sm89NestedBlock>(
         ctx,
         (const NestedBottleneckResidualBlockDesc*)desc->blocks[i].second.get(),
-        maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_
+        maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_
       ));
     }
     if(desc->trunkNormKind != TRUNK_NORM_KIND_STANDARD)
@@ -1465,6 +1475,7 @@ struct Sm89Forward::Impl {
   const bool useWideFFN;
   const bool useFusedResidual;
   const bool useRMSNormOpt;
+  const bool useFusedQKRoPE;
   Sm89Ctx ctx;
   Sm89Scratch scratch;
   Sm89Trunk trunk;
@@ -1484,7 +1495,8 @@ struct Sm89Forward::Impl {
     bool useWideQKV_,
     bool useWideFFN_,
     bool useFusedResidual_,
-    bool useRMSNormOpt_
+    bool useRMSNormOpt_,
+    bool useFusedQKRoPE_
   )
     : maxBatchSize(maxBatchSize_),
       nnXLen(nnXLen_),
@@ -1497,9 +1509,10 @@ struct Sm89Forward::Impl {
       useWideFFN(useWideFFN_),
       useFusedResidual(useFusedResidual_),
       useRMSNormOpt(useRMSNormOpt_),
+      useFusedQKRoPE(useFusedQKRoPE_),
       ctx(),
       scratch(useFP16),
-      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_),
+      trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_),
       policyHead(&ctx, &desc->policyHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       valueHead(&ctx, &desc->valueHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC),
       convWorkspace(NULL),
@@ -1607,9 +1620,10 @@ Sm89Forward::Sm89Forward(
   bool useWideQKV,
   bool useWideFFN,
   bool useFusedResidual,
-  bool useRMSNormOpt
+  bool useRMSNormOpt,
+  bool useFusedQKRoPE
 )
-  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt))
+  : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt, useFusedQKRoPE))
 {}
 
 Sm89Forward::~Sm89Forward() = default;

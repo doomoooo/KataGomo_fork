@@ -18,4 +18,12 @@ bool sm89RMSNormNHWCHalf(
   int nSize, int xySize, int cSize, float epsilon, cudaStream_t stream
 );
 
+// Fused learnable RoPE for Q and K in one kernel (MHA only: numKVHeads == numHeads and same
+// totalDim). Returns true if handled, false otherwise.
+bool sm89ApplyRoPEQKHalf(
+  half* qBuf, half* kBuf, const float* freqs,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim, int nnXLen,
+  cudaStream_t stream
+);
+
 #endif

@@ -81,3 +81,61 @@ bool sm89RMSNormNHWCHalf(
   CUDA_ERR("sm89RMSNormNHWCHalf",cudaPeekAtLastError());
   return true;
 }
+
+__global__ void sm89ApplyRoPEQKHalfKernel(
+  half* __restrict__ qBuf, half* __restrict__ kBuf, const float* __restrict__ freqs,
+  int seqLen, int numHeads, int numKVHeads, int qHeadDim, int numPairs, int nnXLen
+) {
+  int xy = blockIdx.x;
+  int n = blockIdx.y;
+  int hp = threadIdx.x;
+  int totalHP = numHeads * numPairs;
+  if(xy >= seqLen || hp >= totalHP)
+    return;
+
+  int h = hp / numPairs;
+  int pairIdx = hp % numPairs;
+  int c0 = h * qHeadDim + 2 * pairIdx;
+  int c1 = c0 + 1;
+  size_t col = (size_t)n * seqLen + xy;
+  size_t totalDim = (size_t)numHeads * qHeadDim;
+  size_t idx0 = c0 + col * totalDim;
+  size_t idx1 = c1 + col * totalDim;
+
+  int kvh = h * numKVHeads / numHeads;
+  int x = xy % nnXLen;
+  int y = xy / nnXLen;
+  float freqX = freqs[(kvh * numPairs + pairIdx) * 2 + 0];
+  float freqY = freqs[(kvh * numPairs + pairIdx) * 2 + 1];
+  float angle = (float)x * freqX + (float)y * freqY;
+  float cosVal, sinVal;
+  __sincosf(angle, &sinVal, &cosVal);
+
+  float q0 = __half2float(qBuf[idx0]);
+  float q1 = __half2float(qBuf[idx1]);
+  qBuf[idx0] = __float2half(q0 * cosVal - q1 * sinVal);
+  qBuf[idx1] = __float2half(q0 * sinVal + q1 * cosVal);
+
+  float k0 = __half2float(kBuf[idx0]);
+  float k1 = __half2float(kBuf[idx1]);
+  kBuf[idx0] = __float2half(k0 * cosVal - k1 * sinVal);
+  kBuf[idx1] = __float2half(k0 * sinVal + k1 * cosVal);
+}
+
+bool sm89ApplyRoPEQKHalf(
+  half* qBuf, half* kBuf, const float* freqs,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim, int nnXLen,
+  cudaStream_t stream
+) {
+  if(numHeads != numKVHeads)
+    return false;
+  int numPairs = qHeadDim / 2;
+  int totalHP = numHeads * numPairs;
+  int threads = ((totalHP + 31) / 32) * 32;
+  dim3 blocks(seqLen, batchSize);
+  sm89ApplyRoPEQKHalfKernel<<<blocks, threads, 0, stream>>>(
+    qBuf, kBuf, freqs, seqLen, numHeads, numKVHeads, qHeadDim, numPairs, nnXLen
+  );
+  CUDA_ERR("sm89ApplyRoPEQKHalf",cudaPeekAtLastError());
+  return true;
+}

@@ -76,7 +76,7 @@ Sm89Model::Sm89Model(
   if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
     forward = std::make_unique<Sm89Forward>(
       desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
-      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt
+      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt, options.useFusedQKRoPE
     );
     forwardActive = true;
   }
