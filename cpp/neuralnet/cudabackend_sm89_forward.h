@@ -59,7 +59,8 @@ class Sm89Forward {
     bool useNHWC,
     bool useWideQKV,
     bool useWideFFN,
-    bool useFusedResidual
+    bool useFusedResidual,
+    bool useRMSNormOpt
   );
   ~Sm89Forward();
   Sm89Forward(const Sm89Forward&) = delete;

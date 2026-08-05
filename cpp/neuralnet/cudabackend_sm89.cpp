@@ -26,6 +26,7 @@ Options parseOptions(ConfigParser& cfg) {
   o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", true);
   o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", true);
   o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", true);
+  o.useRMSNormOpt = getBoolOpt(cfg, "cudaUseRMSNormOpt", true);
   o.useMatmulLt = getBoolOpt(cfg, "cudaUseMatmulLt", false);
   o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
   o.useBatchSharedRoPE = getBoolOpt(cfg, "cudaUseBatchSharedRoPE", false);
@@ -75,7 +76,7 @@ Sm89Model::Sm89Model(
   if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
     forward = std::make_unique<Sm89Forward>(
       desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
-      options.useWideQKV, options.useWideFFN, options.useFusedResidual
+      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt
     );
     forwardActive = true;
   }

@@ -59,6 +59,7 @@ struct Options {
   bool useWideQKV = true;
   bool useWideFFN = true;
   bool useFusedResidual = true;
+  bool useRMSNormOpt = true;
   bool useMatmulLt = false;
   bool useFusedQKRoPE = false;
   bool useBatchSharedRoPE = false;
