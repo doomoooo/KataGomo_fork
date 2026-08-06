@@ -139,6 +139,8 @@ def full_override(
     values = [
         f"numNNServerThreadsPerModel={streams}",
         f"cudaPersistingL2StreamsSm120={streams}",
+        "cudaUsePersistingL2Trunk=false",
+        "cudaUsePersistingL2Inner=false",
     ]
     values.extend(f"cudaDeviceToUseThread{index}={device}" for index in range(streams))
     for other_family, key in TACTIC_CONFIG_KEYS.items():
