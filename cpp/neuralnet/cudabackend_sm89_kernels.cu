@@ -22,6 +22,350 @@ void sm89MaskZeroNHWC(half* buf, const half* mask, int batchSize, int xySize, in
   CUDA_ERR("sm89MaskZeroNHWC",cudaPeekAtLastError());
 }
 
+union __align__(16) Sm89Half8 {
+  uint4 packed;
+  half values[8];
+};
+
+__forceinline__ __device__ half sm89SiluHalf(half h) {
+  float a = __half2float(h);
+  return __float2half(a / (1.0f + expf(-a)));
+}
+
+__global__ void sm89ScaleBiasSiluNHWCHalfVec8B13Kernel(
+  const half* __restrict__ in,
+  half* __restrict__ out,
+  const half* __restrict__ scale,
+  const half* __restrict__ bias
+) {
+  constexpr int cVecs = 768 / 8;
+  constexpr int totalVecs = 13 * 19 * 19 * cVecs;
+  int vecIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(vecIdx >= totalVecs)
+    return;
+
+  int cVec = vecIdx % cVecs;
+  Sm89Half8 x;
+  Sm89Half8 s;
+  Sm89Half8 b;
+  Sm89Half8 y;
+  x.packed = reinterpret_cast<const uint4*>(in)[vecIdx];
+  s.packed = reinterpret_cast<const uint4*>(scale)[cVec];
+  b.packed = reinterpret_cast<const uint4*>(bias)[cVec];
+#pragma unroll
+  for(int i = 0; i < 8; i++) {
+    half a = __hfma(x.values[i], s.values[i], b.values[i]);
+    y.values[i] = sm89SiluHalf(a);
+  }
+  reinterpret_cast<uint4*>(out)[vecIdx] = y.packed;
+}
+
+bool sm89ScaleBiasSiluNHWCHalfVec8B13(
+  const half* in, half* out, const half* scale, const half* bias,
+  int nSize, int xySize, int cSize, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19 || cSize != 768)
+    return false;
+  constexpr int blockSize = 256;
+  constexpr int totalVecs = 13 * 19 * 19 * (768 / 8);
+  constexpr int gridSize = (totalVecs + blockSize - 1) / blockSize;
+  sm89ScaleBiasSiluNHWCHalfVec8B13Kernel<<<gridSize,blockSize,0,stream>>>(
+    in, out, scale, bias
+  );
+  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec8B13",cudaPeekAtLastError());
+  return true;
+}
+
+union __align__(8) Sm89Half4 {
+  uint2 packed;
+  half values[4];
+};
+
+__global__ void sm89ScaleBiasSiluNHWCHalfVec4C384B13Kernel(
+  const half* __restrict__ in,
+  half* __restrict__ out,
+  const half* __restrict__ scale,
+  const half* __restrict__ bias
+) {
+  constexpr int cVecs = 384 / 4;
+  constexpr int totalVecs = 13 * 19 * 19 * cVecs;
+  int vecIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(vecIdx >= totalVecs)
+    return;
+
+  int cVec = vecIdx % cVecs;
+  Sm89Half4 x;
+  Sm89Half4 s;
+  Sm89Half4 b;
+  Sm89Half4 y;
+  x.packed = reinterpret_cast<const uint2*>(in)[vecIdx];
+  s.packed = reinterpret_cast<const uint2*>(scale)[cVec];
+  b.packed = reinterpret_cast<const uint2*>(bias)[cVec];
+#pragma unroll
+  for(int i = 0; i < 4; i++) {
+    half a = __hfma(x.values[i], s.values[i], b.values[i]);
+    y.values[i] = sm89SiluHalf(a);
+  }
+  reinterpret_cast<uint2*>(out)[vecIdx] = y.packed;
+}
+
+bool sm89ScaleBiasSiluNHWCHalfVec4C384B13(
+  const half* in, half* out, const half* scale, const half* bias,
+  int nSize, int xySize, int cSize, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19 || cSize != 384)
+    return false;
+  constexpr int blockSize = 256;
+  constexpr int totalVecs = 13 * 19 * 19 * (384 / 4);
+  constexpr int gridSize = (totalVecs + blockSize - 1) / blockSize;
+  sm89ScaleBiasSiluNHWCHalfVec4C384B13Kernel<<<gridSize,blockSize,0,stream>>>(
+    in, out, scale, bias
+  );
+  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec4C384B13",cudaPeekAtLastError());
+  return true;
+}
+
+template<int xyPerBlock>
+__global__ void sm89InitialGlobalMatMulAddB13Kernel(
+  const half* __restrict__ inputGlobal,
+  const half* __restrict__ weights,
+  half* __restrict__ spatial
+) {
+  constexpr int xySize = 19 * 19;
+  constexpr int inChannels = 19;
+  constexpr int outChannels = 768;
+  int c = blockIdx.x * blockDim.x + threadIdx.x;
+  int xyBase = blockIdx.y * xyPerBlock;
+  int n = blockIdx.z;
+
+  float sum = 0.0f;
+#pragma unroll
+  for(int k = 0; k < inChannels; k++) {
+    float w = __half2float(weights[k * outChannels + c]);
+    float x = __half2float(inputGlobal[n * inChannels + k]);
+    sum = __fmaf_rn(w, x, sum);
+  }
+  half globalBias = __float2half_rn(sum);
+#pragma unroll
+  for(int i = 0; i < xyPerBlock; i++) {
+    int xy = xyBase + i;
+    if(xy < xySize) {
+      size_t idx = ((size_t)n * xySize + xy) * outChannels + c;
+      spatial[idx] = __hadd(spatial[idx], globalBias);
+    }
+  }
+}
+
+bool sm89InitialGlobalMatMulAddB13(
+  const half* inputGlobal, const half* weights, half* spatial,
+  int nSize, int xySize, int inChannels, int outChannels, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19 || inChannels != 19 || outChannels != 768)
+    return false;
+  constexpr int xyPerBlock = 8;
+  constexpr int blockSize = 256;
+  dim3 grid(outChannels / blockSize, (xySize + xyPerBlock - 1) / xyPerBlock, nSize);
+  sm89InitialGlobalMatMulAddB13Kernel<xyPerBlock><<<grid,blockSize,0,stream>>>(
+    inputGlobal, weights, spatial
+  );
+  CUDA_ERR("sm89InitialGlobalMatMulAddB13",cudaPeekAtLastError());
+  return true;
+}
+
+template<int inputRowStride, int inputChannelOffset>
+__global__ void sm89FusedPolicyP1B13Kernel(
+  const half* __restrict__ in,
+  float* __restrict__ out,
+  const float* __restrict__ globalBias,
+  const float* __restrict__ scale,
+  const float* __restrict__ bias
+) {
+  constexpr int xySize = 19 * 19;
+  constexpr int channels = 96;
+  int c = threadIdx.x;
+  int xy = blockIdx.x * blockDim.y + threadIdx.y;
+  int n = blockIdx.y;
+  if(c >= channels || xy >= xySize || n >= 13)
+    return;
+
+  size_t row = (size_t)n * xySize + xy;
+  size_t inputIdx = row * inputRowStride + inputChannelOffset + c;
+  size_t outputIdx = row * channels + c;
+  float value = __half2float(in[inputIdx]);
+  value = value + globalBias[n * channels + c];
+  value = value * scale[c] + bias[c];
+  out[outputIdx] = value / (1.0f + expf(-value));
+}
+
+bool sm89FusedPolicyP1B13(
+  const half* in, float* out, const float* globalBias,
+  const float* scale, const float* bias,
+  int nSize, int xySize, int cSize,
+  int inputRowStride, int inputChannelOffset, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19 || cSize != 96)
+    return false;
+  dim3 block(96, 5);
+  dim3 grid((xySize + block.y - 1) / block.y, nSize);
+  if(inputRowStride == 96 && inputChannelOffset == 0)
+    sm89FusedPolicyP1B13Kernel<96,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias);
+  else if(inputRowStride == 384 && inputChannelOffset == 0)
+    sm89FusedPolicyP1B13Kernel<384,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias);
+  else
+    return false;
+  CUDA_ERR("sm89FusedPolicyP1B13",cudaPeekAtLastError());
+  return true;
+}
+
+template<int channels, int inputChannelOffset>
+__global__ void sm89HeadBNSiluStridedB13Kernel(
+  const half* __restrict__ in,
+  half* __restrict__ out,
+  const half* __restrict__ scale,
+  const half* __restrict__ bias
+) {
+  constexpr int xySize = 19 * 19;
+  constexpr int inputRowStride = 384;
+  int c = threadIdx.x;
+  int xy = blockIdx.x * blockDim.y + threadIdx.y;
+  int n = blockIdx.y;
+  if(c >= channels || xy >= xySize || n >= 13)
+    return;
+
+  size_t row = (size_t)n * xySize + xy;
+  half affine = __hfma(in[row * inputRowStride + inputChannelOffset + c], scale[c], bias[c]);
+  out[row * channels + c] = sm89SiluHalf(affine);
+}
+
+bool sm89HeadBNSiluStridedB13(
+  const half* in, half* out, const half* scale, const half* bias,
+  int nSize, int xySize, int cSize,
+  int inputRowStride, int inputChannelOffset, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19 || inputRowStride != 384)
+    return false;
+  if(cSize == 96 && inputChannelOffset == 96) {
+    dim3 block(96, 5);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNSiluStridedB13Kernel<96,96><<<grid,block,0,stream>>>(in,out,scale,bias);
+  }
+  else if(cSize == 192 && inputChannelOffset == 192) {
+    dim3 block(192, 2);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNSiluStridedB13Kernel<192,192><<<grid,block,0,stream>>>(in,out,scale,bias);
+  }
+  else
+    return false;
+  CUDA_ERR("sm89HeadBNSiluStridedB13",cudaPeekAtLastError());
+  return true;
+}
+
+template<int channels, int rowsPerBlock, bool writeHalf, int inputRowStride, int inputChannelOffset>
+__global__ void sm89HeadBNHalfToFloatB13Kernel(
+  const half* __restrict__ in,
+  half* __restrict__ halfOut,
+  float* __restrict__ floatOut,
+  const half* __restrict__ scale,
+  const half* __restrict__ bias
+) {
+  constexpr int xySize = 19 * 19;
+  int c = threadIdx.x;
+  int xy = blockIdx.x * rowsPerBlock + threadIdx.y;
+  int n = blockIdx.y;
+  if(c >= channels || xy >= xySize || n >= 13)
+    return;
+
+  size_t row = (size_t)n * xySize + xy;
+  size_t outIdx = row * channels + c;
+  size_t inIdx = row * inputRowStride + inputChannelOffset + c;
+  half affine = __hfma(in[inIdx], scale[c], bias[c]);
+  float value = __half2float(affine);
+  half activated = __float2half(value / (1.0f + expf(-value)));
+  if(writeHalf)
+    halfOut[outIdx] = activated;
+  floatOut[outIdx] = __half2float(activated);
+}
+
+bool sm89HeadBNHalfToFloatB13(
+  const half* in, half* halfOut, float* floatOut,
+  const half* scale, const half* bias,
+  int nSize, int xySize, int cSize,
+  int inputRowStride, int inputChannelOffset, cudaStream_t stream
+) {
+  if(nSize != 13 || xySize != 19 * 19)
+    return false;
+  if(cSize == 96 && halfOut == nullptr && inputRowStride == 96 && inputChannelOffset == 0) {
+    dim3 block(96, 5);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNHalfToFloatB13Kernel<96,5,false,96,0><<<grid,block,0,stream>>>(
+      in, nullptr, floatOut, scale, bias
+    );
+  }
+  else if(cSize == 96 && halfOut == nullptr && inputRowStride == 384 && inputChannelOffset == 96) {
+    dim3 block(96, 5);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNHalfToFloatB13Kernel<96,5,false,384,96><<<grid,block,0,stream>>>(
+      in, nullptr, floatOut, scale, bias
+    );
+  }
+  else if(cSize == 192 && halfOut != nullptr && inputRowStride == 192 && inputChannelOffset == 0) {
+    dim3 block(192, 2);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNHalfToFloatB13Kernel<192,2,true,192,0><<<grid,block,0,stream>>>(
+      in, halfOut, floatOut, scale, bias
+    );
+  }
+  else if(cSize == 192 && halfOut != nullptr && inputRowStride == 384 && inputChannelOffset == 192) {
+    dim3 block(192, 2);
+    dim3 grid((xySize + block.y - 1) / block.y, nSize);
+    sm89HeadBNHalfToFloatB13Kernel<192,2,true,384,192><<<grid,block,0,stream>>>(
+      in, halfOut, floatOut, scale, bias
+    );
+  }
+  else
+    return false;
+  CUDA_ERR("sm89HeadBNHalfToFloatB13",cudaPeekAtLastError());
+  return true;
+}
+
+__global__ void sm89SplitValueTerminalB13Kernel(
+  const float* __restrict__ combined,
+  const float* __restrict__ bias,
+  float* __restrict__ value,
+  float* __restrict__ scoreValue
+) {
+  constexpr int valueChannels = 3;
+  constexpr int scoreValueChannels = 6;
+  constexpr int combinedChannels = valueChannels + scoreValueChannels;
+  constexpr int total = 13 * combinedChannels;
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(idx >= total)
+    return;
+
+  int n = idx / combinedChannels;
+  int c = idx % combinedChannels;
+  float result = combined[idx] + bias[c];
+  if(c < valueChannels)
+    value[n * valueChannels + c] = result;
+  else
+    scoreValue[n * scoreValueChannels + c - valueChannels] = result;
+}
+
+bool sm89SplitValueTerminalB13(
+  const float* combined, const float* bias,
+  float* value, float* scoreValue,
+  int batchSize, int valueChannels, int scoreValueChannels,
+  cudaStream_t stream
+) {
+  if(batchSize != 13 || valueChannels != 3 || scoreValueChannels != 6)
+    return false;
+  sm89SplitValueTerminalB13Kernel<<<1,128,0,stream>>>(
+    combined, bias, value, scoreValue
+  );
+  CUDA_ERR("sm89SplitValueTerminalB13",cudaPeekAtLastError());
+  return true;
+}
+
 __global__ void sm89RMSNormNHWCHalfKernel(
   const half* __restrict__ in, half* __restrict__ out,
   const half* __restrict__ gamma, const half* __restrict__ beta, const half* __restrict__ mask,
@@ -137,5 +481,189 @@ bool sm89ApplyRoPEQKHalf(
     qBuf, kBuf, freqs, seqLen, numHeads, numKVHeads, qHeadDim, numPairs, nnXLen
   );
   CUDA_ERR("sm89ApplyRoPEQKHalf",cudaPeekAtLastError());
+  return true;
+}
+
+__global__ void sm89PrecomputeRoPECosSinKernel(
+  const float* __restrict__ freqs, float2* __restrict__ cosSinTable,
+  int seqLen, int numHeads, int numKVHeads, int qHeadDim, int numPairs, int nnXLen
+) {
+  int xy = blockIdx.x;
+  int hp = threadIdx.x;
+  int totalHP = numHeads * numPairs;
+  if(xy >= seqLen || hp >= totalHP)
+    return;
+
+  int h = hp / numPairs;
+  int pairIdx = hp % numPairs;
+  int kvh = h * numKVHeads / numHeads;
+  int x = xy % nnXLen;
+  int y = xy / nnXLen;
+  float freqX = freqs[(kvh * numPairs + pairIdx) * 2 + 0];
+  float freqY = freqs[(kvh * numPairs + pairIdx) * 2 + 1];
+  float angle = (float)x * freqX + (float)y * freqY;
+  float cosVal, sinVal;
+  __sincosf(angle, &sinVal, &cosVal);
+  cosSinTable[(size_t)xy * totalHP + hp] = make_float2(cosVal, sinVal);
+}
+
+bool sm89PrecomputeRoPECosSin(
+  const float* freqs, float2* cosSinTable,
+  int seqLen, int numHeads, int numKVHeads, int qHeadDim, int nnXLen,
+  cudaStream_t stream
+) {
+  if(numHeads != numKVHeads)
+    return false;
+  int numPairs = qHeadDim / 2;
+  int totalHP = numHeads * numPairs;
+  int threads = ((totalHP + 31) / 32) * 32;
+  sm89PrecomputeRoPECosSinKernel<<<seqLen, threads, 0, stream>>>(
+    freqs, cosSinTable, seqLen, numHeads, numKVHeads, qHeadDim, numPairs, nnXLen
+  );
+  CUDA_ERR("sm89PrecomputeRoPECosSin",cudaPeekAtLastError());
+  return true;
+}
+
+__global__ void sm89ApplyRoPEQKHalfPrecomputedKernel(
+  half* __restrict__ qBuf, half* __restrict__ kBuf,
+  const float2* __restrict__ cosSinTable,
+  int seqLen, int numHeads, int qHeadDim, int numPairs
+) {
+  int xy = blockIdx.x;
+  int n = blockIdx.y;
+  int hp = threadIdx.x;
+  int totalHP = numHeads * numPairs;
+  if(xy >= seqLen || hp >= totalHP)
+    return;
+
+  int h = hp / numPairs;
+  int pairIdx = hp % numPairs;
+  int c0 = h * qHeadDim + 2 * pairIdx;
+  int c1 = c0 + 1;
+  size_t col = (size_t)n * seqLen + xy;
+  size_t totalDim = (size_t)numHeads * qHeadDim;
+  size_t idx0 = c0 + col * totalDim;
+  size_t idx1 = c1 + col * totalDim;
+  float2 cosSin = cosSinTable[(size_t)xy * totalHP + hp];
+  float cosVal = cosSin.x;
+  float sinVal = cosSin.y;
+
+  float q0 = __half2float(qBuf[idx0]);
+  float q1 = __half2float(qBuf[idx1]);
+  qBuf[idx0] = __float2half(q0 * cosVal - q1 * sinVal);
+  qBuf[idx1] = __float2half(q0 * sinVal + q1 * cosVal);
+
+  float k0 = __half2float(kBuf[idx0]);
+  float k1 = __half2float(kBuf[idx1]);
+  kBuf[idx0] = __float2half(k0 * cosVal - k1 * sinVal);
+  kBuf[idx1] = __float2half(k0 * sinVal + k1 * cosVal);
+}
+
+bool sm89ApplyRoPEQKHalfPrecomputed(
+  half* qBuf, half* kBuf, const float2* cosSinTable,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim,
+  cudaStream_t stream
+) {
+  if(numHeads != numKVHeads)
+    return false;
+  int numPairs = qHeadDim / 2;
+  int totalHP = numHeads * numPairs;
+  int threads = ((totalHP + 31) / 32) * 32;
+  dim3 blocks(seqLen, batchSize);
+  sm89ApplyRoPEQKHalfPrecomputedKernel<<<blocks, threads, 0, stream>>>(
+    qBuf, kBuf, cosSinTable, seqLen, numHeads, qHeadDim, numPairs
+  );
+  CUDA_ERR("sm89ApplyRoPEQKHalfPrecomputed",cudaPeekAtLastError());
+  return true;
+}
+
+template<int BatchGroup>
+__global__ void sm89ApplyRoPEQKHalfBatchGroupedKernel(
+  half* __restrict__ qBuf, half* __restrict__ kBuf, const float* __restrict__ freqs,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim,
+  int numPairs, int nnXLen
+) {
+  int xy = blockIdx.x;
+  int hp = threadIdx.x;
+  int totalHP = numHeads * numPairs;
+  if(xy >= seqLen || hp >= totalHP)
+    return;
+
+  int h = hp / numPairs;
+  int pairIdx = hp % numPairs;
+  int c0 = h * qHeadDim + 2 * pairIdx;
+  int c1 = c0 + 1;
+  int kvh = h * numKVHeads / numHeads;
+  int x = xy % nnXLen;
+  int y = xy / nnXLen;
+  float freqX = freqs[(kvh * numPairs + pairIdx) * 2 + 0];
+  float freqY = freqs[(kvh * numPairs + pairIdx) * 2 + 1];
+  float angle = (float)x * freqX + (float)y * freqY;
+  float cosVal, sinVal;
+  __sincosf(angle, &sinVal, &cosVal);
+  size_t totalDim = (size_t)numHeads * qHeadDim;
+
+#pragma unroll
+  for(int i = 0; i < BatchGroup; i++) {
+    int n = blockIdx.y * BatchGroup + i;
+    if(n < batchSize) {
+      size_t col = (size_t)n * seqLen + xy;
+      size_t idx0 = c0 + col * totalDim;
+      size_t idx1 = c1 + col * totalDim;
+      float q0 = __half2float(qBuf[idx0]);
+      float q1 = __half2float(qBuf[idx1]);
+      qBuf[idx0] = __float2half(q0 * cosVal - q1 * sinVal);
+      qBuf[idx1] = __float2half(q0 * sinVal + q1 * cosVal);
+      float k0 = __half2float(kBuf[idx0]);
+      float k1 = __half2float(kBuf[idx1]);
+      kBuf[idx0] = __float2half(k0 * cosVal - k1 * sinVal);
+      kBuf[idx1] = __float2half(k0 * sinVal + k1 * cosVal);
+    }
+  }
+}
+
+template<int BatchGroup>
+static void launchSm89ApplyRoPEQKHalfBatchGrouped(
+  half* qBuf, half* kBuf, const float* freqs,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim,
+  int numPairs, int nnXLen, int threads, cudaStream_t stream
+) {
+  dim3 blocks(seqLen, (batchSize + BatchGroup - 1) / BatchGroup);
+  sm89ApplyRoPEQKHalfBatchGroupedKernel<BatchGroup><<<blocks, threads, 0, stream>>>(
+    qBuf, kBuf, freqs, batchSize, seqLen, numHeads, numKVHeads, qHeadDim,
+    numPairs, nnXLen
+  );
+}
+
+bool sm89ApplyRoPEQKHalfBatchGrouped(
+  half* qBuf, half* kBuf, const float* freqs,
+  int batchSize, int seqLen, int numHeads, int numKVHeads, int qHeadDim, int nnXLen,
+  int batchGroup, cudaStream_t stream
+) {
+  if(numHeads != numKVHeads)
+    return false;
+  int numPairs = qHeadDim / 2;
+  int totalHP = numHeads * numPairs;
+  int threads = ((totalHP + 31) / 32) * 32;
+  switch(batchGroup) {
+  case 2:
+    launchSm89ApplyRoPEQKHalfBatchGrouped<2>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
+    break;
+  case 3:
+    launchSm89ApplyRoPEQKHalfBatchGrouped<3>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
+    break;
+  case 4:
+    launchSm89ApplyRoPEQKHalfBatchGrouped<4>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
+    break;
+  case 7:
+    launchSm89ApplyRoPEQKHalfBatchGrouped<7>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
+    break;
+  case 13:
+    launchSm89ApplyRoPEQKHalfBatchGrouped<13>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
+    break;
+  default:
+    return false;
+  }
+  CUDA_ERR("sm89ApplyRoPEQKHalfBatchGrouped",cudaPeekAtLastError());
   return true;
 }

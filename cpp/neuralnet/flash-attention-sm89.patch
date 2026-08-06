@@ -1,0 +1,18 @@
+diff --git a/hopper/tile_size.h b/hopper/tile_size.h
+index 8353542..d2a0098 100644
+--- a/hopper/tile_size.h
++++ b/hopper/tile_size.h
+@@ -60,7 +60,13 @@ constexpr std::tuple<int, int, int, int, bool> tile_size_fwd_sm8x(
+         bool softcap=false, bool append_kv=false) {
+     if (element_size == 2) {
+         if (headdim <= 64) {
++#ifdef KATAGO_FLASH_BLOCK_N
++            // Fixed-shape SM89 experiment. Defaults match upstream; compile-time overrides make
++            // each AOT tile variant an explicit, reproducible build.
++            return {KATAGO_FLASH_BLOCK_M, KATAGO_FLASH_BLOCK_N, KATAGO_FLASH_NUM_WARPS, 1, false};
++#else
+             return {128, varlen_and_split ? 80 : (is_local ? 96 : 112), 4, 1, false};
++#endif
+         } else if (headdim <= 96) {
+             return {128, varlen_and_split || is_local ? 48 : 64, 4, 1, false};
+         } else if (headdim <= 128) {
