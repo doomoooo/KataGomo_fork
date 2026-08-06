@@ -88,6 +88,9 @@ NNEvaluator::NNEvaluator(
    randSeed(rSeed),
    debugSkipNeuralNet(skipNeuralNet),
    disableWarmup(disableWarmup_),
+   warmupOnlyMaxBatchSize(
+     cfg.contains("cudaWarmupOnlyMaxBatchSize") ? cfg.getBool("cudaWarmupOnlyMaxBatchSize") : false
+   ),
    computeContext(NULL),
    loadedModel(NULL),
    nnCacheTable(NULL),
@@ -679,9 +682,12 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
     return;
 
   if(logger != NULL) {
+    string batchRange = warmupOnlyMaxBatchSize ?
+      Global::intToString(maxBatchSize) :
+      "1.." + Global::intToString(maxBatchSize);
     logger->write(
       "Cuda backend thread " + Global::intToString(serverThreadIdx) +
-      ": warming up transformer graphs for batch sizes 1.." + Global::intToString(maxBatchSize)
+      ": warming up transformer graphs for batch sizes " + batchRange
     );
   }
 
@@ -719,7 +725,8 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
     resultBufs.push_back(buf);
   }
 
-  for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
+  int firstBatchSize = warmupOnlyMaxBatchSize ? maxBatchSize : 1;
+  for(int batchSize = firstBatchSize; batchSize <= maxBatchSize; batchSize++) {
     std::vector<NNOutput*> outputs;
     outputs.reserve(batchSize);
     for(int row = 0; row < batchSize; row++) {

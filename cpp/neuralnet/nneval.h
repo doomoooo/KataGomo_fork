@@ -257,6 +257,7 @@ class NNEvaluator {
   const std::string randSeed;
   const bool debugSkipNeuralNet;
   const bool disableWarmup;
+  const bool warmupOnlyMaxBatchSize;
 
   ComputeContext* computeContext;
   LoadedModel* loadedModel;
@@ -316,10 +317,9 @@ class NNEvaluator {
     NNResultBuf& buf
   ) const;
 
-  // Run a forward pass on this freshly-created handle for each batch size 1 to maxBatchSize, with an
-  // empty board. This pre-compiles any lazily-built backend graphs (e.g. cuDNN SDPA execution plans)
-  // so the first real searches aren't stalled. No-op unless this is a transformer model on a backend
-  // where warmup matters, and unless warmup is enabled.
+  // Run forward passes on this freshly-created handle to pre-compile lazily-built backend graphs
+  // (e.g. cuDNN SDPA execution plans). By default all batch sizes 1..maxBatchSize are covered;
+  // fixed-B benchmarks may request only maxBatchSize through cudaWarmupOnlyMaxBatchSize.
   // gpuHandle may be NULL (neural-net-less), in which case this is a no-op.
   void maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverThreadIdx);
 
