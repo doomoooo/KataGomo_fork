@@ -101,12 +101,32 @@ const T* findTactic(
   return nullptr;
 }
 
+template<typename T>
+const T* findExplicitFatTactic(
+  const T* tactics, std::size_t count, int batchSize, const char* requestedId
+) {
+  if(requestedId == nullptr)
+    return nullptr;
+  for(std::size_t index = 0; index < count; index++) {
+    const T& tactic = tactics[index];
+    if(tactic.batchSize == batchSize && std::strcmp(tactic.id, requestedId) == 0)
+      return &tactic;
+  }
+  return nullptr;
+}
+
 } // namespace
 
 const FusedFFNAotTactic* findFusedFFNAotTactic(
   int batchSize, int gpuClass, int streams, const char* requestedId
 ) {
-  const FusedFFNAotTactic* tactic = findTactic(
+  std::size_t fatCount = 0;
+  const FusedFFNAotTactic* fatTactics = getSm120SearchFfnFatTactics(fatCount);
+  const FusedFFNAotTactic* tactic = findExplicitFatTactic(
+    fatTactics, fatCount, batchSize, requestedId);
+  if(tactic != nullptr)
+    return tactic;
+  tactic = findTactic(
     ffnTactics, batchSize, gpuClass, streams, requestedId);
   if(tactic != nullptr)
     return tactic;
@@ -117,7 +137,13 @@ const FusedFFNAotTactic* findFusedFFNAotTactic(
 const WideQKVAotTactic* findWideQKVAotTactic(
   int batchSize, int gpuClass, int streams, const char* requestedId
 ) {
-  const WideQKVAotTactic* tactic = findTactic(
+  std::size_t fatCount = 0;
+  const WideQKVAotTactic* fatTactics = getSm120SearchQkvFatTactics(fatCount);
+  const WideQKVAotTactic* tactic = findExplicitFatTactic(
+    fatTactics, fatCount, batchSize, requestedId);
+  if(tactic != nullptr)
+    return tactic;
+  tactic = findTactic(
     qkvTactics, batchSize, gpuClass, streams, requestedId);
   if(tactic != nullptr)
     return tactic;
@@ -129,6 +155,13 @@ const ResidualGemmAotTactic* findResidualGemmAotTactic(
   int batchSize, int gpuClass, int streams, int inputChannels,
   const char* requestedId
 ) {
+  std::size_t fatCount = 0;
+  const ResidualGemmAotTactic* fatTactics =
+    getSm120SearchLinear2FatTactics(fatCount);
+  const ResidualGemmAotTactic* fatTactic = findExplicitFatTactic(
+    fatTactics, fatCount, batchSize, requestedId);
+  if(fatTactic != nullptr && fatTactic->inputChannels == inputChannels)
+    return fatTactic;
   if(inputChannels == searchLinear2Tactic.inputChannels &&
      searchLinear2Tactic.batchSize == batchSize && requestedId != nullptr &&
      std::strcmp(searchLinear2Tactic.id, requestedId) == 0)

@@ -28,6 +28,17 @@ SLOT_CACHE_KEYS = {
     "qkv": "SM120_SEARCH_QKV_SOURCE",
     "linear2": "SM120_SEARCH_LINEAR2_SOURCE",
 }
+FAT_SOURCE_CACHE_KEYS = {
+    "ffn": "SM120_SEARCH_FFN_FAT_SOURCES",
+    "qkv": "SM120_SEARCH_QKV_FAT_SOURCES",
+    "linear2": "SM120_SEARCH_LINEAR2_FAT_SOURCES",
+}
+FAT_REGISTRY_CACHE_KEYS = {
+    "ffn": "SM120_SEARCH_FFN_FAT_REGISTRY_SOURCE",
+    "qkv": "SM120_SEARCH_QKV_FAT_REGISTRY_SOURCE",
+    "linear2": "SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE",
+}
+TILELANG_FAMILIES = tuple(FAT_SOURCE_CACHE_KEYS)
 TACTIC_CONFIG_KEYS = {
     "ffn": "cudaFusedFFNAotTacticSm120",
     "qkv": "cudaWideQKVAotTacticSm120",
@@ -90,7 +101,7 @@ def write_result(path: pathlib.Path, payload: dict) -> None:
 
 def initialize_active_slots(
     repo: pathlib.Path, active_dir: pathlib.Path, target_family: str,
-    keep_other_slots: bool,
+    keep_other_slots: bool, force_all_stubs: bool = False,
 ) -> dict[str, pathlib.Path]:
     active_dir.mkdir(parents=True, exist_ok=True)
     result = {}
@@ -98,7 +109,8 @@ def initialize_active_slots(
         target = active_dir / f"active-{family}.cu"
         stub = repo / "cpp/neuralnet/tilelang_aot" / f"sm120_search_{family}_stub.cu"
         if (
-            not target.exists()
+            force_all_stubs
+            or not target.exists()
             or (family != target_family and not keep_other_slots)
             or target.read_text().startswith(
             '#include "../cudabackend_sm120_kernels.h"'
@@ -107,6 +119,33 @@ def initialize_active_slots(
             target.write_text(stub.read_text())
         result[family] = target
     return result
+
+
+def prepare_fat_bundle(
+    repo: pathlib.Path, space_path: pathlib.Path, family: str,
+    batches: str, candidate_ids: str, device: int, output_dir: pathlib.Path,
+    s1_warmup: int, s1_iterations: int, runner: list[str],
+    log_path: pathlib.Path, reuse_existing: bool,
+) -> dict:
+    command = runner + [
+        sys.executable,
+        str(repo / "python/sm120_prepare_tilelang_fat_scan.py"),
+        "--space", str(space_path),
+        "--family", family,
+        "--batches", batches,
+        "--candidate-ids", candidate_ids,
+        "--device", str(device),
+        "--output-dir", str(output_dir),
+        "--s1-warmup", str(s1_warmup),
+        "--s1-iterations", str(s1_iterations),
+    ]
+    if reuse_existing:
+        command.append("--reuse-existing")
+    run_checked(command, log_path)
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"fat-scan preparer did not produce {manifest_path}")
+    return json.loads(manifest_path.read_text())
 
 
 def configure_build(
@@ -206,8 +245,20 @@ def main() -> None:
             "keeps the accepted common graph active"
         ),
     )
+    parser.add_argument(
+        "--fat-scan",
+        action="store_true",
+        help="generate/link every selected TileLang batch+tactic once",
+    )
+    parser.add_argument(
+        "--reuse-fat-generated",
+        action="store_true",
+        help="reuse hash-validated generated TUs from a prior fat scan",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.fat_scan and args.family not in TILELANG_FAMILIES:
+        parser.error("--fat-scan currently supports only FFN, QKV, and linear2")
 
     repo = pathlib.Path(args.repo).resolve()
     build_dir = pathlib.Path(args.build_dir).resolve()
@@ -244,6 +295,7 @@ def main() -> None:
         "runner": runner,
         "extra_override_config": args.override_config,
         "common_graph_policy": common_graph_policy,
+        "fat_scan": args.fat_scan,
     }
 
     if output.exists():
@@ -277,7 +329,49 @@ def main() -> None:
         repo, active_dir,
         args.family if args.family in SLOT_FAMILIES else "",
         args.keep_other_slots,
+        force_all_stubs=args.fat_scan,
     )
+    cmake_args = list(args.cmake_arg)
+    fat_cache_values = {
+        family: {
+            "registry": str(
+                repo / "cpp/neuralnet/tilelang_aot"
+                / f"sm120_search_{family}_fat_stub.cu"
+            ),
+            "sources": "",
+        }
+        for family in TILELANG_FAMILIES
+    }
+    fat_entries = {}
+    if args.fat_scan:
+        fat_output_dir = generated / f"fat-{args.family}"
+        fat_manifest = prepare_fat_bundle(
+            repo, space_path, args.family, args.batches, args.candidate_ids,
+            args.device, fat_output_dir, args.s1_warmup,
+            args.s1_iterations, runner, logs / "fat-prepare",
+            args.reuse_fat_generated,
+        )
+        fat_entries = {
+            (item["batch"], item["candidate_id"]): item
+            for item in fat_manifest["entries"]
+        }
+        fat_cache_values[args.family] = {
+            "registry": fat_manifest["registry_source"],
+            "sources": ";".join(fat_manifest["sources"]),
+        }
+        payload["fat_scan_manifest"] = str(
+            (fat_output_dir / "manifest.json").resolve()
+        )
+        payload["build_policy"] = (
+            "generate all selected TUs, configure/link once"
+        )
+    for family in TILELANG_FAMILIES:
+        cmake_args.extend([
+            f'-D{FAT_REGISTRY_CACHE_KEYS[family]}='
+            f'{fat_cache_values[family]["registry"]}',
+            f'-D{FAT_SOURCE_CACHE_KEYS[family]}='
+            f'{fat_cache_values[family]["sources"]}',
+        ])
     fa4_active_dir = active_dir / "fa4"
     fa4_bridge = fa4_active_dir / "active-fa4.cpp"
     fa4_object = fa4_active_dir / "active-fa4.o"
@@ -301,13 +395,14 @@ def main() -> None:
             "--num-stages", str(bootstrap["num_stages"]),
         ]
         run_checked(command, logs / "bootstrap-fa4")
-        args.cmake_arg.extend([
+        cmake_args.extend([
             f"-DSM120_SEARCH_FA4_SOURCE={fa4_bridge}",
             f"-DSM120_SEARCH_FA4_OBJECT={fa4_object}",
         ])
     binary = configure_build(
-        repo, build_dir, active, args.jobs, logs, args.cmake_arg,
+        repo, build_dir, active, args.jobs, logs, cmake_args,
     )
+    write_result(output, payload)
     generator = repo / "python/sm120_generate_tilelang_aot.py"
     measurement_index = len(payload["rows"])
 
@@ -332,26 +427,41 @@ def main() -> None:
             }
             try:
                 if implementation == "tilelang" and args.family in SLOT_FAMILIES:
-                    candidate_dir = generated / f"b{batch}" / candidate_id
-                    command = runner + [
-                        sys.executable, str(generator),
-                        "--space", str(space_path),
-                        "--family", args.family,
-                        "--candidate-id", candidate_id,
-                        "--batch", str(batch),
-                        "--device", str(args.device),
-                        "--output-dir", str(candidate_dir),
-                        "--source-path", str(active[args.family]),
-                        "--s1-warmup", str(args.s1_warmup),
-                        "--s1-iterations", str(args.s1_iterations),
-                    ]
-                    run_checked(command, logs / f"{prefix}-generate")
-                    metadata_path = candidate_dir / f"{args.family}-{candidate_id}.json"
-                    row["generator_metadata"] = json.loads(metadata_path.read_text())
-                    run_checked(
-                        ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
-                        logs / f"{prefix}-build",
-                    )
+                    if args.fat_scan:
+                        fat_entry = fat_entries.get(key)
+                        if fat_entry is None:
+                            raise RuntimeError(
+                                f"fat bundle is missing B{batch}/{candidate_id}"
+                            )
+                        row["fat_scan_entry"] = fat_entry
+                        row["generator_metadata"] = json.loads(
+                            pathlib.Path(fat_entry["metadata"]).read_text()
+                        )
+                    else:
+                        candidate_dir = generated / f"b{batch}" / candidate_id
+                        command = runner + [
+                            sys.executable, str(generator),
+                            "--space", str(space_path),
+                            "--family", args.family,
+                            "--candidate-id", candidate_id,
+                            "--batch", str(batch),
+                            "--device", str(args.device),
+                            "--output-dir", str(candidate_dir),
+                            "--source-path", str(active[args.family]),
+                            "--s1-warmup", str(args.s1_warmup),
+                            "--s1-iterations", str(args.s1_iterations),
+                        ]
+                        run_checked(command, logs / f"{prefix}-generate")
+                        metadata_path = (
+                            candidate_dir / f"{args.family}-{candidate_id}.json"
+                        )
+                        row["generator_metadata"] = json.loads(
+                            metadata_path.read_text()
+                        )
+                        run_checked(
+                            ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
+                            logs / f"{prefix}-build",
+                        )
                 elif implementation == "historical_tilelang" and args.family == "ffn":
                     candidate_dir = generated / f"b{batch}" / candidate_id
                     command = runner + [

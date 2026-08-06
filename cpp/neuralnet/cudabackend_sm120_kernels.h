@@ -3,6 +3,8 @@
 
 #include "../neuralnet/cudaincludes.h"
 
+#include <cstddef>
+
 namespace Sm120Backend {
 
 enum Sm120GpuClass {
@@ -53,6 +55,12 @@ struct ResidualGemmAotTactic {
   bool automaticWinner;
   ResidualGemmAotLaunchFn launch;
 };
+
+// These getters are empty in normal/single-slot builds. A fat-scan build
+// replaces one family stub with a generated exact-(batch,tactic ID) table.
+const FusedFFNAotTactic* getSm120SearchFfnFatTactics(std::size_t& count);
+const WideQKVAotTactic* getSm120SearchQkvFatTactics(std::size_t& count);
+const ResidualGemmAotTactic* getSm120SearchLinear2FatTactics(std::size_t& count);
 
 const FusedFFNAotTactic* findFusedFFNAotTactic(
   int batchSize, int gpuClass, int streams, const char* requestedId);

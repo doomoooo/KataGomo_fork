@@ -25,6 +25,12 @@ import tilelang
 import tilelang.language as T
 import torch
 
+from sm120_fat_scan import (
+    isolate_tilelang_debug_symbols,
+    launch_symbol as fat_launch_symbol,
+    validate_symbol_token,
+)
+
 
 @tilelang.jit(pass_configs={
     tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
@@ -276,6 +282,7 @@ def common_tile(candidate_value: dict) -> dict:
 def append_wrapper(
     source: str, family: str, candidate_value: dict, batch: int,
     dynamic_smem: int,
+    symbol_token: str | None = None,
 ) -> str:
     candidate_id = candidate_value["id"]
     m = batch * 361
@@ -295,7 +302,11 @@ def append_wrapper(
         "qkv": "wide_qkv_kernel",
         "linear2": "residual_gemm_kernel",
     }[family]
+    if symbol_token is not None:
+        validate_symbol_token(symbol_token)
     kernel_new = f"sm120_search_{family}_kernel"
+    if symbol_token is not None:
+        kernel_new += f"_{symbol_token}"
     source = source.replace(kernel_old, kernel_new)
     attribute = f"""
   static const cudaError_t attributeStatus = cudaFuncSetAttribute(
@@ -303,11 +314,18 @@ def append_wrapper(
   if(attributeStatus != cudaSuccess)
     return attributeStatus;
 """ if dynamic_smem > 49152 else ""
-    descriptors = f'''\nextern "C" int sm120_search_{family}_batch() {{ return {batch}; }}
+    descriptors = ""
+    if symbol_token is None:
+        descriptors = f'''\nextern "C" int sm120_search_{family}_batch() {{ return {batch}; }}
 extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
 '''
+    launch_name = (
+        f"sm120_search_{family}_launch"
+        if symbol_token is None
+        else fat_launch_symbol(family, symbol_token)
+    )
     if family == "ffn":
-        launcher = f'''extern "C" cudaError_t sm120_search_ffn_launch(
+        launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* linear_weights, const half* gate_weights,
   half* output, cudaStream_t stream) {{
 {attribute}  {kernel_new}<<<dim3({grid_x}, {grid_y}, 1), {threads}, {dynamic_smem}, stream>>>(
@@ -319,7 +337,7 @@ extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
 }}
 '''
     elif family == "qkv":
-        launcher = f'''extern "C" cudaError_t sm120_search_qkv_launch(
+        launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* weights, half* output,
   cudaStream_t stream) {{
 {attribute}  {kernel_new}<<<dim3({grid_x}, {grid_y}, 1), {threads}, {dynamic_smem}, stream>>>(
@@ -330,7 +348,7 @@ extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
 }}
 '''
     else:
-        launcher = f'''extern "C" cudaError_t sm120_search_linear2_launch(
+        launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* weights, half* residual,
   cudaStream_t stream) {{
 {attribute}  {kernel_new}<<<dim3({grid_x}, {grid_y}, 1), {threads}, {dynamic_smem}, stream>>>(
@@ -368,6 +386,13 @@ def main() -> None:
     parser.add_argument(
         "--source-path",
         help="optional stable active-slot path; avoids CMake reconfiguration between candidates",
+    )
+    parser.add_argument(
+        "--fat-symbol-token",
+        help=(
+            "emit a uniquely named fat-scan kernel/launcher instead of the "
+            "legacy single-slot descriptor ABI"
+        ),
     )
     parser.add_argument("--s1-warmup", type=int, default=20)
     parser.add_argument("--s1-iterations", type=int, default=100)
@@ -443,7 +468,12 @@ def main() -> None:
     stages = int(candidate_value["stages"])
     weight_count = 2 if args.family == "ffn" else 1
     dynamic_smem = (block_m * block_k + weight_count * block_k * block_n) * 2 * stages
-    source = append_wrapper(source, args.family, candidate_value, args.batch, dynamic_smem)
+    source = append_wrapper(
+        source, args.family, candidate_value, args.batch, dynamic_smem,
+        args.fat_symbol_token,
+    )
+    debug_token = args.fat_symbol_token or f"single_{args.family}"
+    source = isolate_tilelang_debug_symbols(source, debug_token)
 
     output_dir = pathlib.Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -465,6 +495,12 @@ def main() -> None:
         "source": str(source_path.resolve()),
         "source_sha256": hashlib.sha256(source.encode("ascii")).hexdigest(),
         "dynamic_smem_bytes": dynamic_smem,
+        "fat_symbol_token": args.fat_symbol_token,
+        "launch_symbol": (
+            fat_launch_symbol(args.family, args.fat_symbol_token)
+            if args.fat_symbol_token is not None
+            else f"sm120_search_{args.family}_launch"
+        ),
         "correctness_against_torch": correctness,
         "s1_us_samples": s1_samples,
         "s1_us_median": statistics.median(s1_samples),
