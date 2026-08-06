@@ -1340,6 +1340,7 @@ struct Sm89FFNBlock {
     bool useFusedResidual_,
     bool useRMSNormOpt_,
     bool useDualGemmSwiGLU_,
+    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useLinear2PostBNSilu_,
     const Sm89BatchNorm* followingBN,
@@ -1386,7 +1387,9 @@ struct Sm89FFNBlock {
       useFFNBatched = true;
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
       if(useDualGemmSwiGLU)
-        dualGemmSwiGLU = std::make_unique<Sm89Backend::Sm89DualGemmSwiGLUB13>((const half*)ffnWeightsBuf);
+        dualGemmSwiGLU = std::make_unique<Sm89Backend::Sm89DualGemmSwiGLUB13>(
+          (const half*)ffnWeightsBuf, useDualGemmSwiGLUHalf2Tanh_
+        );
 #endif
     }
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
@@ -1558,6 +1561,7 @@ struct Sm89NestedBlock {
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
+    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
@@ -1622,6 +1626,7 @@ struct Sm89NestedBlock {
         auto block = std::make_shared<Sm89FFNBlock>(
           (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16,
           useNHWC, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useDualGemmSwiGLU_,
+          useDualGemmSwiGLUHalf2Tanh_,
           useLinear2Gemm_, useLinear2PostBNSilu_ && i + 1 == desc->blocks.size(),
           &postBN, shareModelWeights_
         );
@@ -1779,6 +1784,7 @@ struct Sm89Trunk {
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
+    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
@@ -1822,7 +1828,8 @@ struct Sm89Trunk {
         maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_,
         useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_, usePrecomputedQKRoPE_,
         useQKVRoPEGemm_, ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
-        useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
+        useDualGemmSwiGLU_, useDualGemmSwiGLUHalf2Tanh_,
+        useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
         usePostConvGemm_, useLinear2PostBNSilu_, usePersistingL2Trunk_,
         persistingL2TrunkHitRatio_,
         usePersistingL2Inner_, persistingL2InnerHitRatio_, useScaleBiasSiluVec8_,
@@ -2404,6 +2411,7 @@ struct Sm89Forward::Impl {
   const bool useFlashAttention;
   const bool useFlashAttentionBoth16;
   const bool useDualGemmSwiGLU;
+  const bool useDualGemmSwiGLUHalf2Tanh;
   const bool useLinear2Gemm;
   const bool useOutProjGemm;
   const bool usePreConvGemm;
@@ -2452,6 +2460,7 @@ struct Sm89Forward::Impl {
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
+    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
@@ -2491,6 +2500,7 @@ struct Sm89Forward::Impl {
       useFlashAttention(useFlashAttention_),
       useFlashAttentionBoth16(useFlashAttentionBoth16_),
       useDualGemmSwiGLU(useDualGemmSwiGLU_),
+      useDualGemmSwiGLUHalf2Tanh(useDualGemmSwiGLUHalf2Tanh_),
       useLinear2Gemm(useLinear2Gemm_),
       useOutProjGemm(useOutProjGemm_),
       usePreConvGemm(usePreConvGemm_),
@@ -2518,7 +2528,8 @@ struct Sm89Forward::Impl {
       trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC,
         useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_,
         usePrecomputedQKRoPE_, useQKVRoPEGemm_, ropeBatchGroup_,
-        useFlashAttention_, useFlashAttentionBoth16_, useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_,
+        useFlashAttention_, useFlashAttentionBoth16_, useDualGemmSwiGLU_,
+        useDualGemmSwiGLUHalf2Tanh_, useLinear2Gemm_, useOutProjGemm_,
         usePreConvGemm_, usePostConvGemm_, usePostConvBNSilu_,
         useLinear2PostBNSilu_,
         usePersistingL2Trunk_,
@@ -2670,6 +2681,7 @@ Sm89Forward::Sm89Forward(
   bool useFlashAttention,
   bool useFlashAttentionBoth16,
   bool useDualGemmSwiGLU,
+  bool useDualGemmSwiGLUHalf2Tanh,
   bool useLinear2Gemm,
   bool useOutProjGemm,
   bool usePreConvGemm,
@@ -2695,7 +2707,7 @@ Sm89Forward::Sm89Forward(
       useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
       useFusedQKRoPE, usePrecomputedQKRoPE, useQKVRoPEGemm,
       ropeBatchGroup, useFlashAttention, useFlashAttentionBoth16,
-      useDualGemmSwiGLU, useLinear2Gemm,
+      useDualGemmSwiGLU, useDualGemmSwiGLUHalf2Tanh, useLinear2Gemm,
       useOutProjGemm, usePreConvGemm, usePostConvGemm, usePostConvBNSilu,
       useLinear2PostBNSilu,
       usePersistingL2Trunk,

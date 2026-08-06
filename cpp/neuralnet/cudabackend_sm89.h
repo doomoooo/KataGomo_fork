@@ -68,6 +68,7 @@ struct Options {
   bool useFlashAttention = false;
   bool useFlashAttentionBoth16 = false;
   bool useDualGemmSwiGLU = false;
+  bool useDualGemmSwiGLUHalf2Tanh = false;
   bool useLinear2Gemm = false;
   bool useOutProjGemm = false;
   bool usePreConvGemm = false;

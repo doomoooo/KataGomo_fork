@@ -9,6 +9,7 @@
 #include "../neuralnet/cudabackend_sm89_dual_gemm.h"
 
 #include "cutlass/cutlass.h"
+#include "cutlass/epilogue/thread/activation.h"
 #include "cutlass/epilogue/thread/linear_combination.h"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/threadblock/threadblock_swizzle.h"
@@ -29,11 +30,54 @@ using EpilogueOutputOp = cutlass::epilogue::thread::LinearCombination<
   Element, 8, Element, float, cutlass::epilogue::thread::ScaleType::Nothing>;
 using SwiGLUOutputOp = cutlass::epilogue::thread::LeftSiLUAndMul<
   Element, 8, Element, float>;
+
+template<int Count>
+class Half2TanhSwiGLUOutputOp {
+ public:
+  using ElementOutput = Element;
+  using ElementAccumulator = Element;
+  using ElementCompute = Element;
+  using FragmentOutput = cutlass::Array<Element, Count>;
+  using FragmentAccumulator = cutlass::Array<Element, Count>;
+  struct Params {};
+
+  CUTLASS_HOST_DEVICE
+  explicit Half2TanhSwiGLUOutputOp(Params const&) {}
+
+  CUTLASS_HOST_DEVICE
+  bool is_source_needed() const { return true; }
+
+  CUTLASS_HOST_DEVICE
+  void set_k_partition(int, int) { assert(false); }
+
+  CUTLASS_HOST_DEVICE
+  FragmentOutput operator()(
+    FragmentAccumulator const& lhs,
+    FragmentAccumulator const& rhs
+  ) const {
+    cutlass::multiplies<FragmentOutput> mul;
+    cutlass::multiply_add<FragmentOutput> fma;
+    cutlass::fast_tanh_op<FragmentOutput> tanh;
+    Element half = cutlass::constants::half<Element>();
+    FragmentOutput sigmoid = fma(tanh(mul(lhs, half)), half, half);
+    return mul(mul(lhs, sigmoid), rhs);
+  }
+
+  CUTLASS_HOST_DEVICE
+  Element operator()(Element const& lhs, Element const& rhs) const {
+    Element half = cutlass::constants::half<Element>();
+    Element sigmoid = cutlass::fast_tanh(lhs * half) * half + half;
+    return lhs * sigmoid * rhs;
+  }
+};
+
+using SwiGLUHalf2TanhOutputOp = Half2TanhSwiGLUOutputOp<8>;
 using ThreadblockShape = cutlass::gemm::GemmShape<128, 64, 32>;
 using WarpShape = cutlass::gemm::GemmShape<64, 32, 32>;
 using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
 
-using DualGemm = cutlass::gemm::device::DualGemm<
+template<typename SwiGLUOp>
+using DualGemmT = cutlass::gemm::device::DualGemm<
   Element,
   cutlass::layout::RowMajor,
   Element,
@@ -49,7 +93,7 @@ using DualGemm = cutlass::gemm::device::DualGemm<
   InstructionShape,
   EpilogueOutputOp,
   EpilogueOutputOp,
-  SwiGLUOutputOp,
+  SwiGLUOp,
   cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<KATAGO_DUAL_GEMM_SWIZZLE>,
   3,
   false,
@@ -58,14 +102,18 @@ using DualGemm = cutlass::gemm::device::DualGemm<
   8,
   8>;
 
-DualGemm::Arguments makeArguments(
+using DualGemm = DualGemmT<SwiGLUOutputOp>;
+using DualGemmHalf2Tanh = DualGemmT<SwiGLUHalf2TanhOutputOp>;
+
+template<typename Gemm>
+typename Gemm::Arguments makeArguments(
   const half* weights,
   const half* input,
   half* output
 ) {
   using Layout = cutlass::layout::RowMajor;
-  DualGemm::TensorRefC nullC;
-  DualGemm::TensorRefD nullD;
+  typename Gemm::TensorRefC nullC;
+  typename Gemm::TensorRefD nullD;
   return {
     cutlass::gemm::DualGemmMode::kGemm,
     {Tokens, FfnChannels, Channels},
@@ -89,35 +137,48 @@ DualGemm::Arguments makeArguments(
 struct Sm89DualGemmSwiGLUB13::Impl {
   const half* weights;
   DualGemm op;
+  DualGemmHalf2Tanh half2TanhOp;
+  bool useHalf2Tanh;
   bool initialized;
 
-  explicit Impl(const half* weights_)
-    : weights(weights_), op(), initialized(false)
+  Impl(const half* weights_, bool useHalf2Tanh_)
+    : weights(weights_), op(), half2TanhOp(),
+      useHalf2Tanh(useHalf2Tanh_), initialized(false)
   {}
 
-  bool apply(const half* input, half* output, cudaStream_t stream) {
-    DualGemm::Arguments args = makeArguments(weights, input, output);
+  template<typename Gemm>
+  bool applyImpl(Gemm& gemm, const half* input, half* output, cudaStream_t stream) {
+    typename Gemm::Arguments args = makeArguments<Gemm>(weights, input, output);
     cutlass::Status status;
     if(!initialized) {
-      status = op.can_implement(args);
+      status = gemm.can_implement(args);
       if(status != cutlass::Status::kSuccess)
         return false;
-      status = op.initialize(args, nullptr, stream);
+      status = gemm.initialize(args, nullptr, stream);
       if(status != cutlass::Status::kSuccess)
         return false;
       initialized = true;
     }
     else {
-      status = op.update(args, nullptr);
+      status = gemm.update(args, nullptr);
       if(status != cutlass::Status::kSuccess)
         return false;
     }
-    return op.run(stream) == cutlass::Status::kSuccess;
+    return gemm.run(stream) == cutlass::Status::kSuccess;
+  }
+
+  bool apply(const half* input, half* output, cudaStream_t stream) {
+    return useHalf2Tanh
+      ? applyImpl(half2TanhOp, input, output, stream)
+      : applyImpl(op, input, output, stream);
   }
 };
 
-Sm89DualGemmSwiGLUB13::Sm89DualGemmSwiGLUB13(const half* weights)
-  : impl(std::make_unique<Impl>(weights))
+Sm89DualGemmSwiGLUB13::Sm89DualGemmSwiGLUB13(
+  const half* weights,
+  bool useHalf2Tanh
+)
+  : impl(std::make_unique<Impl>(weights, useHalf2Tanh))
 {}
 
 Sm89DualGemmSwiGLUB13::~Sm89DualGemmSwiGLUB13() = default;

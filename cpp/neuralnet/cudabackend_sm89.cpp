@@ -81,6 +81,7 @@ Options parseOptions(ConfigParser& cfg) {
   o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm89", false);
   o.useFlashAttentionBoth16 = getBoolOpt(cfg, "cudaUseFlashAttentionBoth16Sm89", false);
   o.useDualGemmSwiGLU = getBoolOpt(cfg, "cudaUseDualGemmSwiGLUSm89", false);
+  o.useDualGemmSwiGLUHalf2Tanh = getBoolOpt(cfg, "cudaUseDualGemmSwiGLUHalf2TanhSm89", false);
   o.useLinear2Gemm = getBoolOpt(cfg, "cudaUseLinear2GemmSm89", false);
   o.useOutProjGemm = getBoolOpt(cfg, "cudaUseOutProjGemmSm89", false);
   o.usePreConvGemm = getBoolOpt(cfg, "cudaUsePreConvGemmSm89", false);
@@ -148,7 +149,7 @@ Sm89Model::Sm89Model(
       options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt,
       options.useFusedQKRoPE, options.usePrecomputedQKRoPE, options.useQKVRoPEGemm,
       options.ropeBatchGroup, options.useFlashAttention, options.useFlashAttentionBoth16,
-      options.useDualGemmSwiGLU,
+      options.useDualGemmSwiGLU, options.useDualGemmSwiGLUHalf2Tanh,
       options.useLinear2Gemm, options.useOutProjGemm, options.usePreConvGemm,
       options.usePostConvGemm, options.usePostConvBNSilu,
       options.useLinear2PostBNSilu,

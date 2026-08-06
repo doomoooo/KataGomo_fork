@@ -69,6 +69,7 @@ class Sm89Forward {
     bool useFlashAttention,
     bool useFlashAttentionBoth16,
     bool useDualGemmSwiGLU,
+    bool useDualGemmSwiGLUHalf2Tanh,
     bool useLinear2Gemm,
     bool useOutProjGemm,
     bool usePreConvGemm,

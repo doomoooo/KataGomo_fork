@@ -10,7 +10,7 @@ namespace Sm89Backend {
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
 class Sm89DualGemmSwiGLUB13 {
  public:
-  explicit Sm89DualGemmSwiGLUB13(const half* weights);
+  Sm89DualGemmSwiGLUB13(const half* weights, bool useHalf2Tanh);
   ~Sm89DualGemmSwiGLUB13();
   Sm89DualGemmSwiGLUB13(const Sm89DualGemmSwiGLUB13&) = delete;
   Sm89DualGemmSwiGLUB13& operator=(const Sm89DualGemmSwiGLUB13&) = delete;
