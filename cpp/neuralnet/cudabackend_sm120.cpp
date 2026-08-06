@@ -339,6 +339,7 @@ bool applyAttention(
   void* qBuf,
   void* kBuf,
   void* vBuf,
+  bool packedQKV,
   void* maskBuf,
   void* attnOutBuf,
   int batchSize,
@@ -356,7 +357,7 @@ bool applyAttention(
   if(self == NULL)
     return false;
   return self->attention(
-    cudaHandles, scratch, qBuf, kBuf, vBuf, maskBuf, attnOutBuf,
+    cudaHandles, scratch, qBuf, kBuf, vBuf, packedQKV, maskBuf, attnOutBuf,
     batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim,
     usingFP16, stream, workspaceBuf, workspaceBytes
   );
@@ -414,6 +415,8 @@ bool applyQKVStrided(
   const void* vWeights,
   const void* inputBuf,
   void* qkvBuf,
+  bool allowPackedOutput,
+  bool* packedOutput,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -426,6 +429,7 @@ bool applyQKVStrided(
     return false;
   return self->qkvStrided(
     cublas, stream, qWeights, kWeights, vWeights, inputBuf, qkvBuf,
+    allowPackedOutput, packedOutput,
     matBatchSize, numChannels, qDim, kDim, vDim, usingFP16);
 }
 
@@ -484,6 +488,7 @@ bool applyFusedQKRoPE(
   int qHeadDim,
   int numPairs,
   int nnXLen,
+  bool packedQKV,
   bool usingFP16,
   cudaStream_t stream
 ) {
@@ -492,7 +497,7 @@ bool applyFusedQKRoPE(
     return false;
   return self->fusedQKRoPE(
     qBuf, kBuf, freqs, batchSize, seqLen, numHeads, numKVHeads,
-    qHeadDim, numPairs, nnXLen, usingFP16, stream);
+    qHeadDim, numPairs, nnXLen, packedQKV, usingFP16, stream);
 }
 
 bool applySwiGLU(
@@ -791,6 +796,7 @@ bool Sm120Model::attention(
   void* qBuf,
   void* kBuf,
   void* vBuf,
+  bool packedQKV,
   void* maskBuf,
   void* attnOutBuf,
   int batchSize,
@@ -842,15 +848,18 @@ bool Sm120Model::attention(
 
   call_once(fa4LoadOnce, []() { fa4_Kernel_Module_Load(&fa4Module); });
 
-  fa4_Tensor_mQ_t tq = {qBuf, {batchSize, seqLen, numHeads, qHeadDim}, {seqLen * numHeads * qHeadDim, numHeads * qHeadDim, qHeadDim}};
-  fa4_Tensor_mK_t tk = {kBuf, {batchSize, seqLen, numKVHeads, qHeadDim}, {seqLen * numKVHeads * qHeadDim, numKVHeads * qHeadDim, qHeadDim}};
-  fa4_Tensor_mV_t tv = {vBuf, {batchSize, seqLen, numKVHeads, vHeadDim}, {seqLen * numKVHeads * vHeadDim, numKVHeads * vHeadDim, vHeadDim}};
+  const int64_t qkvRowStride = packedQKV ? 3LL * numHeads * qHeadDim : numHeads * qHeadDim;
+  fa4_Tensor_mQ_t tq = {qBuf, {batchSize, seqLen, numHeads, qHeadDim}, {seqLen * qkvRowStride, qkvRowStride, qHeadDim}};
+  fa4_Tensor_mK_t tk = {kBuf, {batchSize, seqLen, numKVHeads, qHeadDim}, {seqLen * qkvRowStride, qkvRowStride, qHeadDim}};
+  fa4_Tensor_mV_t tv = {vBuf, {batchSize, seqLen, numKVHeads, vHeadDim}, {seqLen * qkvRowStride, qkvRowStride, vHeadDim}};
   fa4_Tensor_mO_t to = {attnOutBuf, {batchSize, seqLen, numHeads, vHeadDim}, {seqLen * numHeads * vHeadDim, numHeads * vHeadDim, vHeadDim}};
 
   float scale = 1.0f / std::sqrt((float)qHeadDim);
   int32_t ret = cute_dsl_fa4_wrapper(&fa4Module, &tq, &tk, &tv, &to, scale, stream);
 
   if(ret != 0) {
+    if(packedQKV)
+      throw StringError("SM120 backend: packed QKV requires FA4; FA4 AOT launch failed");
     if(logger != NULL)
       logger->write("SM120 backend: FA4 AOT attention launch failed, falling back to official path");
     return false;
@@ -1008,6 +1017,8 @@ bool Sm120Model::qkvStrided(
   const void* vWeights,
   const void* inputBuf,
   void* qkvBuf,
+  bool allowPackedOutput,
+  bool* packedOutput,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -1015,6 +1026,9 @@ bool Sm120Model::qkvStrided(
   int vDim,
   bool usingFP16
 ) {
+  if(packedOutput == NULL)
+    return false;
+  *packedOutput = false;
   if(!usingFP16)
     return false;
   if(nnXLen != 19 || nnYLen != 19 || matBatchSize % 361 != 0)
@@ -1026,7 +1040,10 @@ bool Sm120Model::qkvStrided(
     return false;
 
   const WideQKVAotTactic* qkvTactic = wideQKVAotByBatch[batchSize];
-  if(qkvTactic != nullptr) {
+  const bool packedPathReady = allowPackedOutput && options.useFusedQKRoPE &&
+    options.useBatchSharedRoPE && options.useFlashAttention &&
+    options.flashAttentionAccum == "both16";
+  if(qkvTactic != nullptr && (!qkvTactic->packedOutput || packedPathReady)) {
     void* weights = NULL;
     auto existing = wideQKVWeights.find(qWeights);
     if(existing != wideQKVWeights.end()) {
@@ -1054,6 +1071,7 @@ bool Sm120Model::qkvStrided(
 
     CUDA_ERR("Sm120WideQKVAot", qkvTactic->launch(
       (const half*)inputBuf, (const half*)weights, (half*)qkvBuf, stream));
+    *packedOutput = qkvTactic->packedOutput;
     if(!loggedWideQKV) {
       if(logger != NULL)
         logger->write("SM120 backend: wide QKV AOT active, tactic=" + string(qkvTactic->id));
@@ -1215,6 +1233,7 @@ bool Sm120Model::fusedQKRoPE(
   int qHeadDim,
   int numPairs,
   int ropeXLen,
+  bool packedQKV,
   bool usingFP16,
   cudaStream_t stream
 ) {
@@ -1228,8 +1247,12 @@ bool Sm120Model::fusedQKRoPE(
     return false;
 
   if(options.useBatchSharedRoPE) {
-    launchBatchSharedFusedQKRoPE19(
-      (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
+    if(packedQKV)
+      launchBatchSharedPackedFusedQKRoPE19(
+        (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
+    else
+      launchBatchSharedFusedQKRoPE19(
+        (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
     if(!loggedBatchSharedQKRoPE) {
       if(logger != NULL)
         logger->write("SM120 backend: batch-shared fused Q/K RoPE active");

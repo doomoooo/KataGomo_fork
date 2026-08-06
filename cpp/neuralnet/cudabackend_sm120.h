@@ -58,8 +58,9 @@ typedef void (*OfficialApplyFn)(
 );
 
 // Hook installed on SM120 compute handles. Called from the official attention
-// block (thin dispatch only) with the already-computed Q/K/V buffers in BSHD
-// layout. Returns true if the attention output was produced and the official
+// block (thin dispatch only) with the already-computed Q/K/V buffers. Planar
+// buffers are contiguous BSHD; packed buffers use dynamic BSHD strides.
+// Returns true if the attention output was produced and the official
 // SDPA/custom path must be skipped; false means fall back to the official path.
 typedef bool (*Sm120AttentionFn)(
   void* ctx,
@@ -68,6 +69,7 @@ typedef bool (*Sm120AttentionFn)(
   void* qBuf,
   void* kBuf,
   void* vBuf,
+  bool packedQKV,
   void* maskBuf,
   void* attnOutBuf,
   int batchSize,
@@ -120,6 +122,8 @@ typedef bool (*Sm120QKVStridedFn)(
   const void* vWeights,
   const void* inputBuf,
   void* qkvBuf,
+  bool allowPackedOutput,
+  bool* packedOutput,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -169,6 +173,7 @@ typedef bool (*Sm120FusedQKRoPEFn)(
   int qHeadDim,
   int numPairs,
   int nnXLen,
+  bool packedQKV,
   bool usingFP16,
   cudaStream_t stream
 );
@@ -293,6 +298,7 @@ bool applyAttention(
   void* qBuf,
   void* kBuf,
   void* vBuf,
+  bool packedQKV,
   void* maskBuf,
   void* attnOutBuf,
   int batchSize,
@@ -345,6 +351,8 @@ bool applyQKVStrided(
   const void* vWeights,
   const void* inputBuf,
   void* qkvBuf,
+  bool allowPackedOutput,
+  bool* packedOutput,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -394,6 +402,7 @@ bool applyFusedQKRoPE(
   int qHeadDim,
   int numPairs,
   int nnXLen,
+  bool packedQKV,
   bool usingFP16,
   cudaStream_t stream
 );
@@ -499,6 +508,7 @@ class Sm120Model {
     void* qBuf,
     void* kBuf,
     void* vBuf,
+    bool packedQKV,
     void* maskBuf,
     void* attnOutBuf,
     int batchSize,
@@ -548,6 +558,8 @@ class Sm120Model {
     const void* vWeights,
     const void* inputBuf,
     void* qkvBuf,
+    bool allowPackedOutput,
+    bool* packedOutput,
     int matBatchSize,
     int numChannels,
     int qDim,
@@ -594,6 +606,7 @@ class Sm120Model {
     int qHeadDim,
     int numPairs,
     int ropeXLen,
+    bool packedQKV,
     bool usingFP16,
     cudaStream_t stream
   );

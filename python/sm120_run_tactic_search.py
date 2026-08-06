@@ -160,12 +160,37 @@ def configure_build(
         f"-D{SLOT_CACHE_KEYS[family]}={path}" for family, path in active.items()
     )
     command.extend(cmake_args)
+    command.append("-DSM120_SEARCH_QKV_OBJECT=")
     run_checked(command, logs / "configure")
     run_checked(["cmake", "--build", str(build_dir), f"-j{jobs}"], logs / "initial-build")
     binary = build_dir / "katago"
     if not binary.is_file():
         raise RuntimeError(f"build did not produce {binary}")
     return binary
+
+
+def configure_qkv_slot(
+    repo: pathlib.Path, build_dir: pathlib.Path, active: dict[str, pathlib.Path],
+    qkv_source: pathlib.Path, qkv_object: pathlib.Path | None, jobs: int,
+    logs: pathlib.Path, cmake_args: list[str], log_name: str,
+) -> None:
+    command = [
+        "cmake", "-S", str(repo / "cpp"), "-B", str(build_dir),
+        "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
+    ]
+    for family, path in active.items():
+        source = qkv_source if family == "qkv" else path
+        command.append(f"-D{SLOT_CACHE_KEYS[family]}={source}")
+    command.extend(cmake_args)
+    command.append(
+        "-DSM120_SEARCH_QKV_OBJECT="
+        + ("" if qkv_object is None else str(qkv_object))
+    )
+    run_checked(command, logs / f"{log_name}-configure")
+    run_checked(
+        ["cmake", "--build", str(build_dir), f"-j{jobs}"],
+        logs / f"{log_name}-build",
+    )
 
 
 def candidate_override(family: str, candidate_value: dict) -> str:
@@ -208,6 +233,14 @@ def full_override(
                 "cudaFlashAttentionSm120Accum=both16",
                 f"cudaFlashAttentionAotTacticSm120={candidate_value['id']}",
             ])
+    if family == "qkv" and candidate_value.get("output") == "packed":
+        values.extend([
+            "cudaUseFusedQKRoPE=true",
+            "cudaUseBatchSharedRoPE=true",
+            "cudaUseFusedQKRoPEHalf2Sm120=false",
+            "cudaUseFlashAttentionSm120=true",
+            "cudaFlashAttentionSm120Accum=both16",
+        ])
     if extra.strip():
         values.extend(item.strip() for item in extra.split(",") if item.strip())
     return ",".join(values)
@@ -404,6 +437,8 @@ def main() -> None:
     )
     write_result(output, payload)
     generator = repo / "python/sm120_generate_tilelang_aot.py"
+    cute_qkv_generator = repo / "python/sm120_generate_cute_qkv_aot.py"
+    qkv_build_mode = "planar"
     measurement_index = len(payload["rows"])
 
     for batch in batches:
@@ -437,6 +472,12 @@ def main() -> None:
                         row["generator_metadata"] = json.loads(
                             pathlib.Path(fat_entry["metadata"]).read_text()
                         )
+                        if args.family == "qkv" and qkv_build_mode != "planar":
+                            configure_qkv_slot(
+                                repo, build_dir, active, active["qkv"], None,
+                                args.jobs, logs, cmake_args, prefix,
+                            )
+                            qkv_build_mode = "planar"
                     else:
                         candidate_dir = generated / f"b{batch}" / candidate_id
                         command = runner + [
@@ -458,10 +499,17 @@ def main() -> None:
                         row["generator_metadata"] = json.loads(
                             metadata_path.read_text()
                         )
-                        run_checked(
-                            ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
-                            logs / f"{prefix}-build",
-                        )
+                        if args.family == "qkv" and qkv_build_mode != "planar":
+                            configure_qkv_slot(
+                                repo, build_dir, active, active["qkv"], None,
+                                args.jobs, logs, cmake_args, prefix,
+                            )
+                            qkv_build_mode = "planar"
+                        else:
+                            run_checked(
+                                ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
+                                logs / f"{prefix}-build",
+                            )
                 elif implementation == "historical_tilelang" and args.family == "ffn":
                     candidate_dir = generated / f"b{batch}" / candidate_id
                     command = runner + [
@@ -480,6 +528,25 @@ def main() -> None:
                         ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
                         logs / f"{prefix}-build",
                     )
+                elif implementation == "cute" and args.family == "qkv":
+                    candidate_dir = generated / f"b{batch}" / candidate_id
+                    bridge_path = candidate_dir / "sm120_qkv_cute_active.cu"
+                    command = [
+                        sys.executable, str(cute_qkv_generator),
+                        "--batch", str(batch),
+                        "--output-dir", str(candidate_dir),
+                        "--bridge-path", str(bridge_path),
+                        "--candidate-id", candidate_id,
+                    ]
+                    run_checked(command, logs / f"{prefix}-generate")
+                    metadata_path = candidate_dir / "sm120_qkv_cute_active.json"
+                    row["generator_metadata"] = json.loads(metadata_path.read_text())
+                    object_path = candidate_dir / "sm120_qkv_cute_active.o"
+                    configure_qkv_slot(
+                        repo, build_dir, active, bridge_path, object_path,
+                        args.jobs, logs, cmake_args, prefix,
+                    )
+                    qkv_build_mode = "packed"
                 elif args.family == "fa4" and implementation == "fa4_cute":
                     command = runner + [
                         args.fa4_python,
@@ -513,6 +580,17 @@ def main() -> None:
                     write_result(output, payload)
                     print(f"B{batch} {candidate_id}: unsupported generator", flush=True)
                     continue
+
+                if (
+                    args.family == "qkv"
+                    and implementation == "fallback"
+                    and qkv_build_mode != "planar"
+                ):
+                    configure_qkv_slot(
+                        repo, build_dir, active, active["qkv"], None,
+                        args.jobs, logs, cmake_args, prefix,
+                    )
+                    qkv_build_mode = "planar"
 
                 samples = []
                 benchmark_records = []

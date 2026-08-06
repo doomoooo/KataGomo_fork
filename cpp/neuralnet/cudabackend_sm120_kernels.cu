@@ -387,6 +387,59 @@ void launchBatchSharedFusedQKRoPE19(
     qBuf, kBuf, freqs, batchSize);
 }
 
+__global__ void batchSharedPackedFusedQKRoPE19Half2Kernel(
+  half2* __restrict__ qBuf,
+  half2* __restrict__ kBuf,
+  const float* __restrict__ freqs,
+  int batchSize
+) {
+  constexpr int seqLen = 361;
+  constexpr int packedPairsPerRow = 3 * 384 / 2;
+  constexpr int numPairs = 16;
+
+  int xy = blockIdx.x;
+  int hp = threadIdx.x;
+  int h = hp / numPairs;
+  int pairIdx = hp - h * numPairs;
+  int x = xy % 19;
+  int y = xy / 19;
+  float freqX = freqs[(h * numPairs + pairIdx) * 2];
+  float freqY = freqs[(h * numPairs + pairIdx) * 2 + 1];
+  float angle = (float)x * freqX + (float)y * freqY;
+  float cosVal;
+  float sinVal;
+  __sincosf(angle, &sinVal, &cosVal);
+
+  for(int n = 0; n < batchSize; n++) {
+    size_t idx = (size_t)(n * seqLen + xy) * packedPairsPerRow + hp;
+    half2 q = qBuf[idx];
+    float q0 = __half2float(__low2half(q));
+    float q1 = __half2float(__high2half(q));
+    qBuf[idx] = __halves2half2(
+      __float2half(q0 * cosVal - q1 * sinVal),
+      __float2half(q0 * sinVal + q1 * cosVal));
+
+    half2 k = kBuf[idx];
+    float k0 = __half2float(__low2half(k));
+    float k1 = __half2float(__high2half(k));
+    kBuf[idx] = __halves2half2(
+      __float2half(k0 * cosVal - k1 * sinVal),
+      __float2half(k0 * sinVal + k1 * cosVal));
+  }
+}
+
+void launchBatchSharedPackedFusedQKRoPE19(
+  half* qBuf,
+  half* kBuf,
+  const float* freqs,
+  int batchSize,
+  cudaStream_t stream
+) {
+  batchSharedPackedFusedQKRoPE19Half2Kernel<<<361, 192, 0, stream>>>(
+    reinterpret_cast<half2*>(qBuf), reinterpret_cast<half2*>(kBuf),
+    freqs, batchSize);
+}
+
 __global__ void fusedQKRoPE19Half2Kernel(
   half2* __restrict__ qBuf,
   half2* __restrict__ kBuf,

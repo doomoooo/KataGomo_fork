@@ -43,6 +43,7 @@ struct WideQKVAotTactic {
   int streams;
   const char* id;
   bool automaticWinner;
+  bool packedOutput;
   WideQKVAotLaunchFn launch;
 };
 
@@ -178,6 +179,16 @@ void launchFusedQKRoPE19(
 );
 
 void launchBatchSharedFusedQKRoPE19(
+  half* qBuf,
+  half* kBuf,
+  const float* freqs,
+  int batchSize,
+  cudaStream_t stream
+);
+
+// Packed QKV rows are [Q384,K384,V384], so consecutive tokens are 1152
+// half values apart. qBuf and kBuf point at offsets 0 and 384 respectively.
+void launchBatchSharedPackedFusedQKRoPE19(
   half* qBuf,
   half* kBuf,
   const float* freqs,

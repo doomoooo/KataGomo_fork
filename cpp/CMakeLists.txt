@@ -73,6 +73,8 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(SM120_SEARCH_QKV_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_qkv_stub.cu"
     CACHE FILEPATH "Exact-batch QKV AOT candidate used by the whole-graph search slot")
+  set(SM120_SEARCH_QKV_OBJECT ""
+    CACHE FILEPATH "Freshly generated CuTe QKV AOT object for the search slot")
   set(SM120_SEARCH_LINEAR2_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_stub.cu"
     CACHE FILEPATH "Exact-batch linear2 AOT candidate used by the whole-graph search slot")
@@ -471,6 +473,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   target_link_libraries(katago ${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/fa4_sm120_b13.o)
   if(SM120_SEARCH_FA4_OBJECT)
     target_link_libraries(katago ${SM120_SEARCH_FA4_OBJECT})
+  endif()
+  if(SM120_SEARCH_QKV_OBJECT)
+    target_link_libraries(katago ${SM120_SEARCH_QKV_OBJECT})
   endif()
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   target_compile_definitions(katago PRIVATE USE_TENSORRT_BACKEND)

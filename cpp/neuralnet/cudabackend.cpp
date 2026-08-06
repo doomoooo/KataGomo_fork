@@ -1926,6 +1926,7 @@ struct TransformerAttentionBlock {
     void* qBuf;
     void* kBuf;
     void* vBuf;
+    bool packedQKV = false;
     if(cudaHandles->sm120QKVStrided != NULL) {
       qkvStorage.emplace(
         scratch->allocator,
@@ -1933,6 +1934,7 @@ struct TransformerAttentionBlock {
       qBuf = qkvStorage->buf;
       kBuf = (char*)qBuf + (size_t)qTotalDim * matBatchSize * bytesPerElt;
       vBuf = (char*)kBuf + (size_t)kTotalDim * matBatchSize * bytesPerElt;
+      const bool allowPackedOutput = useRope && learnableRope && maskBuf == NULL;
       bool usedQKVStrided = cudaHandles->sm120QKVStrided(
         cudaHandles->sm120QKVStridedContext,
         cudaHandles->cublas,
@@ -1942,13 +1944,20 @@ struct TransformerAttentionBlock {
         vProj.matBuf,
         trunkScratchBuf,
         qBuf,
+        allowPackedOutput,
+        &packedQKV,
         matBatchSize,
         inChannels,
         qTotalDim,
         kTotalDim,
         vTotalDim,
         usingFP16);
-      if(!usedQKVStrided) {
+      if(usedQKVStrided && packedQKV) {
+        // The AOT buffer is [token,Q384,K384,V384].
+        kBuf = (char*)qBuf + (size_t)qTotalDim * bytesPerElt;
+        vBuf = (char*)qBuf + (size_t)(qTotalDim + kTotalDim) * bytesPerElt;
+      }
+      else if(!usedQKVStrided) {
         qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf, workspaceBuf, workspaceBytes);
         kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf, workspaceBuf, workspaceBytes);
         vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf, workspaceBuf, workspaceBytes);
@@ -1978,8 +1987,10 @@ struct TransformerAttentionBlock {
         usedFusedQKRoPE = cudaHandles->sm120FusedQKRoPE(
           cudaHandles->sm120FusedQKRoPEContext,
           qBuf, kBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads,
-          qHeadDim, ropeNumPairs, nnXLen, usingFP16, cudaHandles->stream);
+          qHeadDim, ropeNumPairs, nnXLen, packedQKV, usingFP16, cudaHandles->stream);
       }
+      if(packedQKV && !usedFusedQKRoPE)
+        throw StringError("CUDA attention: packed QKV requires the SM120 packed RoPE path");
       if(!usedFusedQKRoPE && learnableRope) {
         // Table-free recompute path (cos/sin computed in-kernel from ropeFreqsBuf).
         if(!usingFP16) {
@@ -2030,6 +2041,7 @@ struct TransformerAttentionBlock {
          qBuf,
          kBuf,
          vBuf,
+         packedQKV,
          maskBuf,
          attnOutBuf.buf,
          batchSize,
@@ -2045,6 +2057,8 @@ struct TransformerAttentionBlock {
        )) {
       usedSDPA = true;
     }
+    if(packedQKV && !usedSDPA)
+      throw StringError("CUDA attention: packed QKV requires the SM120 FA4 path");
 #if KATAGO_CUDA_HAS_SDPA
     SDPAGraphCache* sdpaCache = cudaHandles->sdpaCache.get();
     // Report once if cudaDisableGraphSDPA is the only reason we are not taking the cudnn graph SDPA path,

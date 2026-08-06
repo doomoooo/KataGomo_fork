@@ -12,6 +12,7 @@ extern "C" cudaError_t sm120_search_ffn_launch(
   const half*, const half*, const half*, half*, cudaStream_t);
 extern "C" int sm120_search_qkv_batch();
 extern "C" const char* sm120_search_qkv_id();
+extern "C" int sm120_search_qkv_packed();
 extern "C" cudaError_t sm120_search_qkv_launch(
   const half*, const half*, half*, cudaStream_t);
 extern "C" int sm120_search_linear2_batch();
@@ -59,8 +60,8 @@ const FusedFFNAotTactic ffnTactics[] = {
 };
 
 const WideQKVAotTactic qkvTactics[] = {
-  {13, SM120_GPU_RTX5090D, 2, "qkv-m128-n128-k64-s2-tilelang-planar", true, launchWideQKVB13},
-  {13, SM120_GPU_OTHER, 0, "qkv-m128-n128-k32-s3-tilelang-planar", false, launchWideQKVB13S1},
+  {13, SM120_GPU_RTX5090D, 2, "qkv-m128-n128-k64-s2-tilelang-planar", true, false, launchWideQKVB13},
+  {13, SM120_GPU_OTHER, 0, "qkv-m128-n128-k32-s3-tilelang-planar", false, false, launchWideQKVB13S1},
 };
 
 const ResidualGemmAotTactic residualTactics[] = {
@@ -74,7 +75,8 @@ const FusedFFNAotTactic searchFfnTactic = {
   sm120_search_ffn_id(), false, sm120_search_ffn_launch};
 const WideQKVAotTactic searchQkvTactic = {
   sm120_search_qkv_batch(), SM120_GPU_OTHER, 0,
-  sm120_search_qkv_id(), false, sm120_search_qkv_launch};
+  sm120_search_qkv_id(), false, sm120_search_qkv_packed() != 0,
+  sm120_search_qkv_launch};
 const ResidualGemmAotTactic searchLinear2Tactic = {
   sm120_search_linear2_batch(), SM120_GPU_OTHER, 0, 1152,
   sm120_search_linear2_id(), false, sm120_search_linear2_launch};

@@ -220,7 +220,7 @@ def candidate_space(batch: int) -> dict:
     qkv = [
         candidate("qkv-m128-n128-k64-s2-tilelang-planar", m=128, n=128, k=64, stages=2, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-m128-n128-k32-s3-tilelang-planar", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
-        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-packed", m=128, n=128, k=64, stages=2, threads=128, implementation="cute", copy_atom="4x2", output="packed"),
+        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-packed", m=128, n=128, k=64, stages=2, threads=288, implementation="cute", copy_atom="4x2", output="packed"),
         candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-fallback-three-gemm", implementation="fallback"),
     ]
@@ -439,11 +439,12 @@ def build_generation_plan(args: argparse.Namespace) -> None:
                 else:
                     values = [item for item in values if item["id"] == seed_ids[family]]
             for item in values:
-                generator = (
-                    "cpp/neuralnet/fa4_aot/build_aot.py"
-                    if family == "fa4"
-                    else "python/sm120_generate_tilelang_aot.py"
-                )
+                if family == "fa4":
+                    generator = "cpp/neuralnet/fa4_aot/build_aot.py"
+                elif item.get("implementation") == "cute":
+                    generator = "python/sm120_generate_cute_qkv_aot.py"
+                else:
+                    generator = "python/sm120_generate_tilelang_aot.py"
                 tasks.append({
                     "gpu_classes": payload["gpu_classes"],
                     "streams": payload["streams"],
