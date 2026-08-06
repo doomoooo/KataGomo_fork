@@ -344,8 +344,9 @@ def write_space(args: argparse.Namespace) -> None:
         "streams": args.streams,
         "fixed_board": [19, 19],
         "workflow_gate": (
-            "generator correctness + S1 metadata -> natural whole-graph S2 "
-            "for every candidate -> long S2/accuracy/Nsys/NCU for finalists"
+            "correctness + local CUDA-event timing -> greedy local-best bundle "
+            "curve -> natural whole-graph S2 coordinate scans near the plateau; "
+            "GPU performance counters are optional explanation aids"
         ),
         "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
         "batch_policy": "only explicitly requested batches; no implicit anchors",
