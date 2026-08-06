@@ -150,11 +150,37 @@ metadata = {
                 capture_output=True,
             )
             manifest = json.loads((output_dir / "manifest.json").read_text())
+            self.assertTrue(manifest["complete"])
+            self.assertEqual(manifest["requested_entry_count"], 32)
             self.assertEqual(len(manifest["entries"]), 32)
             self.assertEqual(
                 {item["batch"] for item in manifest["entries"]}, set(range(1, 33))
             )
             self.assertEqual(len(manifest["sources"]), 32)
+            (output_dir / "manifest.json").unlink()
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PYTHON_DIR / "sm120_prepare_tilelang_fat_scan.py"),
+                    "--space", str(space_path),
+                    "--family", "ffn",
+                    "--batches", "1-32",
+                    "--candidate-ids", "tile-a",
+                    "--device", "999",
+                    "--generator", str(generator_path),
+                    "--output-dir", str(output_dir),
+                    "--reuse-existing",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            recovered = json.loads((output_dir / "manifest.json").read_text())
+            self.assertTrue(recovered["complete"])
+            self.assertTrue(all(
+                item["recovered_without_prior_manifest"]
+                for item in recovered["entries"]
+            ))
 
 
 if __name__ == "__main__":

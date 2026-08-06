@@ -86,6 +86,73 @@ def reusable_entry(
     )
 
 
+def recover_existing_entry(
+    source_path: pathlib.Path,
+    metadata_path: pathlib.Path,
+    request: dict,
+    generator_sha256: str,
+    space_sha256: str,
+) -> dict | None:
+    """Recover a hash-valid TU when an older run died before its manifest."""
+    if not source_path.is_file() or not metadata_path.is_file():
+        return None
+    metadata = json.loads(metadata_path.read_text())
+    source_sha256 = sha256_file(source_path)
+    if (
+        metadata.get("source_sha256") != source_sha256
+        or metadata.get("batch") != request["batch"]
+        or metadata.get("candidate", {}).get("id") != request["candidate_id"]
+        or metadata.get("fat_symbol_token") != request["symbol_token"]
+        or metadata.get("launch_symbol") != request["launch_symbol"]
+    ):
+        return None
+    return {
+        "generator_sha256": generator_sha256,
+        "space_sha256": space_sha256,
+        "source_sha256": source_sha256,
+        "metadata_sha256": sha256_file(metadata_path),
+        "recovered_without_prior_manifest": True,
+    }
+
+
+def write_checkpoint(
+    manifest_path: pathlib.Path,
+    registry_path: pathlib.Path,
+    family: str,
+    entries: list[dict],
+    requested_count: int,
+    started: str,
+    space_path: pathlib.Path,
+    space_sha256: str,
+    generator_path: pathlib.Path,
+    generator_sha256: str,
+) -> None:
+    write_registry(registry_path, family, entries)
+    complete = len(entries) == requested_count
+    payload = {
+        "schema": 1,
+        "started_utc": started,
+        "updated_utc": utc_now(),
+        "finished_utc": utc_now() if complete else None,
+        "complete": complete,
+        "requested_entry_count": requested_count,
+        "family": family,
+        "fixed_board": [19, 19],
+        "batch_policy": "all explicitly requested batches; exact batch+ID dispatch",
+        "space": str(space_path),
+        "space_sha256": space_sha256,
+        "generator": str(generator_path),
+        "generator_sha256": generator_sha256,
+        "registry_source": str(registry_path),
+        "registry_sha256": sha256_file(registry_path),
+        "sources": [item["source"] for item in entries],
+        "entries": entries,
+    }
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary.replace(manifest_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--space", required=True)
@@ -137,6 +204,11 @@ def main() -> None:
         source_path = sources_dir / f"{token}.cu"
         metadata_path = candidate_dir / f'{args.family}-{request["candidate_id"]}.json'
         previous = previous_entries.get((request["batch"], request["candidate_id"]))
+        if args.reuse_existing and previous is None:
+            previous = recover_existing_entry(
+                source_path, metadata_path, request,
+                generator_sha256, space_sha256,
+            )
         reused = args.reuse_existing and reusable_entry(
             previous, source_path, metadata_path, request,
             generator_sha256, space_sha256,
@@ -170,33 +242,22 @@ def main() -> None:
             "generator_sha256": generator_sha256,
             "space_sha256": space_sha256,
             "reused": reused,
+            "recovered_without_prior_manifest": bool(
+                previous and previous.get("recovered_without_prior_manifest")
+            ),
         })
+        write_checkpoint(
+            manifest_path, registry_path, args.family, entries, len(requests),
+            started, space_path, space_sha256, generator_path,
+            generator_sha256,
+        )
         print(
             f'prepared B{request["batch"]} {request["candidate_id"]}'
             + (" (reused)" if reused else ""),
             flush=True,
         )
 
-    write_registry(registry_path, args.family, entries)
-    payload = {
-        "schema": 1,
-        "started_utc": started,
-        "finished_utc": utc_now(),
-        "family": args.family,
-        "fixed_board": [19, 19],
-        "batch_policy": "all explicitly requested batches; exact batch+ID dispatch",
-        "space": str(space_path),
-        "space_sha256": space_sha256,
-        "generator": str(generator_path),
-        "generator_sha256": generator_sha256,
-        "registry_source": str(registry_path),
-        "registry_sha256": sha256_file(registry_path),
-        "sources": [item["source"] for item in entries],
-        "entries": entries,
-    }
-    temporary = manifest_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n")
-    temporary.replace(manifest_path)
+    payload = json.loads(manifest_path.read_text())
     print(json.dumps({
         "manifest": str(manifest_path),
         "family": args.family,
