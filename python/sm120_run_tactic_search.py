@@ -110,7 +110,7 @@ def initialize_active_slots(
 
 def configure_build(
     repo: pathlib.Path, build_dir: pathlib.Path, active: dict[str, pathlib.Path],
-    jobs: int, logs: pathlib.Path,
+    jobs: int, logs: pathlib.Path, cmake_args: list[str],
 ) -> pathlib.Path:
     command = [
         "cmake", "-S", str(repo / "cpp"), "-B", str(build_dir),
@@ -119,6 +119,7 @@ def configure_build(
     command.extend(
         f"-D{SLOT_CACHE_KEYS[family]}={path}" for family, path in active.items()
     )
+    command.extend(cmake_args)
     run_checked(command, logs / "configure")
     run_checked(["cmake", "--build", str(build_dir), f"-j{jobs}"], logs / "initial-build")
     binary = build_dir / "katago"
@@ -169,6 +170,7 @@ def main() -> None:
     parser.add_argument("--s1-warmup", type=int, default=5)
     parser.add_argument("--s1-iterations", type=int, default=20)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--cmake-arg", action="append", default=[])
     parser.add_argument("--runner", default="")
     parser.add_argument("--override-config", default="")
     parser.add_argument("--candidate-ids", default="")
@@ -217,7 +219,9 @@ def main() -> None:
     active = initialize_active_slots(
         repo, active_dir, args.family, args.keep_other_slots,
     )
-    binary = configure_build(repo, build_dir, active, args.jobs, logs)
+    binary = configure_build(
+        repo, build_dir, active, args.jobs, logs, args.cmake_arg,
+    )
     generator = repo / "python/sm120_generate_tilelang_aot.py"
     measurement_index = len(payload["rows"])
 
