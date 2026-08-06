@@ -338,15 +338,15 @@ void launchFusedQKRoPE19(
   fusedQKRoPE19HalfKernel<<<blocks, 192, 0, stream>>>(qBuf, kBuf, freqs);
 }
 
-__global__ void batchSharedFusedQKRoPE19B13HalfKernel(
+__global__ void batchSharedFusedQKRoPE19HalfKernel(
   half* __restrict__ qBuf,
   half* __restrict__ kBuf,
-  const float* __restrict__ freqs
+  const float* __restrict__ freqs,
+  int batchSize
 ) {
   constexpr int seqLen = 361;
   constexpr int totalDim = 384;
   constexpr int numPairs = 16;
-  constexpr int batchSize = 13;
 
   int xy = blockIdx.x;
   int hp = threadIdx.x;
@@ -361,7 +361,6 @@ __global__ void batchSharedFusedQKRoPE19B13HalfKernel(
   float sinVal;
   __sincosf(angle, &sinVal, &cosVal);
 
-#pragma unroll
   for(int n = 0; n < batchSize; n++) {
     size_t idx0 = (size_t)(n * seqLen + xy) * totalDim + 2 * hp;
     size_t idx1 = idx0 + 1;
@@ -377,14 +376,15 @@ __global__ void batchSharedFusedQKRoPE19B13HalfKernel(
   }
 }
 
-void launchBatchSharedFusedQKRoPE19B13(
+void launchBatchSharedFusedQKRoPE19(
   half* qBuf,
   half* kBuf,
   const float* freqs,
+  int batchSize,
   cudaStream_t stream
 ) {
-  batchSharedFusedQKRoPE19B13HalfKernel<<<361, 192, 0, stream>>>(
-    qBuf, kBuf, freqs);
+  batchSharedFusedQKRoPE19HalfKernel<<<361, 192, 0, stream>>>(
+    qBuf, kBuf, freqs, batchSize);
 }
 
 __global__ void fusedQKRoPE19Half2Kernel(
@@ -527,7 +527,7 @@ void launchAffineSiluHalf2(
   }
 }
 
-__global__ void fusedPolicyP1B13Kernel(
+__global__ void fusedPolicyP1Kernel(
   const half* __restrict__ input,
   float* __restrict__ output,
   const float* __restrict__ globalBias,
@@ -550,17 +550,18 @@ __global__ void fusedPolicyP1B13Kernel(
   output[idx] = value / (1.0f + expf(-value));
 }
 
-void launchFusedPolicyP1B13(
+void launchFusedPolicyP1(
   const half* input,
   float* output,
   const float* globalBias,
   const float* scale,
   const float* bias,
+  int batchSize,
   cudaStream_t stream
 ) {
   dim3 block(96, 5);
-  dim3 grid((361 + block.y - 1) / block.y, 13);
-  fusedPolicyP1B13Kernel<<<grid, block, 0, stream>>>(
+  dim3 grid((361 + block.y - 1) / block.y, batchSize);
+  fusedPolicyP1Kernel<<<grid, block, 0, stream>>>(
     input, output, globalBias, scale, bias);
 }
 

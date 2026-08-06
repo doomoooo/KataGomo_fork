@@ -5,6 +5,55 @@
 
 namespace Sm120Backend {
 
+enum Sm120GpuClass {
+  SM120_GPU_OTHER = 0,
+  SM120_GPU_RTX5080 = 1,
+  SM120_GPU_RTX5090D = 2,
+};
+
+typedef cudaError_t (*FusedFFNAotLaunchFn)(
+  const half*, const half*, const half*, half*, cudaStream_t);
+typedef cudaError_t (*WideQKVAotLaunchFn)(
+  const half*, const half*, half*, cudaStream_t);
+typedef cudaError_t (*ResidualGemmAotLaunchFn)(
+  const half*, const half*, half*, cudaStream_t);
+
+struct FusedFFNAotTactic {
+  int batchSize;
+  int gpuClass;
+  int streams;
+  const char* id;
+  bool automaticWinner;
+  FusedFFNAotLaunchFn launch;
+};
+
+struct WideQKVAotTactic {
+  int batchSize;
+  int gpuClass;
+  int streams;
+  const char* id;
+  bool automaticWinner;
+  WideQKVAotLaunchFn launch;
+};
+
+struct ResidualGemmAotTactic {
+  int batchSize;
+  int gpuClass;
+  int streams;
+  int inputChannels;
+  const char* id;
+  bool automaticWinner;
+  ResidualGemmAotLaunchFn launch;
+};
+
+const FusedFFNAotTactic* findFusedFFNAotTactic(
+  int batchSize, int gpuClass, int streams, const char* requestedId);
+const WideQKVAotTactic* findWideQKVAotTactic(
+  int batchSize, int gpuClass, int streams, const char* requestedId);
+const ResidualGemmAotTactic* findResidualGemmAotTactic(
+  int batchSize, int gpuClass, int streams, int inputChannels,
+  const char* requestedId);
+
 void launchFusedFFNB13(
   const half* input,
   const half* linearWeights,
@@ -110,10 +159,11 @@ void launchFusedQKRoPE19(
   cudaStream_t stream
 );
 
-void launchBatchSharedFusedQKRoPE19B13(
+void launchBatchSharedFusedQKRoPE19(
   half* qBuf,
   half* kBuf,
   const float* freqs,
+  int batchSize,
   cudaStream_t stream
 );
 
@@ -143,12 +193,13 @@ void launchAffineSiluHalf2(
   cudaStream_t stream
 );
 
-void launchFusedPolicyP1B13(
+void launchFusedPolicyP1(
   const half* input,
   float* output,
   const float* globalBias,
   const float* scale,
   const float* bias,
+  int batchSize,
   cudaStream_t stream
 );
 

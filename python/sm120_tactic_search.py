@@ -23,44 +23,6 @@ import sys
 GPU_CLASSES = ("rtx5080", "rtx5090d")
 
 
-# These are deliberately executable search anchors, not documentation-only
-# records.  A generated space is invalid unless every search member of an
-# applicable anchor is present at the exact (GPU, batch, streams) key.
-ANCHORS = (
-    {
-        "id": "current_5090d_b13",
-        "gpu_class": "rtx5090d",
-        "batch": 13,
-        "streams": 2,
-        "reference_nn_evals_per_sec": 3800.0,
-        "reference_kind": "current reproducible engineering baseline",
-        "search_members": {
-            "ffn": "ffn-m128-n64-k32-s2-mb3-areuse-exp",
-            "qkv": "qkv-m128-n128-k64-s2-tilelang-planar",
-            "linear2": "linear2-m128-n128-k32-s4-tilelang-64k",
-            "l2": "l2-trunk-inner-auto",
-        },
-        "source": "git commit 8c7d64c and CUDA-OPTIMIZATION-PORTABILITY.md",
-    },
-    {
-        "id": "historical_5080_b19",
-        "gpu_class": "rtx5080",
-        "batch": 19,
-        "streams": 2,
-        "reference_nn_evals_per_sec": 2862.953,
-        "minimum_required_nn_evals_per_sec": 2862.953,
-        "reference_kind": "locked-clock accepted historical record",
-        "search_members": {
-            "ffn": "ffn-m128-n64-k32-s2-mb3-tanh-half2",
-            "qkv": "qkv-m128-n128-k64-s2-cute-atom4x2-planar",
-            "linear2": "linear2-m128-n128-k32-s3-cutlass-49k",
-            "l2": "l2-trunk-inner-auto",
-        },
-        "source": "cuda-optimization-history.md, final locked B19/S2 bundle",
-    },
-)
-
-
 def parse_int_set(value: str) -> list[int]:
     result: list[int] = []
     for token in value.split(","):
@@ -242,7 +204,7 @@ def deduplicate_candidates(values: list[dict]) -> list[dict]:
     return result
 
 
-def candidate_space(batch: int, gpu_classes: tuple[str, ...]) -> dict:
+def candidate_space(batch: int) -> dict:
     # The six FFN points are the pruned neighborhood in section 6.1.  Two
     # K64/S3 corners exceed the intended low-cost/resource envelope.
     ffn = [
@@ -252,35 +214,50 @@ def candidate_space(batch: int, gpu_classes: tuple[str, ...]) -> dict:
         candidate("ffn-m64-n64-k32-s3-mb2-areuse-exp", m=64, n=64, k=32, stages=3, min_blocks=2, a_fragment_reuse=True, swiglu="exp"),
         candidate("ffn-m128-n64-k64-s2-mb1-areuse-exp", m=128, n=64, k=64, stages=2, min_blocks=1, a_fragment_reuse=True, swiglu="exp"),
         candidate("ffn-m64-n64-k64-s2-mb2-areuse-exp", m=64, n=64, k=64, stages=2, min_blocks=2, a_fragment_reuse=True, swiglu="exp"),
+        candidate("ffn-fallback-cublas-swiglu", implementation="fallback"),
     ]
     qkv = [
-        candidate("qkv-m128-n128-k64-s2-tilelang-planar", m=128, n=128, k=64, stages=2, implementation="tilelang", output="planar"),
-        candidate("qkv-m128-n128-k32-s3-tilelang-planar", m=128, n=128, k=32, stages=3, implementation="tilelang", output="planar"),
+        candidate("qkv-m128-n128-k64-s2-tilelang-planar", m=128, n=128, k=64, stages=2, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
+        candidate("qkv-m128-n128-k32-s3-tilelang-planar", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
+        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-planar", m=128, n=128, k=64, stages=2, threads=128, implementation="cute", copy_atom="4x2", output="planar"),
+        candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
+        candidate("qkv-fallback-three-gemm", implementation="fallback"),
     ]
-    if batch <= 10:
-        qkv.append(candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, implementation="tilelang", output="planar"))
     linear2 = [
-        candidate("linear2-m128-n128-k32-s4-tilelang-64k", m=128, n=128, k=32, stages=4, implementation="tilelang", dynamic_smem_bytes=65536),
-        candidate("linear2-m128-n128-k32-s3-tilelang-49k", m=128, n=128, k=32, stages=3, implementation="tilelang", dynamic_smem_bytes=49152),
-        candidate("linear2-m128-n96-k32-s4-tilelang", m=128, n=96, k=32, stages=4, implementation="tilelang"),
+        candidate("linear2-m128-n128-k32-s4-tilelang-64k", m=128, n=128, k=32, stages=4, threads=128, min_blocks=3, implementation="tilelang", dynamic_smem_bytes=65536),
+        candidate("linear2-m128-n128-k32-s3-tilelang-49k", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", dynamic_smem_bytes=49152),
+        candidate("linear2-m128-n96-k32-s4-tilelang", m=128, n=96, k=32, stages=4, threads=128, min_blocks=3, implementation="tilelang"),
+        candidate("linear2-m128-n128-k32-s3-cutlass-49k", m=128, n=128, k=32, stages=3, threads=128, implementation="cutlass", dynamic_smem_bytes=49152),
+        candidate("linear2-fallback-cublas-beta1", implementation="fallback"),
     ]
     l2 = [
         candidate("l2-off", trunk=False, inner=False, hit_ratio=0.0, config={"cudaUsePersistingL2Trunk": False, "cudaUsePersistingL2Inner": False}),
         candidate("l2-trunk-auto", trunk=True, inner=False, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": False, "cudaPersistingL2HitRatioSm120": 1.0}),
         candidate("l2-trunk-inner-auto", trunk=True, inner=True, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": True, "cudaPersistingL2HitRatioSm120": 1.0}),
     ]
+    fa4 = [
+        candidate(
+            f"fa4-b{batch}-s361-h12-d32-tm128-tn128-s1-both16",
+            batch=batch,
+            seq_len=361,
+            heads=12,
+            head_dim=32,
+            tile_n=128,
+            num_stages=1,
+            accumulation="both16",
+            exact_shape_aot=True,
+        ),
+        candidate("fa4-official-attention", implementation="fallback"),
+    ]
 
-    # Exact historical implementations remain candidates at their anchor key.
-    # They may use a different arithmetic or kernel generator from the generic
-    # neighborhood and therefore must not be aliased to a superficially equal
-    # tile shape.
-    if batch == 19 and "rtx5080" in gpu_classes:
-        ffn.append(candidate("ffn-m128-n64-k32-s2-mb3-tanh-half2", m=128, n=64, k=32, stages=2, min_blocks=3, a_fragment_reuse=False, swiglu="tanh_half2", implementation="historical_tilelang"))
-        qkv.append(candidate("qkv-m128-n128-k64-s2-cute-atom4x2-planar", m=128, n=128, k=64, stages=2, implementation="cute", copy_atom="4x2", output="planar"))
-        linear2.append(candidate("linear2-m128-n128-k32-s3-cutlass-49k", m=128, n=128, k=32, stages=3, implementation="cutlass", dynamic_smem_bytes=49152))
+    # The previously accepted 5080 implementations are generator families,
+    # not B19-only anchors. Materialize them for every requested batch so the
+    # search can discover where each arithmetic/copy/mainloop choice wins.
+    ffn.append(candidate("ffn-m128-n64-k32-s2-mb3-tanh-half2", m=128, n=64, k=32, stages=2, min_blocks=3, a_fragment_reuse=False, swiglu="tanh_half2", implementation="historical_tilelang"))
     return {
         "batch": batch,
         "tokens": batch * 361,
+        "fa4": fa4,
         "ffn": deduplicate_candidates(ffn),
         "qkv": deduplicate_candidates(qkv),
         "linear2": deduplicate_candidates(linear2),
@@ -339,38 +316,9 @@ def merge_extra_candidates(space: dict, extras: list[dict], gpu_classes: tuple[s
                 batch_space[family] = deduplicate_candidates(batch_space[family])
 
 
-def validate_anchor_coverage(space: dict, gpu_classes: tuple[str, ...], streams: int) -> list[dict]:
-    batches = {value["batch"]: value for value in space["batches"]}
-    validations: list[dict] = []
-    for anchor in ANCHORS:
-        if anchor["gpu_class"] not in gpu_classes or anchor["streams"] != streams:
-            continue
-        missing: list[str] = []
-        batch_space = batches.get(anchor["batch"])
-        if batch_space is None:
-            missing.append(f"batch:{anchor['batch']}")
-        else:
-            for family, candidate_id in anchor["search_members"].items():
-                family_key = "l2_first_round" if family == "l2" else family
-                ids = {item["id"] for item in batch_space.get(family_key, [])}
-                if candidate_id not in ids:
-                    missing.append(f"{family}:{candidate_id}")
-        validations.append({
-            "anchor_id": anchor["id"],
-            "valid": not missing,
-            "missing": missing,
-        })
-    return validations
-
-
 def write_space(args: argparse.Namespace) -> None:
     gpu_classes = selected_gpu_classes(args.gpu_class)
     batches = parse_int_set(args.batches)
-    # Hard anchor batches are always materialized for the selected GPU class.
-    batches = sorted(set(batches) | {
-        anchor["batch"] for anchor in ANCHORS
-        if anchor["gpu_class"] in gpu_classes and anchor["streams"] == args.streams
-    })
     payload = {
         "schema": 2,
         "gpu_class": args.gpu_class,
@@ -379,15 +327,12 @@ def write_space(args: argparse.Namespace) -> None:
         "fixed_board": [19, 19],
         "workflow_gate": "correctness -> S1/NCU -> natural whole-graph S2",
         "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
-        "anchors": [anchor for anchor in ANCHORS if anchor["gpu_class"] in gpu_classes],
-        "batches": [candidate_space(batch, gpu_classes) for batch in batches],
+        "batch_policy": "only explicitly requested batches; no implicit anchors",
+        "batches": [candidate_space(batch) for batch in batches],
     }
     extras = load_extra_candidates(args.extra_candidates)
     merge_extra_candidates(payload, extras, gpu_classes, args.streams)
     payload["extra_candidate_manifests"] = args.extra_candidates
-    payload["anchor_validation"] = validate_anchor_coverage(payload, gpu_classes, args.streams)
-    if not all(item["valid"] for item in payload["anchor_validation"]):
-        raise RuntimeError(f"hard anchor is outside generated space: {payload['anchor_validation']}")
     text = json.dumps(payload, indent=2) + "\n"
     if args.output:
         pathlib.Path(args.output).write_text(text)
@@ -435,8 +380,6 @@ def check_winner(args: argparse.Namespace) -> None:
     payload = json.loads(pathlib.Path(args.space).read_text())
     if payload.get("schema") != 2:
         raise ValueError("winner checks require a schema-2 generated space")
-    if not all(item["valid"] for item in payload.get("anchor_validation", [])):
-        raise RuntimeError("integration forbidden: hard anchor validation failed")
     batch_space = next((item for item in payload["batches"] if item["batch"] == args.batch), None)
     family = "l2_first_round" if args.family == "l2" else args.family
     ids = set() if batch_space is None else {item["id"] for item in batch_space.get(family, [])}
@@ -447,6 +390,61 @@ def check_winner(args: argparse.Namespace) -> None:
             f"then retry ({args.family}/{args.candidate_id}, B{args.batch})"
         )
     print(f"integration gate passed: {args.family}/{args.candidate_id}, B{args.batch}")
+
+
+def build_generation_plan(args: argparse.Namespace) -> None:
+    payload = json.loads(pathlib.Path(args.space).read_text())
+    if payload.get("schema") != 2:
+        raise ValueError("generation plans require a schema-2 space")
+    families = tuple(item.strip() for item in args.families.split(",") if item.strip())
+    supported = ("fa4", "ffn", "qkv", "linear2")
+    if not families or any(item not in supported for item in families):
+        raise ValueError(f"--families must be a subset of {supported}")
+
+    seed_ids = {
+        "ffn": "ffn-m128-n64-k32-s2-mb3-areuse-exp",
+        "qkv": "qkv-m128-n128-k64-s2-tilelang-planar",
+        "linear2": "linear2-m128-n128-k32-s4-tilelang-64k",
+    }
+    tasks = []
+    for batch_space in payload["batches"]:
+        batch = batch_space["batch"]
+        for family in families:
+            values = batch_space.get(family, [])
+            if args.phase == "seed":
+                if family == "fa4":
+                    values = values[:1]
+                else:
+                    values = [item for item in values if item["id"] == seed_ids[family]]
+            for item in values:
+                generator = (
+                    "cpp/neuralnet/fa4_aot/build_aot.py"
+                    if family == "fa4"
+                    else "python/sm120_generate_tilelang_aot.py"
+                )
+                tasks.append({
+                    "gpu_classes": payload["gpu_classes"],
+                    "streams": payload["streams"],
+                    "batch": batch,
+                    "family": family,
+                    "candidate_id": item["id"],
+                    "candidate": item,
+                    "generator": generator,
+                    "acceptance_metric": "natural whole-graph S2 total throughput",
+                })
+    planned = {
+        "schema": 1,
+        "source_space": str(pathlib.Path(args.space).resolve()),
+        "phase": args.phase,
+        "fixed_board": [19, 19],
+        "batch_policy": "all materialized batches; no anchor-first special case",
+        "tasks": tasks,
+    }
+    text_value = json.dumps(planned, indent=2) + "\n"
+    if args.output:
+        pathlib.Path(args.output).write_text(text_value)
+    else:
+        sys.stdout.write(text_value)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -501,6 +499,16 @@ def make_parser() -> argparse.ArgumentParser:
     check.add_argument("--family", required=True)
     check.add_argument("--candidate-id", required=True)
     check.set_defaults(function=check_winner)
+
+    generation = subparsers.add_parser(
+        "generation-plan",
+        help="materialize seed or full AOT tasks for every selected batch",
+    )
+    generation.add_argument("--space", required=True)
+    generation.add_argument("--phase", choices=("seed", "full"), default="seed")
+    generation.add_argument("--families", default="fa4,ffn,qkv,linear2")
+    generation.add_argument("--output")
+    generation.set_defaults(function=build_generation_plan)
     return parser
 
 

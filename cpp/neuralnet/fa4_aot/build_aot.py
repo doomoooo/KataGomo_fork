@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the FA4 SM120 AOT artifacts (fa4_sm120_b13.h/.o) used by the
-KataGo SM120 backend attention hook.
+"""Generate one exact-batch FA4 SM120 AOT search candidate.
 
 Prereqs (see /workspace/container-setup/third_party_env.sh):
   - Python venv with flash-attn 4.x + nvidia-cutlass-dsl installed
@@ -9,18 +8,30 @@ Prereqs (see /workspace/container-setup/third_party_env.sh):
 
 Usage:
   source /workspace/container-setup/third_party_env.sh
-  python cpp/neuralnet/fa4_aot/build_aot.py
+  python cpp/neuralnet/fa4_aot/build_aot.py --batch B --device CUDA_ORDINAL
 
-The generated header/object are checked into the repo; only regenerate when
-the FA4/DSL toolchain or the fixed tile config changes, and verify with
-fa4_smoke.cpp against attention_ref before committing.
+The selected per-GPU/per-batch winner is checked into the tactic registry only
+after correctness and natural whole-graph S2 validation.
 """
 
+import argparse
 import os
 import sys
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--batch", type=int, required=True)
+parser.add_argument("--device", type=int, required=True)
+parser.add_argument("--output-dir")
+parser.add_argument("--artifact-stem")
+args = parser.parse_args()
+if args.batch < 1:
+    parser.error("--batch must be positive")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = HERE
+OUT_DIR = os.path.abspath(args.output_dir or HERE)
+ARTIFACT_STEM = args.artifact_stem or f"fa4_sm120_b{args.batch}"
+os.makedirs(OUT_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASH_ATTENTION_ARCH", "sm_120")
 os.environ.setdefault("CUTE_DSL_ARCH", "sm_120")
@@ -36,7 +47,7 @@ import cutlass  # noqa: E402
 import cutlass.cute as cute  # noqa: E402
 from cutlass import Float16, Float32  # noqa: E402
 
-torch.cuda.set_device(2)
+torch.cuda.set_device(args.device)
 
 from flash_attn.cute.flash_fwd_sm120 import FlashAttentionForwardSm120  # noqa: E402
 from flash_attn.cute.cute_dsl_utils import to_cute_tensor  # noqa: E402
@@ -69,7 +80,7 @@ CuteCHeaderGenerator._generate_arguments = _make_skipping_gen(CuteCHeaderGenerat
 
 # Fixed shape used by the AOT probe/smoke: 19x19 (S=361), H=12, D=32, FP16,
 # non-causal, SM120 tile 128x128, 128 threads, 1 stage. Batch is runtime.
-B, S, H, D = 13, 361, 12, 32
+B, S, H, D = args.batch, 361, 12, 32
 q = torch.randn(B, S, H, D, device="cuda", dtype=torch.float16)
 k = torch.randn(B, S, H, D, device="cuda", dtype=torch.float16)
 v = torch.randn(B, S, H, D, device="cuda", dtype=torch.float16)
@@ -108,53 +119,6 @@ if PV_ACC == "fp16":
 
     Softmax.rescale_O = _rescale_o_with_accumulator_cast
 
-FIXED_S361_MASK = os.environ.get("FA4_FIXED_S361_MASK", "0")
-if FIXED_S361_MASK not in ("0", "1"):
-    raise ValueError("FA4_FIXED_S361_MASK must be 0 or 1")
-
-if FIXED_S361_MASK == "1":
-    from flash_attn.cute.mask import (  # noqa: E402
-        AttentionMask,
-        mask_r2p_lambda,
-        r2p_bitmask_below,
-        sm90_col_to_r2p_idx,
-    )
-
-    @cute.jit
-    def _apply_fixed_s361_tail_mask(
-        self,
-        acc_s: cute.Tensor,
-        batch_idx: cutlass.Int32,
-        head_idx: cutlass.Int32,
-        m_block: cutlass.Int32,
-        n_block: cutlass.Int32,
-        thr_mma: cute.TiledMma,
-        mask_seqlen: cutlass.Constexpr[bool],
-        mask_causal: cutlass.Constexpr[bool],
-        mask_local: cutlass.Constexpr[bool] = False,
-        mask_mod: cutlass.Constexpr = None,
-        aux_data: AuxData = AuxData(),
-        fastdiv_mods=(None, None),
-    ) -> None:
-        # This AOT object is constructed only for non-causal S361 with no mask
-        # modifier. The first N iteration is fixed tile 2, with 105 valid cols.
-        if cutlass.const_expr(mask_seqlen):
-            acc_s_mn = layout_utils.reshape_acc_to_mn(acc_s)
-            coordinates = cute.make_identity_tensor((self.tile_m, self.tile_n))
-            thread_coordinates = layout_utils.reshape_acc_to_mn(
-                thr_mma.partition_C(coordinates)
-            )
-            thread_col_offset = thread_coordinates[0][1]
-            col_limit_r2p = sm90_col_to_r2p_idx(
-                cutlass.Int32(105) - thread_col_offset
-            )
-            mask_r2p_lambda(
-                acc_s_mn,
-                lambda chunk: r2p_bitmask_below(col_limit_r2p, chunk),
-            )
-
-    AttentionMask.apply_mask = _apply_fixed_s361_tail_mask
-
 fa_fwd = FlashAttentionForwardSm120(
     Float16, D, D, 1,
     is_causal=False,
@@ -182,9 +146,9 @@ compiled = cute.compile(
     None, AuxData(), None, None, stream,
 )
 
-compiled.export_to_c(OUT_DIR, "fa4_sm120_b13", "fa4")
+compiled.export_to_c(OUT_DIR, ARTIFACT_STEM, "fa4")
 print(
-    f"AOT export OK (QK_ACC={QK_ACC}, PV_ACC={PV_ACC}, "
-    f"FIXED_S361_MASK={FIXED_S361_MASK}) ->",
+    f"AOT export OK (B={B}, QK_ACC={QK_ACC}, PV_ACC={PV_ACC}, "
+    "fixed full-board S361, no mask) ->",
     OUT_DIR,
 )

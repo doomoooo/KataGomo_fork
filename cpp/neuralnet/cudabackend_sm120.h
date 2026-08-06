@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // SM120-specific CUDA backend.
 //
@@ -18,7 +19,7 @@
 //
 // Rebuild roadmap (from /workspace/cuda-optimization-history.md, final accepted config):
 //   0. scaffold: Sm120Model delegates to the official model (bit-identical)  [done]
-//   1. FA4 both16 attention (B1-B13/S361/H12/D32, noncausal, shape fallback to official)
+//   1. FA4 both16 attention (fixed S361/H12/D32, batch-selected AOT, shape fallback to official)
 //      [done: checked-in AOT artifact uses FP16 QK/PV accumulation]
 //   2. wide QKV CuTe AOT C384->QKV1152, batch-shared RoPE, fused residual epilogues
 //   3. TileLang fused FFN + linear2/out-projection AOT
@@ -30,6 +31,10 @@ struct ScratchBuffers; // defined in cudabackend.cpp
 struct Logger;         // defined in core/logger.h
 
 namespace Sm120Backend {
+
+struct FusedFFNAotTactic;
+struct WideQKVAotTactic;
+struct ResidualGemmAotTactic;
 
 // Trampoline for the official backend apply(). cudabackend.cpp supplies it so Sm120Model never
 // needs the internal Model type; ctx is the official Model pointer.
@@ -241,9 +246,11 @@ struct Options {
   bool useLinear2ResidualAot = true;
   bool useLinear2ResidualAotBalanced = false;
   bool useOutProjectionResidualAot = false;
+  std::string outProjectionAotTactic = "auto";
   bool useFusedFFN = true;
   bool useFusedFFNAReuse = false;
   bool useFusedFFNSingleStreamSchedule = false;
+  std::string fusedFFNAotTactic = "auto";
   bool useWideFFNSingleGemm = false;
   bool useFusedRMSNormFFN = false;
   bool useRMSNorm384 = true;
@@ -258,6 +265,8 @@ struct Options {
   int persistingL2Streams = 2;
   double persistingL2HitRatio = 1.0;
   bool useOuterProjectionAot = true;
+  std::string wideQKVAotTactic = "auto";
+  std::string linear2AotTactic = "auto";
   bool shareModelWeights = true;
   bool shareWideQKVWeights = false;
   bool shareOuterProjectionWeights = false;
@@ -643,6 +652,7 @@ class Sm120Model {
   const bool useFP16;
   const bool useNHWC;
   Options options;
+  int sm120GpuClass;
   Logger* logger;
   bool loggedFallback;
   bool loggedFa4;
@@ -669,6 +679,10 @@ class Sm120Model {
   size_t persistingL2ActualBytes;
   float persistingL2TrunkHitRatio;
   float persistingL2InnerHitRatio;
+  std::vector<const FusedFFNAotTactic*> fusedFFNAotByBatch;
+  std::vector<const WideQKVAotTactic*> wideQKVAotByBatch;
+  std::vector<const ResidualGemmAotTactic*> linear2AotByBatch;
+  std::vector<const ResidualGemmAotTactic*> outProjectionAotByBatch;
   std::unordered_map<const void*, void*> wideFFNSingleGemmWeights;
   std::unordered_map<const void*, void*> wideQKVWeights;
   std::unordered_map<const void*, void*> qkvStridedWeights;

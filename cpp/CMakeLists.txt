@@ -67,10 +67,20 @@ if(USE_BACKEND STREQUAL "CUDA")
   add_compile_definitions(CUDA_API_PER_THREAD_DEFAULT_STREAM)
 
   set(CUDA_STANDARD 11)
+  set(SM120_SEARCH_FFN_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_ffn_stub.cu"
+    CACHE FILEPATH "Exact-batch FFN AOT candidate used by the whole-graph search slot")
+  set(SM120_SEARCH_QKV_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_qkv_stub.cu"
+    CACHE FILEPATH "Exact-batch QKV AOT candidate used by the whole-graph search slot")
+  set(SM120_SEARCH_LINEAR2_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_stub.cu"
+    CACHE FILEPATH "Exact-batch linear2 AOT candidate used by the whole-graph search slot")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm120.cpp
     neuralnet/cudabackend_sm120_kernels.cu
+    neuralnet/cudabackend_sm120_aot_registry.cu
     neuralnet/tilelang_aot/fused_ffn_b13.cu
     neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
     neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
@@ -79,11 +89,15 @@ if(USE_BACKEND STREQUAL "CUDA")
     neuralnet/tilelang_aot/linear2_residual_b13.cu
     neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
     neuralnet/tilelang_aot/outproj_residual_b13.cu
+    ${SM120_SEARCH_FFN_SOURCE}
+    ${SM120_SEARCH_QKV_SOURCE}
+    ${SM120_SEARCH_LINEAR2_SOURCE}
     neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
   )
   set_source_files_properties(
+    neuralnet/cudabackend_sm120_aot_registry.cu
     neuralnet/tilelang_aot/fused_ffn_b13.cu
     neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
     neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
@@ -92,6 +106,9 @@ if(USE_BACKEND STREQUAL "CUDA")
     neuralnet/tilelang_aot/linear2_residual_b13.cu
     neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
     neuralnet/tilelang_aot/outproj_residual_b13.cu
+    ${SM120_SEARCH_FFN_SOURCE}
+    ${SM120_SEARCH_QKV_SOURCE}
+    ${SM120_SEARCH_LINEAR2_SOURCE}
     PROPERTIES
       CUDA_ARCHITECTURES "120"
       INCLUDE_DIRECTORIES
