@@ -538,6 +538,8 @@ def main() -> None:
                         "--output-dir", str(candidate_dir),
                         "--bridge-path", str(bridge_path),
                         "--candidate-id", candidate_id,
+                        "--max-active-clusters",
+                        str(candidate_value["max_active_clusters"]),
                     ]
                     run_checked(command, logs / f"{prefix}-generate")
                     metadata_path = candidate_dir / "sm120_qkv_cute_active.json"

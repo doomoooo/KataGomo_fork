@@ -205,7 +205,7 @@ def deduplicate_candidates(values: list[dict]) -> list[dict]:
     return result
 
 
-def candidate_space(batch: int) -> dict:
+def candidate_space(batch: int, gpu_class: str = "rtx5090d") -> dict:
     # The six FFN points are the pruned neighborhood in section 6.1.  Two
     # K64/S3 corners exceed the intended low-cost/resource envelope.
     ffn = [
@@ -220,7 +220,12 @@ def candidate_space(batch: int) -> dict:
     qkv = [
         candidate("qkv-m128-n128-k64-s2-tilelang-planar", m=128, n=128, k=64, stages=2, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-m128-n128-k32-s3-tilelang-planar", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
-        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-packed", m=128, n=128, k=64, stages=2, threads=288, implementation="cute", copy_atom="4x2", output="packed"),
+        candidate(
+            "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+            m=128, n=128, k=64, stages=2, threads=288,
+            implementation="cute", copy_atom="4x2", output="packed",
+            max_active_clusters=84 if gpu_class == "rtx5080" else 170,
+        ),
         candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-fallback-three-gemm", implementation="fallback"),
     ]
@@ -350,7 +355,7 @@ def write_space(args: argparse.Namespace) -> None:
         ),
         "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
         "batch_policy": "only explicitly requested batches; no implicit anchors",
-        "batches": [candidate_space(batch) for batch in batches],
+        "batches": [candidate_space(batch, args.gpu_class) for batch in batches],
     }
     extras = load_extra_candidates(args.extra_candidates)
     merge_extra_candidates(payload, extras, gpu_classes, args.streams)
