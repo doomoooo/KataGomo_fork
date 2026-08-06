@@ -22,6 +22,7 @@ struct NNEvalBenchmarkResult {
   int batchSize;
   int numServerThreads;
   int numIterations;
+  int phaseOffsetMicros;
   std::vector<std::vector<double>> perServerIterationSeconds;
   std::vector<double> perServerMedianSeconds;
   std::vector<double> perServerNNEvalsPerSec;
@@ -231,7 +232,9 @@ class NNEvaluator {
   // per-server GPU assignment. Does not include feature generation, postprocessing, H2D/D2H, or
   // search. One compute handle + input buffers are created per NN server thread, each on its own
   // CUDA stream, and the forward passes run concurrently.
-  NNEvalBenchmarkResult benchmarkPureForward(int numWarmups, int numIterations);
+  NNEvalBenchmarkResult benchmarkPureForward(
+    int numWarmups, int numIterations, int phaseOffsetMicros
+  );
 
   // Accessors used by the replay command (replaynn) to drive the same compute handles and input
   // buffers that the benchmark path uses, without going through search or the eval queue.

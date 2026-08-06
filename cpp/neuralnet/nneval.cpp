@@ -441,11 +441,15 @@ void NNEvaluator::killServerThreads() {
   testAssert(numEvalsToAwaken == 0);
 }
 
-NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numIterations) {
+NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(
+  int numWarmups, int numIterations, int phaseOffsetMicros
+) {
   if(numIterations <= 0)
     throw StringError("benchmarknn requires numIterations > 0");
   if(numWarmups < 0)
     throw StringError("benchmarknn requires numWarmups >= 0");
+  if(phaseOffsetMicros < -1)
+    throw StringError("benchmarknn phase offset must be -1 or nonnegative");
   if(debugSkipNeuralNet || loadedModel == NULL || computeContext == NULL)
     throw StringError("benchmarknn requires a real neural net model");
 
@@ -458,6 +462,7 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   result.batchSize = batchSize;
   result.numServerThreads = numServerThreads;
   result.numIterations = numIterations;
+  result.phaseOffsetMicros = phaseOffsetMicros;
   result.perServerIterationSeconds.assign(numServerThreads, {});
   result.perServerMedianSeconds.assign(numServerThreads, 0.0);
   result.perServerNNEvalsPerSec.assign(numServerThreads, 0.0);
@@ -472,6 +477,9 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
 
   std::atomic<int> readyCount(0);
   std::atomic<bool> startFlag(false);
+  std::unique_ptr<BenchmarkForwardBarrier> phaseBarrier;
+  if(phaseOffsetMicros >= 0)
+    phaseBarrier = std::make_unique<BenchmarkForwardBarrier>(numServerThreads);
   std::chrono::steady_clock::time_point wallStart;
   std::chrono::steady_clock::time_point wallEnd;
 
@@ -546,7 +554,8 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
           std::vector<double> times;
 #if defined(USE_CUDA_BACKEND) || defined(USE_TENSORRT_BACKEND)
           if(!NeuralNet::benchmarkOutput(
-               handle, serverBuf.inputBuffers, batchSize, numWarmups, numIterations, times
+               handle, serverBuf.inputBuffers, batchSize, numWarmups, numIterations, times,
+               phaseBarrier.get(), threadIdx, phaseOffsetMicros
              )) {
             throw StringError("Current backend does not support pure-device benchmarknn");
           }

@@ -70,9 +70,32 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm120.cpp
+    neuralnet/cudabackend_sm120_kernels.cu
+    neuralnet/tilelang_aot/fused_ffn_b13.cu
+    neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
+    neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
+    neuralnet/tilelang_aot/wide_qkv_b13.cu
+    neuralnet/tilelang_aot/wide_qkv_b13_s1.cu
+    neuralnet/tilelang_aot/linear2_residual_b13.cu
+    neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
+    neuralnet/tilelang_aot/outproj_residual_b13.cu
     neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
+  )
+  set_source_files_properties(
+    neuralnet/tilelang_aot/fused_ffn_b13.cu
+    neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
+    neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
+    neuralnet/tilelang_aot/wide_qkv_b13.cu
+    neuralnet/tilelang_aot/wide_qkv_b13_s1.cu
+    neuralnet/tilelang_aot/linear2_residual_b13.cu
+    neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
+    neuralnet/tilelang_aot/outproj_residual_b13.cu
+    PROPERTIES
+      CUDA_ARCHITECTURES "120"
+      INCLUDE_DIRECTORIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/TileLang/src;${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cutlass/include"
   )
   # The vendored header-only cudnn_frontend library trips GCC's -Wnull-dereference from its -O2
   # interprocedural analysis (no source location, so an in-file #pragma can't suppress it). It's
@@ -394,7 +417,7 @@ if(USE_BACKEND STREQUAL "CUDA")
   # (we don't actually use those engines, but the references are pulled in by the header-only includes).
   # SM120 FA4 AOT: the DSL host object embeds the cubin and needs the small
   # `_cuda*` bridge (fa4_cuda_bridge.cpp) plus the CUDA driver API.
-  target_link_libraries(katago CUDA::cublas ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
+  target_link_libraries(katago CUDA::cublas CUDA::cublasLt ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
   target_link_libraries(katago ${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/fa4_sm120_b13.o)
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   target_compile_definitions(katago PRIVATE USE_TENSORRT_BACKEND)

@@ -32,6 +32,7 @@ os.environ.setdefault("FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED", "0")
 os.environ.setdefault("FLASH_ATTENTION_CUTE_DSL_CACHE_DIR", os.path.join(OUT_DIR, ".aot-cache"))
 
 import torch  # noqa: E402
+import cutlass  # noqa: E402
 import cutlass.cute as cute  # noqa: E402
 from cutlass import Float16, Float32  # noqa: E402
 
@@ -41,6 +42,7 @@ from flash_attn.cute.flash_fwd_sm120 import FlashAttentionForwardSm120  # noqa: 
 from flash_attn.cute.cute_dsl_utils import to_cute_tensor  # noqa: E402
 from flash_attn.cute.utils import AuxData  # noqa: E402
 from cutlass.cute.export.c_header_generator import CuteCHeaderGenerator  # noqa: E402
+from quack import layout_utils  # noqa: E402
 
 # AuxData is a compile-time marker the AOT C header generator does not know.
 # Skip it when emitting the C signature (no aux tensors in our kernel).
@@ -77,11 +79,81 @@ scale = 1.0 / (D ** 0.5)
 # Accumulator modes: fp32/qk16/pv16/both16 (QK/PV accumulator data types).
 #   FA4_QK_ACC=fp16 -> QK MMA accumulator FP16 (qk16)
 #   FA4_PV_ACC=fp16 -> PV MMA accumulator FP16 (pv16)
-# The default remains FP32 so `build_aot.py` reproduces the original checkpoint.
-QK_ACC = os.environ.get("FA4_QK_ACC", "fp32")
-PV_ACC = os.environ.get("FA4_PV_ACC", "fp32")
+# The accepted checked-in artifact uses FP16 for both accumulators. Override
+# either variable with fp32 to reproduce the Stage-1 control or an ablation.
+QK_ACC = os.environ.get("FA4_QK_ACC", "fp16")
+PV_ACC = os.environ.get("FA4_PV_ACC", "fp16")
+if QK_ACC not in ("fp16", "fp32") or PV_ACC not in ("fp16", "fp32"):
+    raise ValueError("FA4_QK_ACC and FA4_PV_ACC must be fp16 or fp32")
 qk_acc_dtype = Float16 if QK_ACC == "fp16" else Float32
 pv_acc_dtype = Float16 if PV_ACC == "fp16" else Float32
+
+# flash-attn 4.0.0b25 supports selecting an FP16 PV accumulator, but its
+# online-softmax rescale stores an FP32 product without converting it back to
+# the accumulator type. Keep the compatibility fix local to this AOT build.
+if PV_ACC == "fp16":
+    from flash_attn.cute.softmax import Softmax  # noqa: E402
+
+    @cute.jit
+    def _rescale_o_with_accumulator_cast(
+        self,
+        acc_o: cute.Tensor,
+        row_scale: cute.Tensor,
+    ) -> None:
+        acc_o_mn = layout_utils.reshape_acc_to_mn(acc_o)
+        assert cute.size(row_scale) == cute.size(acc_o_mn, mode=[0])
+        for row in cutlass.range(cute.size(row_scale), unroll_full=True):
+            scaled = acc_o_mn[row, None].load() * row_scale[row]
+            acc_o_mn[row, None].store(scaled.to(acc_o_mn.element_type))
+
+    Softmax.rescale_O = _rescale_o_with_accumulator_cast
+
+FIXED_S361_MASK = os.environ.get("FA4_FIXED_S361_MASK", "0")
+if FIXED_S361_MASK not in ("0", "1"):
+    raise ValueError("FA4_FIXED_S361_MASK must be 0 or 1")
+
+if FIXED_S361_MASK == "1":
+    from flash_attn.cute.mask import (  # noqa: E402
+        AttentionMask,
+        mask_r2p_lambda,
+        r2p_bitmask_below,
+        sm90_col_to_r2p_idx,
+    )
+
+    @cute.jit
+    def _apply_fixed_s361_tail_mask(
+        self,
+        acc_s: cute.Tensor,
+        batch_idx: cutlass.Int32,
+        head_idx: cutlass.Int32,
+        m_block: cutlass.Int32,
+        n_block: cutlass.Int32,
+        thr_mma: cute.TiledMma,
+        mask_seqlen: cutlass.Constexpr[bool],
+        mask_causal: cutlass.Constexpr[bool],
+        mask_local: cutlass.Constexpr[bool] = False,
+        mask_mod: cutlass.Constexpr = None,
+        aux_data: AuxData = AuxData(),
+        fastdiv_mods=(None, None),
+    ) -> None:
+        # This AOT object is constructed only for non-causal S361 with no mask
+        # modifier. The first N iteration is fixed tile 2, with 105 valid cols.
+        if cutlass.const_expr(mask_seqlen):
+            acc_s_mn = layout_utils.reshape_acc_to_mn(acc_s)
+            coordinates = cute.make_identity_tensor((self.tile_m, self.tile_n))
+            thread_coordinates = layout_utils.reshape_acc_to_mn(
+                thr_mma.partition_C(coordinates)
+            )
+            thread_col_offset = thread_coordinates[0][1]
+            col_limit_r2p = sm90_col_to_r2p_idx(
+                cutlass.Int32(105) - thread_col_offset
+            )
+            mask_r2p_lambda(
+                acc_s_mn,
+                lambda chunk: r2p_bitmask_below(col_limit_r2p, chunk),
+            )
+
+    AttentionMask.apply_mask = _apply_fixed_s361_tail_mask
 
 fa_fwd = FlashAttentionForwardSm120(
     Float16, D, D, 1,
@@ -111,4 +183,8 @@ compiled = cute.compile(
 )
 
 compiled.export_to_c(OUT_DIR, "fa4_sm120_b13", "fa4")
-print(f"AOT export OK (QK_ACC={QK_ACC}, PV_ACC={PV_ACC}) ->", OUT_DIR)
+print(
+    f"AOT export OK (QK_ACC={QK_ACC}, PV_ACC={PV_ACC}, "
+    f"FIXED_S361_MASK={FIXED_S361_MASK}) ->",
+    OUT_DIR,
+)

@@ -2159,7 +2159,10 @@ bool NeuralNet::benchmarkOutput(
   int batchSize,
   int numWarmups,
   int numIterations,
-  vector<double>& iterationSeconds
+  vector<double>& iterationSeconds,
+  BenchmarkForwardBarrier* phaseBarrier,
+  int serverThreadIdx,
+  int phaseOffsetMicros
 ) {
   assert(batchSize > 0 && batchSize <= inputBuffers->maxBatchSize);
   if(numWarmups < 0 || numIterations <= 0)
@@ -2222,6 +2225,10 @@ bool NeuralNet::benchmarkOutput(
     CUDA_ERR("benchmarkOutput",cudaEventCreate(&startEvents[i]));
     CUDA_ERR("benchmarkOutput",cudaEventCreate(&endEvents[i]));
   }
+
+
+  if(phaseBarrier != NULL)
+    phaseBarrier->arriveAndWait(serverThreadIdx,phaseOffsetMicros);
 
   try {
     for(int i = 0; i < numIterations; i++) {

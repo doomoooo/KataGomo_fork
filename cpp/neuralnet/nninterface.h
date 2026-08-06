@@ -9,6 +9,10 @@
 #include "../neuralnet/desc.h"
 #include "../neuralnet/nninputs.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 // Defined in nneval.h
 struct NNResultBuf;
 
@@ -26,6 +30,32 @@ struct InputBuffers;
 
 // A handle to the loaded neural network model.
 struct LoadedModel;
+
+// Optional one-shot barrier for diagnosing multi-stream phase sensitivity in benchmarknn.
+// A negative CLI offset leaves this unused and preserves the normal benchmark path.
+struct BenchmarkForwardBarrier {
+  const int participants;
+  std::atomic<int> ready;
+  std::atomic<bool> release;
+
+  explicit BenchmarkForwardBarrier(int participants_)
+    : participants(participants_), ready(0), release(false) {}
+
+  void arriveAndWait(int threadIdx, int phaseOffsetMicros) {
+    ready.fetch_add(1,std::memory_order_acq_rel);
+    while(ready.load(std::memory_order_acquire) < participants)
+      std::this_thread::yield();
+    release.store(true,std::memory_order_release);
+    while(!release.load(std::memory_order_acquire))
+      std::this_thread::yield();
+    if(threadIdx > 0 && phaseOffsetMicros > 0) {
+      const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::microseconds((long long)threadIdx * phaseOffsetMicros);
+      while(std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    }
+  }
+};
 
 // Raw per-head output pointers filled by getRawNNOutputs() after a getOutput() call. All arrays
 // are host memory owned by the InputBuffers; the layout of the policy arrays depends on the
@@ -154,7 +184,10 @@ namespace NeuralNet {
     int batchSize,
     int numWarmups,
     int numIterations,
-    std::vector<double>& iterationSeconds
+    std::vector<double>& iterationSeconds,
+    BenchmarkForwardBarrier* phaseBarrier,
+    int serverThreadIdx,
+    int phaseOffsetMicros
   );
 
   // FOR TESTING -----------------------------------------------------------------------

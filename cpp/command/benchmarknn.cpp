@@ -41,6 +41,7 @@ int MainCmds::benchmarknn(const vector<string>& args) {
   int numWarmups = 10;
   int batchSizeOverride = -1;
   int boardSize = 19;
+  int phaseOffsetMicros = -1;
   bool jsonOut = false;
 
   try {
@@ -67,11 +68,17 @@ int MainCmds::benchmarknn(const vector<string>& args) {
       "","boardsize","NN board size: 9, 13, or 19 (default 19)",
       false,19,"N"
     );
+    TCLAP::ValueArg<int> phaseOffsetArg(
+      "","phase-offset-us",
+      "Diagnostic initial offset between benchmark streams in microseconds (-1 disables)",
+      false,-1,"US"
+    );
     TCLAP::SwitchArg jsonArg("","json","Print results as JSON",false);
     cmd.add(iterationsArg);
     cmd.add(warmupArg);
     cmd.add(batchSizeArg);
     cmd.add(boardSizeArg);
+    cmd.add(phaseOffsetArg);
     cmd.add(jsonArg);
     cmd.setShortUsageArgLimit();
     cmd.addOverrideConfigArg();
@@ -83,6 +90,7 @@ int MainCmds::benchmarknn(const vector<string>& args) {
     numWarmups = warmupArg.getValue();
     batchSizeOverride = batchSizeArg.getValue();
     boardSize = boardSizeArg.getValue();
+    phaseOffsetMicros = phaseOffsetArg.getValue();
     jsonOut = jsonArg.getValue();
     cmd.getConfig(cfg);
 
@@ -92,6 +100,8 @@ int MainCmds::benchmarknn(const vector<string>& args) {
       throw StringError("benchmarknn: warmup must be >= 0");
     if(boardSize != 9 && boardSize != 13 && boardSize != 19)
       throw StringError("benchmarknn: boardsize must be 9, 13, or 19");
+    if(phaseOffsetMicros < -1)
+      throw StringError("benchmarknn: phase-offset-us must be -1 or nonnegative");
   }
   catch(TCLAP::ArgException& e) {
     cerr << "Error: " << e.error() << " for argument " << e.argId() << endl;
@@ -130,7 +140,9 @@ int MainCmds::benchmarknn(const vector<string>& args) {
     // per-server compute handles and streams so the timed loop is pure forward-only.
     nnEval->killServerThreads();
 
-    NNEvalBenchmarkResult result = nnEval->benchmarkPureForward(numWarmups,numIterations);
+    NNEvalBenchmarkResult result = nnEval->benchmarkPureForward(
+      numWarmups,numIterations,phaseOffsetMicros
+    );
 
     if(jsonOut) {
       cout << "{";
@@ -140,6 +152,7 @@ int MainCmds::benchmarknn(const vector<string>& args) {
       cout << "\"batchSize\":" << result.batchSize << ",";
       cout << "\"numServerThreads\":" << result.numServerThreads << ",";
       cout << "\"numIterations\":" << result.numIterations << ",";
+      cout << "\"phaseOffsetUs\":" << result.phaseOffsetMicros << ",";
       cout << "\"gpuIdxs\":[";
       bool first = true;
       for(int g : nnEval->getGpuIdxs()) {
@@ -181,6 +194,7 @@ int MainCmds::benchmarknn(const vector<string>& args) {
         cout << " " << g;
       cout << endl;
       cout << "timed iterations per server: " << result.numIterations << endl;
+      cout << "diagnostic phase offset us: " << result.phaseOffsetMicros << endl;
       cout << "combined concurrent evaluations: " << result.numServerThreads * result.batchSize << endl;
       for(int i = 0; i < result.numServerThreads; i++) {
         cout << "server " << i << ": "
