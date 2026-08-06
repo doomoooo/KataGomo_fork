@@ -13,7 +13,8 @@ namespace Sm89Backend {
 // CUTLASS epilogue; the split test path writes plain QKV for standalone RoPE.
 class Sm89QKVRoPEGemmB13 {
  public:
-  Sm89QKVRoPEGemmB13(const half* weights, const float* freqs, bool splitRoPE);
+  Sm89QKVRoPEGemmB13(
+    const half* weights, const float* freqs, bool splitRoPE, int plainVariant);
   ~Sm89QKVRoPEGemmB13();
   Sm89QKVRoPEGemmB13(const Sm89QKVRoPEGemmB13&) = delete;
   Sm89QKVRoPEGemmB13& operator=(const Sm89QKVRoPEGemmB13&) = delete;

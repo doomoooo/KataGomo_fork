@@ -32,6 +32,8 @@ using Element = cutlass::half_t;
 using Layout = cutlass::layout::RowMajor;
 using OutputOp = cutlass::epilogue::thread::LinearCombination<
   Element, 8, Element, float, cutlass::epilogue::thread::ScaleType::Nothing>;
+using PlainOutputOp = cutlass::epilogue::thread::LinearCombination<
+  Element, 8, Element, Element, cutlass::epilogue::thread::ScaleType::Nothing>;
 using ThreadblockShape = cutlass::gemm::GemmShape<128, 128, 32>;
 using WarpShape = cutlass::gemm::GemmShape<64, 64, 32>;
 using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
@@ -53,10 +55,30 @@ using DeviceGemm = cutlass::gemm::device::GemmBatched<
   8,
   8>;
 
+using PlainDeviceGemm = cutlass::gemm::device::GemmBatched<
+  Element, Layout,
+  Element, Layout,
+  Element, Layout,
+  Element,
+  cutlass::arch::OpClassTensorOp,
+  cutlass::arch::Sm80,
+  ThreadblockShape,
+  WarpShape,
+  InstructionShape,
+  PlainOutputOp,
+  Swizzle,
+  3,
+  8,
+  8>;
+
 using DefaultKernel = typename DeviceGemm::DefaultGemmKernel;
 using Mma = typename DefaultKernel::Mma;
 using DefaultEpilogue = typename DefaultKernel::Epilogue;
 using DefaultIterator = typename DefaultEpilogue::OutputTileIterator;
+using PlainDefaultKernel = typename PlainDeviceGemm::DefaultGemmKernel;
+using PlainMma = typename PlainDefaultKernel::Mma;
+using PlainDefaultEpilogue = typename PlainDefaultKernel::Epilogue;
+using PlainDefaultIterator = typename PlainDefaultEpilogue::OutputTileIterator;
 
 template<typename BaseIterator>
 class RoPEOutputTileIterator : public BaseIterator {
@@ -172,19 +194,24 @@ using RopeEpilogue = cutlass::epilogue::threadblock::Epilogue<
   typename DefaultEpilogue::OutputOp,
   typename DefaultEpilogue::Padding,
   DefaultEpilogue::Base::kFragmentsPerIteration>;
-using PlainKernel = cutlass::gemm::kernel::GemmBatched<Mma, DefaultEpilogue, Swizzle>;
+using PlainFp32Kernel = cutlass::gemm::kernel::GemmBatched<
+  Mma, DefaultEpilogue, Swizzle>;
+using PlainHalfKernel = cutlass::gemm::kernel::GemmBatched<
+  PlainMma, PlainDefaultEpilogue, Swizzle>;
 using RopeKernel = cutlass::gemm::kernel::GemmBatched<Mma, RopeEpilogue, Swizzle>;
 
 } // namespace
 
 struct Sm89QKVRoPEGemmB13::Impl {
   typename RopeKernel::Params params;
-  typename PlainKernel::Params plainParams;
+  typename PlainFp32Kernel::Params plainFp32Params;
+  typename PlainHalfKernel::Params plainHalfParams;
   bool splitRoPE;
+  int plainVariant;
   bool initialized;
 
-  Impl(const half* weights, const float* freqs, bool splitRoPE_)
-    : splitRoPE(splitRoPE_), initialized(true) {
+  Impl(const half* weights, const float* freqs, bool splitRoPE_, int plainVariant_)
+    : splitRoPE(splitRoPE_), plainVariant(plainVariant_), initialized(true) {
     cutlass::gemm::GemmCoord problem(Tokens, Channels, Channels);
     cutlass::gemm::GemmCoord gridShape = Swizzle::get_tiled_shape(
       problem,
@@ -210,29 +237,50 @@ struct Sm89QKVRoPEGemmB13::Impl {
       GemmBatch);
     params.params_D.freqs = freqs;
 
-    typename DefaultIterator::TensorRef plainNullOutput(nullptr, matrixLayout);
-    plainParams = typename PlainKernel::Params(
+    typename DefaultIterator::TensorRef plainFp32NullOutput(nullptr, matrixLayout);
+    plainFp32Params = typename PlainFp32Kernel::Params(
       problem,
       gridShape,
       nullInput,
       0,
       weightRef,
       (int64_t)Channels * Channels,
-      plainNullOutput,
+      plainFp32NullOutput,
       (int64_t)Tokens * Channels,
-      plainNullOutput,
+      plainFp32NullOutput,
       (int64_t)Tokens * Channels,
       typename OutputOp::Params(1.0f, 0.0f),
       GemmBatch);
 
+    typename PlainDefaultIterator::TensorRef plainHalfNullOutput(nullptr, matrixLayout);
+    plainHalfParams = typename PlainHalfKernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      0,
+      weightRef,
+      (int64_t)Channels * Channels,
+      plainHalfNullOutput,
+      (int64_t)Tokens * Channels,
+      plainHalfNullOutput,
+      (int64_t)Tokens * Channels,
+      typename PlainOutputOp::Params(Element(1.0f), Element(0.0f)),
+      GemmBatch);
+
     int smemSize = splitRoPE
-      ? int(sizeof(typename PlainKernel::SharedStorage))
+      ? (plainVariant == 1
+          ? int(sizeof(typename PlainHalfKernel::SharedStorage))
+          : int(sizeof(typename PlainFp32Kernel::SharedStorage)))
       : int(sizeof(typename RopeKernel::SharedStorage));
     if(smemSize >= 48 * 1024)
-      initialized = splitRoPE
-        ? cudaFuncSetAttribute(
-            cutlass::Kernel<PlainKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-            smemSize) == cudaSuccess
+      initialized = splitRoPE ?
+        (plainVariant == 1
+          ? cudaFuncSetAttribute(
+              cutlass::Kernel<PlainHalfKernel>,
+              cudaFuncAttributeMaxDynamicSharedMemorySize, smemSize) == cudaSuccess
+          : cudaFuncSetAttribute(
+              cutlass::Kernel<PlainFp32Kernel>,
+              cudaFuncAttributeMaxDynamicSharedMemorySize, smemSize) == cudaSuccess)
         : cudaFuncSetAttribute(
             cutlass::Kernel<RopeKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize,
             smemSize) == cudaSuccess;
@@ -242,13 +290,24 @@ struct Sm89QKVRoPEGemmB13::Impl {
     if(!initialized)
       return false;
     if(splitRoPE) {
-      plainParams.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
-      plainParams.ref_C.reset(reinterpret_cast<Element*>(output));
-      plainParams.ref_D.reset(reinterpret_cast<Element*>(output));
-      dim3 grid = Swizzle::get_grid_shape(plainParams.grid_tiled_shape);
-      dim3 block(PlainKernel::kThreadCount, 1, 1);
-      int smemSize = int(sizeof(typename PlainKernel::SharedStorage));
-      cutlass::Kernel<PlainKernel><<<grid, block, smemSize, stream>>>(plainParams);
+      if(plainVariant == 1) {
+        plainHalfParams.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
+        plainHalfParams.ref_C.reset(reinterpret_cast<Element*>(output));
+        plainHalfParams.ref_D.reset(reinterpret_cast<Element*>(output));
+        dim3 grid = Swizzle::get_grid_shape(plainHalfParams.grid_tiled_shape);
+        dim3 block(PlainHalfKernel::kThreadCount, 1, 1);
+        int smemSize = int(sizeof(typename PlainHalfKernel::SharedStorage));
+        cutlass::Kernel<PlainHalfKernel><<<grid, block, smemSize, stream>>>(plainHalfParams);
+      }
+      else {
+        plainFp32Params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
+        plainFp32Params.ref_C.reset(reinterpret_cast<Element*>(output));
+        plainFp32Params.ref_D.reset(reinterpret_cast<Element*>(output));
+        dim3 grid = Swizzle::get_grid_shape(plainFp32Params.grid_tiled_shape);
+        dim3 block(PlainFp32Kernel::kThreadCount, 1, 1);
+        int smemSize = int(sizeof(typename PlainFp32Kernel::SharedStorage));
+        cutlass::Kernel<PlainFp32Kernel><<<grid, block, smemSize, stream>>>(plainFp32Params);
+      }
       return cudaPeekAtLastError() == cudaSuccess;
     }
     params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
@@ -265,8 +324,9 @@ struct Sm89QKVRoPEGemmB13::Impl {
 Sm89QKVRoPEGemmB13::Sm89QKVRoPEGemmB13(
   const half* weights,
   const float* freqs,
-  bool splitRoPE
-) : impl(std::make_unique<Impl>(weights, freqs, splitRoPE)) {}
+  bool splitRoPE,
+  int plainVariant
+) : impl(std::make_unique<Impl>(weights, freqs, splitRoPE, plainVariant)) {}
 
 Sm89QKVRoPEGemmB13::~Sm89QKVRoPEGemmB13() = default;
 

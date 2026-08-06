@@ -66,6 +66,7 @@ class Sm89Forward {
     bool usePrecomputedQKRoPE,
     bool useQKVRoPEGemm,
     bool useSplitQKVRoPEGemm,
+    int plainQKVVariant,
     int ropeBatchGroup,
     bool useFlashAttention,
     bool useFlashAttentionBoth16,
