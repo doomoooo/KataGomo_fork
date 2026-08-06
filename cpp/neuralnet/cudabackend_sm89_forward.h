@@ -35,8 +35,9 @@ struct Sm89Scratch {
   SimpleAllocator<void*> allocator;
   void* zeroBuf;
   void* oneBuf;
+  void* fullBoardMaskSumBuf;
 
-  explicit Sm89Scratch(bool useFP16);
+  Sm89Scratch(bool useFP16, bool useExactMaskElision, int maxBatchSize, int xySize);
   ~Sm89Scratch();
   Sm89Scratch(const Sm89Scratch&) = delete;
   Sm89Scratch& operator=(const Sm89Scratch&) = delete;
@@ -61,7 +62,31 @@ class Sm89Forward {
     bool useWideFFN,
     bool useFusedResidual,
     bool useRMSNormOpt,
-    bool useFusedQKRoPE
+    bool useFusedQKRoPE,
+    bool usePrecomputedQKRoPE,
+    bool useQKVRoPEGemm,
+    int ropeBatchGroup,
+    bool useFlashAttention,
+    bool useDualGemmSwiGLU,
+    bool useLinear2Gemm,
+    bool useOutProjGemm,
+    bool usePreConvGemm,
+    bool usePostConvGemm,
+    bool usePostConvBNSilu,
+    bool usePersistingL2Trunk,
+    float persistingL2TrunkHitRatio,
+    bool usePersistingL2Inner,
+    float persistingL2InnerHitRatio,
+    bool useScaleBiasSiluVec8,
+    bool useScaleBiasSiluVec4C384,
+    bool useInitialConvFrontend,
+    bool useInitialGlobalMatMulAdd,
+    bool useFusedPolicyP1,
+    bool useHeadBNHalfToFloat,
+    bool useWideHeadProjection,
+    bool useExactMaskElision,
+    bool useFusedValueTerminal,
+    bool shareModelWeights
   );
   ~Sm89Forward();
   Sm89Forward(const Sm89Forward&) = delete;

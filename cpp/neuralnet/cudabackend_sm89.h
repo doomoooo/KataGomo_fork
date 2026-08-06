@@ -62,6 +62,16 @@ struct Options {
   bool useRMSNormOpt = true;
   bool useMatmulLt = false;
   bool useFusedQKRoPE = false;
+  bool usePrecomputedQKRoPE = false;
+  bool useQKVRoPEGemm = false;
+  int ropeBatchGroup = 1;
+  bool useFlashAttention = false;
+  bool useDualGemmSwiGLU = false;
+  bool useLinear2Gemm = false;
+  bool useOutProjGemm = false;
+  bool usePreConvGemm = false;
+  bool usePostConvGemm = false;
+  bool usePostConvBNSilu = false;
   bool useBatchSharedRoPE = false;
   bool useFusedFFN = false;
   bool useInitialConvFrontend = false;
@@ -69,8 +79,12 @@ struct Options {
   bool useFusedPolicyP1 = false;
   bool useHeadBNHalfToFloat = false;
   bool useWideHeadProjection = false;
+  bool useExactMaskElision = false;
+  bool useFusedValueTerminal = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
+  bool useScaleBiasSiluVec8 = false;
+  bool useScaleBiasSiluVec4C384 = false;
   bool shareModelWeights = false;
 };
 

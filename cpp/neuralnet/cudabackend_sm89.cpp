@@ -7,6 +7,8 @@
 #include "../core/global.h"
 #include "../core/logger.h"
 
+#include <algorithm>
+
 using namespace std;
 
 namespace Sm89Backend {
@@ -19,6 +21,50 @@ static bool getBoolOpt(ConfigParser& cfg, const string& key, bool defaultValue) 
   return cfg.contains(key) ? cfg.getBool(key) : defaultValue;
 }
 
+struct PersistingL2Plan {
+  float trunkHitRatio;
+  float innerHitRatio;
+};
+
+static PersistingL2Plan reservePersistingL2(
+  const ModelDesc& desc,
+  int maxBatchSize,
+  int nnXLen,
+  int nnYLen,
+  bool useTrunk,
+  bool useInner
+) {
+  int device = 0;
+  int maxPersistingBytes = 0;
+  CUDA_ERR("Sm89Model",cudaGetDevice(&device));
+  CUDA_ERR("Sm89Model",cudaDeviceGetAttribute(
+    &maxPersistingBytes, cudaDevAttrMaxPersistingL2CacheSize, device
+  ));
+
+  const size_t spatialRows = (size_t)maxBatchSize * nnXLen * nnYLen;
+  const size_t trunkWindowBytes = useTrunk
+    ? spatialRows * desc.trunk.trunkNumChannels * sizeof(half)
+    : 0;
+  const size_t innerWindowBytes = useInner
+    ? spatialRows * desc.trunk.midNumChannels * sizeof(half)
+    : 0;
+  const size_t windowsPerStream = trunkWindowBytes + innerWindowBytes;
+  const size_t requestedBytes = std::min(
+    (size_t)maxPersistingBytes, 2 * windowsPerStream
+  );
+  CUDA_ERR("Sm89Model",cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, requestedBytes));
+
+  size_t actualBytes = 0;
+  CUDA_ERR("Sm89Model",cudaDeviceGetLimit(&actualBytes, cudaLimitPersistingL2CacheSize));
+  const float hitRatio = std::min(
+    1.0f, (float)((double)actualBytes / (double)(2 * windowsPerStream))
+  );
+  return PersistingL2Plan{
+    useTrunk ? hitRatio : 0.0f,
+    useInner ? hitRatio : 0.0f,
+  };
+}
+
 Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm89Backend", true);
@@ -29,6 +75,16 @@ Options parseOptions(ConfigParser& cfg) {
   o.useRMSNormOpt = getBoolOpt(cfg, "cudaUseRMSNormOpt", true);
   o.useMatmulLt = getBoolOpt(cfg, "cudaUseMatmulLt", false);
   o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
+  o.usePrecomputedQKRoPE = getBoolOpt(cfg, "cudaUsePrecomputedQKRoPESm89", false);
+  o.useQKVRoPEGemm = getBoolOpt(cfg, "cudaUseQKVRoPEGemmSm89", false);
+  o.ropeBatchGroup = cfg.contains("cudaRoPEBatchGroupSm89") ? cfg.getInt("cudaRoPEBatchGroupSm89",1,13) : 1;
+  o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm89", false);
+  o.useDualGemmSwiGLU = getBoolOpt(cfg, "cudaUseDualGemmSwiGLUSm89", false);
+  o.useLinear2Gemm = getBoolOpt(cfg, "cudaUseLinear2GemmSm89", false);
+  o.useOutProjGemm = getBoolOpt(cfg, "cudaUseOutProjGemmSm89", false);
+  o.usePreConvGemm = getBoolOpt(cfg, "cudaUsePreConvGemmSm89", false);
+  o.usePostConvGemm = getBoolOpt(cfg, "cudaUsePostConvGemmSm89", false);
+  o.usePostConvBNSilu = getBoolOpt(cfg, "cudaUsePostConvBNSiluSm89", false);
   o.useBatchSharedRoPE = getBoolOpt(cfg, "cudaUseBatchSharedRoPE", false);
   o.useFusedFFN = getBoolOpt(cfg, "cudaUseFusedFFN", false);
   o.useInitialConvFrontend = getBoolOpt(cfg, "cudaUseInitialConvFrontend", false);
@@ -36,8 +92,12 @@ Options parseOptions(ConfigParser& cfg) {
   o.useFusedPolicyP1 = getBoolOpt(cfg, "cudaUseFusedPolicyP1", false);
   o.useHeadBNHalfToFloat = getBoolOpt(cfg, "cudaUseHeadBNHalfToFloat", false);
   o.useWideHeadProjection = getBoolOpt(cfg, "cudaUseWideHeadProjection", false);
+  o.useExactMaskElision = getBoolOpt(cfg, "cudaUseExactMaskElisionSm89", false);
+  o.useFusedValueTerminal = getBoolOpt(cfg, "cudaUseFusedValueTerminalSm89", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
+  o.useScaleBiasSiluVec8 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec8Sm89", false);
+  o.useScaleBiasSiluVec4C384 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec4C384Sm89", false);
   o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", false);
   return o;
 }
@@ -74,9 +134,33 @@ Sm89Model::Sm89Model(
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm89Model: null construction argument");
   if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
+    const PersistingL2Plan persistingL2 =
+      (options.usePersistingL2Trunk || options.usePersistingL2Inner)
+      ? reservePersistingL2(
+          *desc, maxBatchSize, nnXLen, nnYLen,
+          options.usePersistingL2Trunk, options.usePersistingL2Inner
+        )
+      : PersistingL2Plan{0.0f, 0.0f};
     forward = std::make_unique<Sm89Forward>(
       desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
-      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt, options.useFusedQKRoPE
+      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt,
+      options.useFusedQKRoPE, options.usePrecomputedQKRoPE, options.useQKVRoPEGemm,
+      options.ropeBatchGroup, options.useFlashAttention,
+      options.useDualGemmSwiGLU,
+      options.useLinear2Gemm, options.useOutProjGemm, options.usePreConvGemm,
+      options.usePostConvGemm, options.usePostConvBNSilu,
+      options.usePersistingL2Trunk,
+      persistingL2.trunkHitRatio, options.usePersistingL2Inner,
+      persistingL2.innerHitRatio, options.useScaleBiasSiluVec8,
+      options.useScaleBiasSiluVec4C384,
+      options.useInitialConvFrontend,
+      options.useInitialGlobalMatMulAdd,
+      options.useFusedPolicyP1,
+      options.useHeadBNHalfToFloat,
+      options.useWideHeadProjection,
+      options.useExactMaskElision,
+      options.useFusedValueTerminal,
+      options.shareModelWeights
     );
     forwardActive = true;
   }
