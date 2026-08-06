@@ -11,6 +11,24 @@
 
 using namespace std;
 
+namespace {
+class ScopedComputeStream {
+ public:
+  explicit ScopedComputeStream(int gpuIdx)
+    : stream(NeuralNet::createComputeStream(gpuIdx))
+  {}
+  ~ScopedComputeStream() {
+    if(stream != NULL)
+      NeuralNet::freeComputeStream(stream);
+  }
+  void* get() const { return stream; }
+  ScopedComputeStream(const ScopedComputeStream&) = delete;
+  ScopedComputeStream& operator=(const ScopedComputeStream&) = delete;
+ private:
+  void* stream;
+};
+}
+
 //-------------------------------------------------------------------------------------
 
 NNResultBuf::NNResultBuf()
@@ -483,9 +501,10 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
   for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
     threads.emplace_back([&, threadIdx]() {
       try {
-        // Mirror NNEvaluator::serve: one compute handle + input buffers per configured NN server
-        // thread, each with its own per-thread default CUDA stream.
+        // Mirror NNEvaluator::serve: one externally owned compute stream and one compute handle per
+        // configured NN server thread.
         NNServerBuf serverBuf(*this, loadedModel);
+        ScopedComputeStream computeStream(gpuIdxByServerThread[threadIdx]);
         ComputeHandle* handle = NULL;
         try {
           handle = NeuralNet::createComputeHandle(
@@ -496,7 +515,8 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(int numWarmups, int numI
             requireExactNNLen,
             inputsUseNHWC,
             gpuIdxByServerThread[threadIdx],
-            threadIdx
+            threadIdx,
+            computeStream.get()
           );
           maybeWarmupComputeHandle(handle, threadIdx);
 
@@ -755,6 +775,7 @@ void NNEvaluator::serve(
   int64_t numRowsHandledThisThread = 0;
 
   ComputeHandle* gpuHandle = NULL;
+  ScopedComputeStream computeStream(gpuIdxForThisThread);
   if(loadedModel != NULL) {
     gpuHandle = NeuralNet::createComputeHandle(
       computeContext,
@@ -764,7 +785,8 @@ void NNEvaluator::serve(
       requireExactNNLen,
       inputsUseNHWC,
       gpuIdxForThisThread,
-      serverThreadIdx
+      serverThreadIdx,
+      computeStream.get()
     );
 
     // Warm up lazily-compiled backend graphs before reporting this thread as started.

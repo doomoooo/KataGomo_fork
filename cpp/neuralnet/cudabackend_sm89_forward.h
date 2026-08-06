@@ -14,7 +14,8 @@
 // SM89-specific forward implementation.
 //
 // This is a self-contained Ada-Lovelace forward path: it owns its own cuBLAS/cuDNN handles,
-// device weight buffers and scratch allocator, and implements the forward using ModelDesc.
+// device weight buffers and scratch allocator, borrows the caller's CUDA stream, and implements
+// the forward using ModelDesc.
 // cudabackend.cpp / cudahelpers.cu remain untouched and are used only as the official fallback
 // when this forward does not support a model/shape.
 
@@ -25,7 +26,7 @@ struct Sm89Ctx {
   cudnnHandle_t cudnn;
   cudaStream_t stream;
 
-  Sm89Ctx();
+  explicit Sm89Ctx(cudaStream_t stream);
   ~Sm89Ctx();
   Sm89Ctx(const Sm89Ctx&) = delete;
   Sm89Ctx& operator=(const Sm89Ctx&) = delete;
@@ -58,6 +59,7 @@ class Sm89Forward {
     bool inputsUseNHWC,
     bool useFP16,
     bool useNHWC,
+    cudaStream_t stream,
     bool useWideQKV,
     bool useWideFFN,
     bool useFusedResidual,

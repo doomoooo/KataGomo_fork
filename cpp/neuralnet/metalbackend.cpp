@@ -703,6 +703,15 @@ coremlOnlyHandle(createCoreMLOnlyHandleIfNeeded(context, loadedModel, requireExa
 ComputeHandle::~ComputeHandle() {
 }
 
+void* NeuralNet::createComputeStream(int gpuIdxForThisThread) {
+  (void)gpuIdxForThisThread;
+  return NULL;
+}
+
+void NeuralNet::freeComputeStream(void* computeStream) {
+  (void)computeStream;
+}
+
 ComputeHandle* NeuralNet::createComputeHandle(
   ComputeContext* context,
   const LoadedModel* loadedModel,
@@ -711,9 +720,11 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx) {
+  int serverThreadIdx,
+  void* computeStream) {
 
   (void)logger;
+  (void)computeStream;
 
   int gpuIdx = (gpuIdxForThisThread == -1) ? 0 : gpuIdxForThisThread;
   if(gpuIdx != METAL_MUX_GPU && gpuIdx != METAL_MUX_ANE) {

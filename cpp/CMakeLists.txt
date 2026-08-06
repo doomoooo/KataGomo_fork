@@ -63,11 +63,6 @@ if(USE_BACKEND STREQUAL "CUDA")
   message(STATUS "-DUSE_BACKEND=CUDA, using CUDA backend.")
 
   enable_language(CUDA)
-  # nvcc implicitly includes cuda_runtime.h before any user header, so defining this
-  # macro inside cudaincludes.h is too late for .cu files. It must be a command-line
-  # definition to make <<<>>> launches use each thread's per-thread default stream.
-  add_compile_definitions(CUDA_API_PER_THREAD_DEFAULT_STREAM)
-
   set(CUDA_STANDARD 11)
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp

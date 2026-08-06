@@ -2,6 +2,7 @@
 #define KATAGO_CUDA_BACKEND_SM89_H
 
 #include "../core/config_parser.h"
+#include "../neuralnet/cudaincludes.h"
 #include "../neuralnet/desc.h"
 
 #include <memory>
@@ -115,6 +116,7 @@ class Sm89Model {
     bool inputsUseNHWC,
     bool useFP16,
     bool useNHWC,
+    cudaStream_t stream,
     const Options& options
   );
   ~Sm89Model();

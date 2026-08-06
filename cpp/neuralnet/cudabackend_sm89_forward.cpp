@@ -59,9 +59,11 @@ static void clearPersistingL2Window(cudaStream_t stream) {
   ));
 }
 
-Sm89Ctx::Sm89Ctx()
-  : cublas(NULL), cudnn(NULL), stream(cudaStreamPerThread)
+Sm89Ctx::Sm89Ctx(cudaStream_t stream_)
+  : cublas(NULL), cudnn(NULL), stream(stream_)
 {
+  if(stream == NULL)
+    throw StringError("Sm89Ctx: external CUDA stream must not be null");
   CUBLAS_ERR("Sm89Ctx",cublasCreate(&cublas));
   CUDNN_ERR("Sm89Ctx",cudnnCreate(&cudnn));
   CUBLAS_ERR("Sm89Ctx",cublasSetStream(cublas, stream));
@@ -494,17 +496,19 @@ struct Sm89MatBias {
   const int numChannels;
   const bool usingFP16;
   const int activation;
+  const cudaStream_t stream;
   void* biasBuf;
 
   Sm89MatBias() = delete;
   Sm89MatBias(const Sm89MatBias&) = delete;
   Sm89MatBias& operator=(const Sm89MatBias&) = delete;
 
-  Sm89MatBias(const MatBiasLayerDesc* desc, bool useFP16, int activation_)
+  Sm89MatBias(const MatBiasLayerDesc* desc, bool useFP16, int activation_, cudaStream_t stream_)
     : name(desc->name),
       numChannels(desc->numChannels),
       usingFP16(useFP16),
       activation(activation_),
+      stream(stream_),
       biasBuf(NULL)
   {
     if(numChannels > 0) {
@@ -519,9 +523,9 @@ struct Sm89MatBias {
   void apply(int batchSize, void* matBuf) const {
     assert(numChannels > 0);
     if(!usingFP16)
-      customCudaAddCBiasInplaceNC((float*)matBuf, (const float*)biasBuf, batchSize, numChannels, activation);
+      customCudaAddCBiasInplaceNC((float*)matBuf, (const float*)biasBuf, batchSize, numChannels, activation,stream);
     else
-      customCudaAddCBiasInplaceNC((half*)matBuf, (const half*)biasBuf, batchSize, numChannels, activation);
+      customCudaAddCBiasInplaceNC((half*)matBuf, (const half*)biasBuf, batchSize, numChannels, activation,stream);
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
   }
 };
@@ -539,6 +543,7 @@ struct Sm89BatchNorm {
   const bool usingNHWC;
   const bool useScaleBiasSiluVec8;
   const bool useScaleBiasSiluVec4C384;
+  const cudaStream_t stream;
   void* mergedScaleBuf;
   void* mergedBiasBuf;
 
@@ -548,7 +553,7 @@ struct Sm89BatchNorm {
 
   Sm89BatchNorm(
     const BatchNormLayerDesc* desc, const ActivationLayerDesc* actDesc,
-    int nnX, int nnY, bool useFP16, bool useNHWC,
+    int nnX, int nnY, bool useFP16, bool useNHWC, cudaStream_t stream_,
     bool useScaleBiasSiluVec8_ = false,
     bool useScaleBiasSiluVec4C384_ = false
   )
@@ -561,6 +566,7 @@ struct Sm89BatchNorm {
       usingNHWC(useNHWC),
       useScaleBiasSiluVec8(useScaleBiasSiluVec8_),
       useScaleBiasSiluVec4C384(useScaleBiasSiluVec4C384_),
+      stream(stream_),
       mergedScaleBuf(NULL),
       mergedBiasBuf(NULL)
   {
@@ -576,31 +582,31 @@ struct Sm89BatchNorm {
   void apply(int batchSize, void* inputBuf, const void* maskBuf, void* outputBuf) const {
     if(!usingFP16) {
       if(!usingNHWC)
-        customCudaApplyCScaleBiasNCHW((const float*)inputBuf, (float*)outputBuf, (const float*)mergedScaleBuf, (const float*)mergedBiasBuf, (const float*)maskBuf, batchSize, numChannels, nnXLen * nnYLen, activation);
+        customCudaApplyCScaleBiasNCHW((const float*)inputBuf, (float*)outputBuf, (const float*)mergedScaleBuf, (const float*)mergedBiasBuf, (const float*)maskBuf, batchSize, numChannels, nnXLen * nnYLen, activation,stream);
       else
-        customCudaApplyCScaleBiasNHWC((const float*)inputBuf, (float*)outputBuf, (const float*)mergedScaleBuf, (const float*)mergedBiasBuf, (const float*)maskBuf, batchSize, nnXLen * nnYLen, numChannels, activation);
+        customCudaApplyCScaleBiasNHWC((const float*)inputBuf, (float*)outputBuf, (const float*)mergedScaleBuf, (const float*)mergedBiasBuf, (const float*)maskBuf, batchSize, nnXLen * nnYLen, numChannels, activation,stream);
     }
     else {
       if(!usingNHWC)
-        customCudaApplyCScaleBiasNCHW((const half*)inputBuf, (half*)outputBuf, (const half*)mergedScaleBuf, (const half*)mergedBiasBuf, (const half*)maskBuf, batchSize, numChannels, nnXLen * nnYLen, activation);
+        customCudaApplyCScaleBiasNCHW((const half*)inputBuf, (half*)outputBuf, (const half*)mergedScaleBuf, (const half*)mergedBiasBuf, (const half*)maskBuf, batchSize, numChannels, nnXLen * nnYLen, activation,stream);
       else {
         bool handled = false;
         if(useScaleBiasSiluVec8 && maskBuf == NULL && activation == ACTIVATION_SILU) {
           handled = sm89ScaleBiasSiluNHWCHalfVec8B13(
             (const half*)inputBuf, (half*)outputBuf,
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
-            batchSize, nnXLen * nnYLen, numChannels, cudaStreamPerThread
+            batchSize, nnXLen * nnYLen, numChannels, stream
           );
         }
         if(!handled && useScaleBiasSiluVec4C384 && maskBuf == NULL && activation == ACTIVATION_SILU) {
           handled = sm89ScaleBiasSiluNHWCHalfVec4C384B13(
             (const half*)inputBuf, (half*)outputBuf,
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
-            batchSize, nnXLen * nnYLen, numChannels, cudaStreamPerThread
+            batchSize, nnXLen * nnYLen, numChannels, stream
           );
         }
         if(!handled)
-          customCudaApplyCScaleBiasNHWC((const half*)inputBuf, (half*)outputBuf, (const half*)mergedScaleBuf, (const half*)mergedBiasBuf, (const half*)maskBuf, batchSize, nnXLen * nnYLen, numChannels, activation);
+          customCudaApplyCScaleBiasNHWC((const half*)inputBuf, (half*)outputBuf, (const half*)mergedScaleBuf, (const half*)mergedBiasBuf, (const half*)maskBuf, batchSize, nnXLen * nnYLen, numChannels, activation,stream);
       }
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
@@ -613,6 +619,7 @@ struct Sm89TransformerRMSNorm {
   const float epsilon;
   const bool usingFP16;
   const bool useOptimized;
+  const cudaStream_t stream;
   void* weightBuf;
   void* zeroBetaBuf;
 
@@ -620,12 +627,13 @@ struct Sm89TransformerRMSNorm {
   Sm89TransformerRMSNorm(const Sm89TransformerRMSNorm&) = delete;
   Sm89TransformerRMSNorm& operator=(const Sm89TransformerRMSNorm&) = delete;
 
-  Sm89TransformerRMSNorm(const TransformerRMSNormDesc* desc, bool useFP16, bool useOptimized_)
+  Sm89TransformerRMSNorm(const TransformerRMSNormDesc* desc, bool useFP16, bool useOptimized_, cudaStream_t stream_)
     : name(desc->name),
       numChannels(desc->numChannels),
       epsilon(desc->epsilon),
       usingFP16(useFP16),
       useOptimized(useOptimized_),
+      stream(stream_),
       weightBuf(NULL),
       zeroBetaBuf(NULL)
   {
@@ -641,13 +649,13 @@ struct Sm89TransformerRMSNorm {
   void apply(int batchSize, int xySize, void* inputBuf, void* outputBuf, const void* maskBuf) const {
     if(useOptimized && usingFP16 && sm89RMSNormNHWCHalf(
       (const half*)inputBuf, (half*)outputBuf, (const half*)weightBuf, (const half*)zeroBetaBuf,
-      (const half*)maskBuf, batchSize, xySize, numChannels, epsilon, cudaStreamPerThread
+      (const half*)maskBuf, batchSize, xySize, numChannels, epsilon, stream
     ))
       return;
     if(!usingFP16)
-      customCudaRMSNormGammaBetaNHWC((const float*)inputBuf, (float*)outputBuf, (const float*)weightBuf, (const float*)zeroBetaBuf, (const float*)maskBuf, batchSize, xySize, numChannels, epsilon, ACTIVATION_IDENTITY);
+      customCudaRMSNormGammaBetaNHWC((const float*)inputBuf, (float*)outputBuf, (const float*)weightBuf, (const float*)zeroBetaBuf, (const float*)maskBuf, batchSize, xySize, numChannels, epsilon, ACTIVATION_IDENTITY,stream);
     else
-      customCudaRMSNormGammaBetaNHWC((const half*)inputBuf, (half*)outputBuf, (const half*)weightBuf, (const half*)zeroBetaBuf, (const half*)maskBuf, batchSize, xySize, numChannels, epsilon, ACTIVATION_IDENTITY);
+      customCudaRMSNormGammaBetaNHWC((const half*)inputBuf, (half*)outputBuf, (const half*)weightBuf, (const half*)zeroBetaBuf, (const half*)maskBuf, batchSize, xySize, numChannels, epsilon, ACTIVATION_IDENTITY,stream);
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
   }
 };
@@ -1042,7 +1050,7 @@ struct Sm89AttentionBlock {
       useFlashAttention(useFlashAttention_),
       useFlashAttentionBoth16(useFlashAttentionBoth16_),
       useOutProjGemm(useOutProjGemm_),
-      preLN(&desc->preLN, useFP16, useRMSNormOpt_),
+      preLN(&desc->preLN, useFP16, useRMSNormOpt_, ctx->stream),
       qProj(&desc->qProj, useFP16, shareModelWeights_),
       kProj(&desc->kProj, useFP16, shareModelWeights_),
       vProj(&desc->vProj, useFP16, shareModelWeights_),
@@ -1216,22 +1224,22 @@ struct Sm89AttentionBlock {
         // handled
       }
       else if(!usingFP16) {
-        customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-        customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
+        customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
       }
       else {
-        customCudaApplyRoPELearnableRecompute((half*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-        customCudaApplyRoPELearnableRecompute((half*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
+        customCudaApplyRoPELearnableRecompute((half*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
+        customCudaApplyRoPELearnableRecompute((half*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
       }
     }
     else if(ropeCosTable != NULL) {
       if(!usingFP16) {
-        customCudaApplyRoPE((float*)qBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
-        customCudaApplyRoPE((float*)kBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((float*)qBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false, ctx->stream);
+        customCudaApplyRoPE((float*)kBuf, (const float*)ropeCosTable, (const float*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false, ctx->stream);
       }
       else {
-        customCudaApplyRoPE((half*)qBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
-        customCudaApplyRoPE((half*)kBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false);
+        customCudaApplyRoPE((half*)qBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, false, ctx->stream);
+        customCudaApplyRoPE((half*)kBuf, (const half*)ropeCosTable, (const half*)ropeSinTable, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, false, ctx->stream);
       }
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
@@ -1261,7 +1269,7 @@ struct Sm89AttentionBlock {
         };
         SizedBuf<void*> biasBuf(&scratch->allocator, maskBuf != NULL ? (size_t)batchSize * seqLen * seqLen * sizeof(half) : 1);
         if(maskBuf != NULL) {
-          customCudaMaskToAttnBiasFull((const half*)maskBuf, (half*)biasBuf.buf, batchSize, seqLen);
+          customCudaMaskToAttnBiasFull((const half*)maskBuf, (half*)biasBuf.buf, batchSize, seqLen, ctx->stream);
           variant_pack[5] = biasBuf.buf;
         }
         SizedBuf<void*> sdpaWs(&scratch->allocator, (size_t)plan->workspaceBytes);
@@ -1273,9 +1281,9 @@ struct Sm89AttentionBlock {
 #endif
     if(!usedSDPA) {
       if(!usingFP16)
-        customCudaFlashAttention((const float*)qBuf, (const float*)kBuf, (const float*)vBuf, (const float*)maskBuf, (float*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
+        customCudaFlashAttention((const float*)qBuf, (const float*)kBuf, (const float*)vBuf, (const float*)maskBuf, (float*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim, ctx->stream);
       else
-        customCudaFlashAttention((const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (const half*)maskBuf, (half*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
+        customCudaFlashAttention((const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (const half*)maskBuf, (half*)attnOutBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim, ctx->stream);
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
 
@@ -1297,9 +1305,9 @@ struct Sm89AttentionBlock {
     else {
       outProj.apply(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf);
       if(!usingFP16)
-        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels);
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels, ctx->stream);
       else
-        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels);
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels, ctx->stream);
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
   }
@@ -1336,6 +1344,7 @@ struct Sm89FFNBlock {
   Sm89FFNBlock& operator=(const Sm89FFNBlock&) = delete;
 
   Sm89FFNBlock(
+    Sm89Ctx* ctx,
     const TransformerFFNDesc* desc,
     int nnX,
     int nnY,
@@ -1362,7 +1371,7 @@ struct Sm89FFNBlock {
       useRMSNormOpt(useRMSNormOpt_),
       useDualGemmSwiGLU(useDualGemmSwiGLU_),
       useLinear2Gemm(useLinear2Gemm_),
-      preLN(&desc->preLN, useFP16, useRMSNormOpt_),
+      preLN(&desc->preLN, useFP16, useRMSNormOpt_, ctx->stream),
       linear1(&desc->linear1, useFP16, shareModelWeights_),
       linearGate(&desc->linearGate, useFP16, shareModelWeights_),
       linear2(&desc->linear2, useFP16, shareModelWeights_),
@@ -1472,9 +1481,9 @@ struct Sm89FFNBlock {
     int totalSize = (int)((size_t)ffnChannels * matBatchSize);
     if(!usedDualGemmSwiGLU) {
       if(!usingFP16)
-        customCudaSwiGLU((const float*)ffnBuf, (const float*)gateBuf, (float*)ffnBuf, totalSize);
+        customCudaSwiGLU((const float*)ffnBuf, (const float*)gateBuf, (float*)ffnBuf, totalSize, ctx->stream);
       else
-        customCudaSwiGLU((const half*)ffnBuf, (const half*)gateBuf, (half*)ffnBuf, totalSize);
+        customCudaSwiGLU((const half*)ffnBuf, (const half*)gateBuf, (half*)ffnBuf, totalSize, ctx->stream);
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
 
@@ -1505,9 +1514,9 @@ struct Sm89FFNBlock {
     else {
       linear2.apply(ctx, scratch, matBatchSize, ffnBuf, trunkScratchBuf);
       if(!usingFP16)
-        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels, ctx->stream);
       else
-        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels, ctx->stream);
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     return usedLinear2PostBN;
@@ -1594,9 +1603,9 @@ struct Sm89NestedBlock {
       persistingL2TrunkHitRatio(persistingL2TrunkHitRatio_),
       usePersistingL2Inner(usePersistingL2Inner_),
       persistingL2InnerHitRatio(persistingL2InnerHitRatio_),
-      preBN(&desc->preBN, &desc->preActivation, nnX, nnY, useFP16, useNHWC, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
+      preBN(&desc->preBN, &desc->preActivation, nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
       preConv(ctx, &desc->preConv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
-      postBN(&desc->postBN, &desc->postActivation, nnX, nnY, useFP16, useNHWC, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
+      postBN(&desc->postBN, &desc->postActivation, nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
       postConv(ctx, &desc->postConv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC)
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
       , preConvGemm(nullptr)
@@ -1633,7 +1642,7 @@ struct Sm89NestedBlock {
       }
       else if(kind == TRANSFORMER_FFN_BLOCK_KIND) {
         auto block = std::make_shared<Sm89FFNBlock>(
-          (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16,
+          ctx, (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16,
           useNHWC, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useDualGemmSwiGLU_,
           useDualGemmSwiGLUHalf2Tanh_,
           useLinear2Gemm_, useLinear2PostBNSilu_ && i + 1 == desc->blocks.size(),
@@ -1853,7 +1862,7 @@ struct Sm89Trunk {
       throw StringError("Sm89Trunk: only standard trunk BN is supported");
     trunkTipBN = std::make_unique<Sm89BatchNorm>(
       &desc->trunkTipBN, &desc->trunkTipActivation,
-      nnX, nnY, useFP16, useNHWC, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_
+      nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_
     );
     if(usePostConvBNSilu_) {
       for(size_t i = 0; i < blocks.size(); i++) {
@@ -1896,9 +1905,9 @@ struct Sm89Trunk {
     if(!fusedInitialGlobal) {
       initialMatMul.apply(ctx, scratch, batchSize, inputGlobalBuf, trunkBuf);
       if(!usingFP16)
-        customCudaAddNCBiasInplaceNHWC((float*)trunkScratch.buf, (const float*)trunkBuf, batchSize, xySize, trunkNumChannels);
+        customCudaAddNCBiasInplaceNHWC((float*)trunkScratch.buf, (const float*)trunkBuf, batchSize, xySize, trunkNumChannels, ctx->stream);
       else
-        customCudaAddNCBiasInplaceNHWC((half*)trunkScratch.buf, (const half*)trunkBuf, batchSize, xySize, trunkNumChannels);
+        customCudaAddNCBiasInplaceNHWC((half*)trunkScratch.buf, (const half*)trunkBuf, batchSize, xySize, trunkNumChannels, ctx->stream);
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
 
@@ -2037,12 +2046,12 @@ struct Sm89PolicyHead {
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       p1Conv(ctx, &desc->p1Conv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
       g1Conv(ctx, &desc->g1Conv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
-      g1BN(&desc->g1BN, &desc->g1Activation, nnX, nnY, useFP16, useNHWC),
+      g1BN(&desc->g1BN, &desc->g1Activation, nnX, nnY, useFP16, useNHWC, ctx->stream),
       gpoolToBiasMul(&desc->gpoolToBiasMul, false, shareModelWeights),
-      p1BN(&desc->p1BN, &desc->p1Activation, nnX, nnY, false, useNHWC),
+      p1BN(&desc->p1BN, &desc->p1Activation, nnX, nnY, false, useNHWC, ctx->stream),
       p2Conv(ctx, &desc->p2Conv, maxBatchSize, nnX, nnY, false, useNHWC, useNHWC),
       gpoolToPassMul(&desc->gpoolToPassMul, false, shareModelWeights),
-      gpoolToPassBias(&desc->gpoolToPassBias, false, desc->passActivation.activation),
+      gpoolToPassBias(&desc->gpoolToPassBias, false, desc->passActivation.activation, ctx->stream),
       gpoolToPassMul2(&desc->gpoolToPassMul2, false, shareModelWeights)
   {}
 
@@ -2077,7 +2086,7 @@ struct Sm89PolicyHead {
 
     if(!usingFP16) {
       g1BN.apply(batchSize, g1Out.buf, maskBuf, g1Out2.buf);
-      customCudaPoolRowsGPoolNHWC((const float*)g1Out2.buf, (float*)g1Concat.buf, batchSize, xySize, g1Channels, maskFloatBuf, maskSumBuf);
+      customCudaPoolRowsGPoolNHWC((const float*)g1Out2.buf, (float*)g1Concat.buf, batchSize, xySize, g1Channels, maskFloatBuf, maskSumBuf, ctx->stream);
     }
     else {
       SizedBuf<void*> g1Float(&scratch->allocator, scratch->getBufSizeXYFloat(g1Channels, maxBatchSize, xySize));
@@ -2098,7 +2107,7 @@ struct Sm89PolicyHead {
           if(fusedHeadBN)
             customCudaCopyFromHalf(
               (const half*)g1Out2.buf, (float*)g1Float.buf,
-              batchSize * g1Channels * xySize
+              batchSize * g1Channels * xySize, ctx->stream
             );
         }
         testAssert(fusedHeadBN);
@@ -2112,9 +2121,9 @@ struct Sm89PolicyHead {
       }
       if(!fusedHeadBN) {
         g1BN.apply(batchSize, g1Out.buf, maskBuf, g1Out2.buf);
-        customCudaCopyFromHalf((const half*)g1Out2.buf, (float*)g1Float.buf, batchSize * g1Channels * xySize);
+        customCudaCopyFromHalf((const half*)g1Out2.buf, (float*)g1Float.buf, batchSize * g1Channels * xySize, ctx->stream);
       }
-      customCudaPoolRowsGPoolNHWC((const float*)g1Float.buf, (float*)g1Concat.buf, batchSize, xySize, g1Channels, maskFloatBuf, maskSumBuf);
+      customCudaPoolRowsGPoolNHWC((const float*)g1Float.buf, (float*)g1Concat.buf, batchSize, xySize, g1Channels, maskFloatBuf, maskSumBuf, ctx->stream);
     }
     CUDA_ERR("Sm89PolicyHead",cudaPeekAtLastError());
 
@@ -2142,11 +2151,11 @@ struct Sm89PolicyHead {
         p1OutBufB = (float*)p1Out2.buf;
       }
       else {
-        customCudaCopyFromHalf((const half*)p1Out.buf, (float*)p1Out2.buf, batchSize * p1Channels * xySize);
+        customCudaCopyFromHalf((const half*)p1Out.buf, (float*)p1Out2.buf, batchSize * p1Channels * xySize, ctx->stream);
         p1OutBufA = (float*)p1Out2.buf;
         p1OutBufB = (float*)p1Out.buf;
       }
-      customCudaAddNCBiasInplaceNHWC(p1OutBufA, (float*)g1Bias.buf, batchSize, xySize, p1Channels);
+      customCudaAddNCBiasInplaceNHWC(p1OutBufA, (float*)g1Bias.buf, batchSize, xySize, p1Channels, ctx->stream);
       CUDA_ERR("Sm89PolicyHead",cudaPeekAtLastError());
       p1BN.apply(batchSize, p1OutBufA, maskFloatBuf, p1OutBufB);
       p2Conv.apply(ctx, batchSize, false, p1OutBufB, policyBuf, workspaceBuf, workspaceBytes);
@@ -2296,13 +2305,13 @@ struct Sm89ValueHead {
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       useFusedValueTerminal(useFusedValueTerminal_),
       v1Conv(ctx, &desc->v1Conv, maxBatchSize_, nnX, nnY, useFP16, useNHWC, useNHWC),
-      v1BN(&desc->v1BN, &desc->v1Activation, nnX, nnY, useFP16, useNHWC),
+      v1BN(&desc->v1BN, &desc->v1Activation, nnX, nnY, useFP16, useNHWC, ctx->stream),
       v2Mul(&desc->v2Mul, false, shareModelWeights),
-      v2Bias(&desc->v2Bias, false, desc->v2Activation.activation),
+      v2Bias(&desc->v2Bias, false, desc->v2Activation.activation, ctx->stream),
       v3Mul(&desc->v3Mul, false, shareModelWeights),
-      v3Bias(&desc->v3Bias, false, ACTIVATION_IDENTITY),
+      v3Bias(&desc->v3Bias, false, ACTIVATION_IDENTITY, ctx->stream),
       sv3Mul(&desc->sv3Mul, false, shareModelWeights),
-      sv3Bias(&desc->sv3Bias, false, ACTIVATION_IDENTITY),
+      sv3Bias(&desc->sv3Bias, false, ACTIVATION_IDENTITY, ctx->stream),
       fusedValueTerminal(desc, useFusedValueTerminal_),
       vOwnershipConv(ctx, &desc->vOwnershipConv, maxBatchSize_, nnX, nnY, useFP16, useNHWC, useNHWC)
   {}
@@ -2355,7 +2364,7 @@ struct Sm89ValueHead {
           if(fusedHeadBN)
             customCudaCopyFromHalf(
               (const half*)v1Out2.buf, (float*)workspaceBuf,
-              batchSize * v1Channels * xySize
+              batchSize * v1Channels * xySize, ctx->stream
             );
         }
         testAssert(fusedHeadBN);
@@ -2369,11 +2378,11 @@ struct Sm89ValueHead {
       }
       if(!fusedHeadBN) {
         v1BN.apply(batchSize, v1Out.buf, maskBuf, v1Out2.buf);
-        customCudaCopyFromHalf((const half*)v1Out2.buf, (float*)workspaceBuf, batchSize * v1Channels * xySize);
+        customCudaCopyFromHalf((const half*)v1Out2.buf, (float*)workspaceBuf, batchSize * v1Channels * xySize, ctx->stream);
       }
       bufToBePooled = workspaceBuf;
     }
-    customCudaValueHeadPoolNHWC((const float*)bufToBePooled, (float*)v1Mean.buf, batchSize, xySize, v1Channels, maskSumBuf);
+    customCudaValueHeadPoolNHWC((const float*)bufToBePooled, (float*)v1Mean.buf, batchSize, xySize, v1Channels, maskSumBuf, ctx->stream);
     CUDA_ERR("Sm89ValueHead",cudaPeekAtLastError());
 
     v2Mul.apply(ctx, scratch, batchSize, v1Mean.buf, v2Out.buf);
@@ -2395,7 +2404,7 @@ struct Sm89ValueHead {
     }
     else {
       vOwnershipConv.apply(ctx, batchSize, false, v1Out2.buf, ownershipScratch.buf, workspaceBuf, workspaceBytes);
-      customCudaCopyFromHalf((const half*)ownershipScratch.buf, (float*)ownershipBuf, batchSize * ownershipChannels * xySize);
+      customCudaCopyFromHalf((const half*)ownershipScratch.buf, (float*)ownershipBuf, batchSize * ownershipChannels * xySize, ctx->stream);
       CUDA_ERR("Sm89ValueHead",cudaPeekAtLastError());
     }
   }
@@ -2463,6 +2472,7 @@ struct Sm89Forward::Impl {
     bool inputsUseNHWC_,
     bool useFP16,
     bool useNHWC,
+    cudaStream_t stream,
     bool useWideQKV_,
     bool useWideFFN_,
     bool useFusedResidual_,
@@ -2539,7 +2549,7 @@ struct Sm89Forward::Impl {
       useExactMaskElision(useExactMaskElision_),
       useFusedValueTerminal(useFusedValueTerminal_),
       shareModelWeights(shareModelWeights_),
-      ctx(),
+      ctx(stream),
       scratch(
         useFP16, useExactMaskElision_, maxBatchSize_, nnXLen_ * nnYLen_
       ),
@@ -2622,18 +2632,18 @@ struct Sm89Forward::Impl {
 
       if(!usingFP16) {
         if(inputsUseNHWC)
-          customCudaChannel0ExtractNHWC((const float*)inputBuf, (float*)maskBuf->buf, batchSize, xySize, numInputChannels);
+          customCudaChannel0ExtractNHWC((const float*)inputBuf, (float*)maskBuf->buf, batchSize, xySize, numInputChannels, ctx.stream);
         else
-          customCudaChannel0ExtractNCHW((const float*)inputBuf, (float*)maskBuf->buf, batchSize, numInputChannels, xySize);
-        customCudaPoolRowsSumNCHW((const float*)maskBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0);
+          customCudaChannel0ExtractNCHW((const float*)inputBuf, (float*)maskBuf->buf, batchSize, numInputChannels, xySize, ctx.stream);
+        customCudaPoolRowsSumNCHW((const float*)maskBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0, ctx.stream);
       }
       else {
         if(inputsUseNHWC)
-          customCudaChannel0ExtractNHWC((const half*)inputBuf, (half*)maskBuf->buf, batchSize, xySize, numInputChannels);
+          customCudaChannel0ExtractNHWC((const half*)inputBuf, (half*)maskBuf->buf, batchSize, xySize, numInputChannels, ctx.stream);
         else
-          customCudaChannel0ExtractNCHW((const half*)inputBuf, (half*)maskBuf->buf, batchSize, numInputChannels, xySize);
-        customCudaCopyFromHalf((const half*)maskBuf->buf, (float*)maskFloatBuf->buf, batchSize * xySize);
-        customCudaPoolRowsSumNCHW((const float*)maskFloatBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0);
+          customCudaChannel0ExtractNCHW((const half*)inputBuf, (half*)maskBuf->buf, batchSize, numInputChannels, xySize, ctx.stream);
+        customCudaCopyFromHalf((const half*)maskBuf->buf, (float*)maskFloatBuf->buf, batchSize * xySize, ctx.stream);
+        customCudaPoolRowsSumNCHW((const float*)maskFloatBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0, ctx.stream);
       }
       CUDA_ERR("Sm89Forward",cudaPeekAtLastError());
 
@@ -2690,6 +2700,7 @@ Sm89Forward::Sm89Forward(
   bool inputsUseNHWC,
   bool useFP16,
   bool useNHWC,
+  cudaStream_t stream,
   bool useWideQKV,
   bool useWideFFN,
   bool useFusedResidual,
@@ -2726,7 +2737,7 @@ Sm89Forward::Sm89Forward(
   bool shareModelWeights
 )
   : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC,
-      useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
+      useFP16, useNHWC, stream, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
       useFusedQKRoPE, usePrecomputedQKRoPE, useQKVRoPEGemm,
       useSplitQKVRoPEGemm,
       plainQKVVariant,

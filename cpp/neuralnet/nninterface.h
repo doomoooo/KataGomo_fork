@@ -82,6 +82,12 @@ namespace NeuralNet {
 
   // Compute Handle -----------------------------------------------------------------
 
+  // Create an execution stream owned by the caller and borrowed by a ComputeHandle.
+  // CUDA returns an opaque cudaStream_t and requires it to be passed to createComputeHandle.
+  // Backends without an explicit stream return NULL. Free the ComputeHandle before its stream.
+  void* createComputeStream(int gpuIdxForThisThread);
+  void freeComputeStream(void* computeStream);
+
   // Any given thread should only ever create one of these at a time.
   // When using the CUDA backend, will mutably set the GPU that this thread is
   // associated with to the specified index. If logger is specified, may output
@@ -97,7 +103,8 @@ namespace NeuralNet {
     bool requireExactNNLen,
     bool inputsUseNHWC,
     int gpuIdxForThisThread,
-    int serverThreadIdx
+    int serverThreadIdx,
+    void* computeStream
   );
   void freeComputeHandle(ComputeHandle* computeHandle);
 

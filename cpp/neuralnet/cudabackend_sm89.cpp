@@ -119,6 +119,7 @@ Sm89Model::Sm89Model(
   bool inputsUseNHWC_,
   bool useFP16_,
   bool useNHWC_,
+  cudaStream_t stream,
   const Options& options_
 ) :
   officialApplyContext(officialApplyContext_),
@@ -148,7 +149,7 @@ Sm89Model::Sm89Model(
         )
       : PersistingL2Plan{0.0f, 0.0f};
     forward = std::make_unique<Sm89Forward>(
-      desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
+      desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, stream,
       options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt,
       options.useFusedQKRoPE, options.usePrecomputedQKRoPE, options.useQKVRoPEGemm,
       options.useSplitQKVRoPEGemm,

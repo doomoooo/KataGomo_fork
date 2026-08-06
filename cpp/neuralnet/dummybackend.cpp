@@ -54,6 +54,15 @@ const ModelDesc& NeuralNet::getModelDesc(const LoadedModel* loadedModel) {
   throw StringError("Dummy neural net backend: NeuralNet::getModelDesc unimplemented");
 }
 
+void* NeuralNet::createComputeStream(int gpuIdxForThisThread) {
+  (void)gpuIdxForThisThread;
+  return NULL;
+}
+
+void NeuralNet::freeComputeStream(void* computeStream) {
+  (void)computeStream;
+}
+
 ComputeHandle* NeuralNet::createComputeHandle(
   ComputeContext* context,
   const LoadedModel* loadedModel,
@@ -62,7 +71,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  void* computeStream
 ) {
   (void)context;
   (void)loadedModel;
@@ -72,6 +82,7 @@ ComputeHandle* NeuralNet::createComputeHandle(
   (void)inputsUseNHWC;
   (void)gpuIdxForThisThread;
   (void)serverThreadIdx;
+  (void)computeStream;
   throw StringError("Dummy neural net backend: NeuralNet::createLocalGpuHandle unimplemented");
 }
 
