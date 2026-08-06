@@ -172,15 +172,19 @@ using RopeEpilogue = cutlass::epilogue::threadblock::Epilogue<
   typename DefaultEpilogue::OutputOp,
   typename DefaultEpilogue::Padding,
   DefaultEpilogue::Base::kFragmentsPerIteration>;
+using PlainKernel = cutlass::gemm::kernel::GemmBatched<Mma, DefaultEpilogue, Swizzle>;
 using RopeKernel = cutlass::gemm::kernel::GemmBatched<Mma, RopeEpilogue, Swizzle>;
 
 } // namespace
 
 struct Sm89QKVRoPEGemmB13::Impl {
   typename RopeKernel::Params params;
+  typename PlainKernel::Params plainParams;
+  bool splitRoPE;
   bool initialized;
 
-  Impl(const half* weights, const float* freqs) : initialized(true) {
+  Impl(const half* weights, const float* freqs, bool splitRoPE_)
+    : splitRoPE(splitRoPE_), initialized(true) {
     cutlass::gemm::GemmCoord problem(Tokens, Channels, Channels);
     cutlass::gemm::GemmCoord gridShape = Swizzle::get_tiled_shape(
       problem,
@@ -206,15 +210,47 @@ struct Sm89QKVRoPEGemmB13::Impl {
       GemmBatch);
     params.params_D.freqs = freqs;
 
-    int smemSize = int(sizeof(typename RopeKernel::SharedStorage));
+    typename DefaultIterator::TensorRef plainNullOutput(nullptr, matrixLayout);
+    plainParams = typename PlainKernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      0,
+      weightRef,
+      (int64_t)Channels * Channels,
+      plainNullOutput,
+      (int64_t)Tokens * Channels,
+      plainNullOutput,
+      (int64_t)Tokens * Channels,
+      typename OutputOp::Params(1.0f, 0.0f),
+      GemmBatch);
+
+    int smemSize = splitRoPE
+      ? int(sizeof(typename PlainKernel::SharedStorage))
+      : int(sizeof(typename RopeKernel::SharedStorage));
     if(smemSize >= 48 * 1024)
-      initialized = cudaFuncSetAttribute(
-        cutlass::Kernel<RopeKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, smemSize) == cudaSuccess;
+      initialized = splitRoPE
+        ? cudaFuncSetAttribute(
+            cutlass::Kernel<PlainKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smemSize) == cudaSuccess
+        : cudaFuncSetAttribute(
+            cutlass::Kernel<RopeKernel>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smemSize) == cudaSuccess;
   }
 
   bool apply(const half* input, half* output, cudaStream_t stream) {
     if(!initialized)
       return false;
+    if(splitRoPE) {
+      plainParams.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
+      plainParams.ref_C.reset(reinterpret_cast<Element*>(output));
+      plainParams.ref_D.reset(reinterpret_cast<Element*>(output));
+      dim3 grid = Swizzle::get_grid_shape(plainParams.grid_tiled_shape);
+      dim3 block(PlainKernel::kThreadCount, 1, 1);
+      int smemSize = int(sizeof(typename PlainKernel::SharedStorage));
+      cutlass::Kernel<PlainKernel><<<grid, block, smemSize, stream>>>(plainParams);
+      return cudaPeekAtLastError() == cudaSuccess;
+    }
     params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
     params.ref_C.reset(reinterpret_cast<Element*>(output));
     params.ref_D.reset(reinterpret_cast<Element*>(output));
@@ -228,8 +264,9 @@ struct Sm89QKVRoPEGemmB13::Impl {
 
 Sm89QKVRoPEGemmB13::Sm89QKVRoPEGemmB13(
   const half* weights,
-  const float* freqs
-) : impl(std::make_unique<Impl>(weights, freqs)) {}
+  const float* freqs,
+  bool splitRoPE
+) : impl(std::make_unique<Impl>(weights, freqs, splitRoPE)) {}
 
 Sm89QKVRoPEGemmB13::~Sm89QKVRoPEGemmB13() = default;
 

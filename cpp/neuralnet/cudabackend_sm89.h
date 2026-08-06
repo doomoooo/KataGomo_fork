@@ -64,6 +64,7 @@ struct Options {
   bool useFusedQKRoPE = false;
   bool usePrecomputedQKRoPE = false;
   bool useQKVRoPEGemm = false;
+  bool useSplitQKVRoPEGemm = false;
   int ropeBatchGroup = 1;
   bool useFlashAttention = false;
   bool useFlashAttentionBoth16 = false;

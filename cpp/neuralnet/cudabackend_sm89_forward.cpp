@@ -990,6 +990,7 @@ struct Sm89AttentionBlock {
   const bool useFusedQKRoPE;
   const bool usePrecomputedQKRoPE;
   const bool useQKVRoPEGemm;
+  const bool useSplitQKVRoPEGemm;
   const int ropeBatchGroup;
   const bool useFlashAttention;
   const bool useFlashAttentionBoth16;
@@ -1018,7 +1019,7 @@ struct Sm89AttentionBlock {
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, int ropeBatchGroup_, bool useFlashAttention_, bool useFlashAttentionBoth16_, bool useOutProjGemm_, bool shareModelWeights_)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, bool useSplitQKVRoPEGemm_, int ropeBatchGroup_, bool useFlashAttention_, bool useFlashAttentionBoth16_, bool useOutProjGemm_, bool shareModelWeights_)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -1034,6 +1035,7 @@ struct Sm89AttentionBlock {
       useFusedQKRoPE(useFusedQKRoPE_),
       usePrecomputedQKRoPE(usePrecomputedQKRoPE_),
       useQKVRoPEGemm(useQKVRoPEGemm_),
+      useSplitQKVRoPEGemm(useSplitQKVRoPEGemm_),
       ropeBatchGroup(ropeBatchGroup_),
       useFlashAttention(useFlashAttention_),
       useFlashAttentionBoth16(useFlashAttentionBoth16_),
@@ -1112,7 +1114,7 @@ struct Sm89AttentionBlock {
        nnXLen == 19 && nnYLen == 19 && inChannels == 384 &&
       numHeads == 12 && numKVHeads == 12 && qHeadDim == 32 && vHeadDim == 32) {
       qkvRopeGemm = std::make_unique<Sm89Backend::Sm89QKVRoPEGemmB13>(
-        (const half*)qkvWeightsBuf, ropeFreqsBuf
+        (const half*)qkvWeightsBuf, ropeFreqsBuf, useSplitQKVRoPEGemm_
       );
     }
 #endif
@@ -1183,7 +1185,7 @@ struct Sm89AttentionBlock {
     }
 
     if(ropeFreqsBuf != NULL) {
-      bool usedFusedRoPE = usedQKVRoPEGemm;
+      bool usedFusedRoPE = usedQKVRoPEGemm && !useSplitQKVRoPEGemm;
       if(!usedFusedRoPE && useFusedQKRoPE && usingFP16) {
         if(ropeCosSinTable != NULL) {
           usedFusedRoPE = sm89ApplyRoPEQKHalfPrecomputed(
@@ -1557,6 +1559,7 @@ struct Sm89NestedBlock {
     bool useFusedQKRoPE_,
     bool usePrecomputedQKRoPE_,
     bool useQKVRoPEGemm_,
+    bool useSplitQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
@@ -1614,6 +1617,7 @@ struct Sm89NestedBlock {
           ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY,
           useFP16, useNHWC, useWideQKV_, useFusedResidual_, useRMSNormOpt_,
           useFusedQKRoPE_, usePrecomputedQKRoPE_, useQKVRoPEGemm_,
+          useSplitQKVRoPEGemm_,
           ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
           useOutProjGemm_, shareModelWeights_
         );
@@ -1780,6 +1784,7 @@ struct Sm89Trunk {
     bool useFusedQKRoPE_,
     bool usePrecomputedQKRoPE_,
     bool useQKVRoPEGemm_,
+    bool useSplitQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
@@ -1827,7 +1832,8 @@ struct Sm89Trunk {
         (const NestedBottleneckResidualBlockDesc*)desc->blocks[i].second.get(),
         maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_,
         useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_, usePrecomputedQKRoPE_,
-        useQKVRoPEGemm_, ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
+        useQKVRoPEGemm_, useSplitQKVRoPEGemm_, ropeBatchGroup_,
+        useFlashAttention_, useFlashAttentionBoth16_,
         useDualGemmSwiGLU_, useDualGemmSwiGLUHalf2Tanh_,
         useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
         usePostConvGemm_, useLinear2PostBNSilu_, usePersistingL2Trunk_,
@@ -2407,6 +2413,7 @@ struct Sm89Forward::Impl {
   const bool useFusedQKRoPE;
   const bool usePrecomputedQKRoPE;
   const bool useQKVRoPEGemm;
+  const bool useSplitQKVRoPEGemm;
   const int ropeBatchGroup;
   const bool useFlashAttention;
   const bool useFlashAttentionBoth16;
@@ -2456,6 +2463,7 @@ struct Sm89Forward::Impl {
     bool useFusedQKRoPE_,
     bool usePrecomputedQKRoPE_,
     bool useQKVRoPEGemm_,
+    bool useSplitQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
     bool useFlashAttentionBoth16_,
@@ -2496,6 +2504,7 @@ struct Sm89Forward::Impl {
       useFusedQKRoPE(useFusedQKRoPE_),
       usePrecomputedQKRoPE(usePrecomputedQKRoPE_),
       useQKVRoPEGemm(useQKVRoPEGemm_),
+      useSplitQKVRoPEGemm(useSplitQKVRoPEGemm_),
       ropeBatchGroup(ropeBatchGroup_),
       useFlashAttention(useFlashAttention_),
       useFlashAttentionBoth16(useFlashAttentionBoth16_),
@@ -2527,7 +2536,8 @@ struct Sm89Forward::Impl {
       ),
       trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC,
         useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_,
-        usePrecomputedQKRoPE_, useQKVRoPEGemm_, ropeBatchGroup_,
+        usePrecomputedQKRoPE_, useQKVRoPEGemm_, useSplitQKVRoPEGemm_,
+        ropeBatchGroup_,
         useFlashAttention_, useFlashAttentionBoth16_, useDualGemmSwiGLU_,
         useDualGemmSwiGLUHalf2Tanh_, useLinear2Gemm_, useOutProjGemm_,
         usePreConvGemm_, usePostConvGemm_, usePostConvBNSilu_,
@@ -2677,6 +2687,7 @@ Sm89Forward::Sm89Forward(
   bool useFusedQKRoPE,
   bool usePrecomputedQKRoPE,
   bool useQKVRoPEGemm,
+  bool useSplitQKVRoPEGemm,
   int ropeBatchGroup,
   bool useFlashAttention,
   bool useFlashAttentionBoth16,
@@ -2706,6 +2717,7 @@ Sm89Forward::Sm89Forward(
   : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC,
       useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
       useFusedQKRoPE, usePrecomputedQKRoPE, useQKVRoPEGemm,
+      useSplitQKVRoPEGemm,
       ropeBatchGroup, useFlashAttention, useFlashAttentionBoth16,
       useDualGemmSwiGLU, useDualGemmSwiGLUHalf2Tanh, useLinear2Gemm,
       useOutProjGemm, usePreConvGemm, usePostConvGemm, usePostConvBNSilu,

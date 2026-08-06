@@ -77,6 +77,7 @@ Options parseOptions(ConfigParser& cfg) {
   o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
   o.usePrecomputedQKRoPE = getBoolOpt(cfg, "cudaUsePrecomputedQKRoPESm89", false);
   o.useQKVRoPEGemm = getBoolOpt(cfg, "cudaUseQKVRoPEGemmSm89", false);
+  o.useSplitQKVRoPEGemm = getBoolOpt(cfg, "cudaUseSplitQKVRoPEGemmSm89", false);
   o.ropeBatchGroup = cfg.contains("cudaRoPEBatchGroupSm89") ? cfg.getInt("cudaRoPEBatchGroupSm89",1,13) : 1;
   o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm89", false);
   o.useFlashAttentionBoth16 = getBoolOpt(cfg, "cudaUseFlashAttentionBoth16Sm89", false);
@@ -148,6 +149,7 @@ Sm89Model::Sm89Model(
       desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC,
       options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt,
       options.useFusedQKRoPE, options.usePrecomputedQKRoPE, options.useQKVRoPEGemm,
+      options.useSplitQKVRoPEGemm,
       options.ropeBatchGroup, options.useFlashAttention, options.useFlashAttentionBoth16,
       options.useDualGemmSwiGLU, options.useDualGemmSwiGLUHalf2Tanh,
       options.useLinear2Gemm, options.useOutProjGemm, options.usePreConvGemm,
