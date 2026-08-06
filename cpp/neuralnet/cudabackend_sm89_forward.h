@@ -67,6 +67,7 @@ class Sm89Forward {
     bool useQKVRoPEGemm,
     int ropeBatchGroup,
     bool useFlashAttention,
+    bool useFlashAttentionBoth16,
     bool useDualGemmSwiGLU,
     bool useLinear2Gemm,
     bool useOutProjGemm,

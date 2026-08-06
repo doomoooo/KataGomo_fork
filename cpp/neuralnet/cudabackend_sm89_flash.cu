@@ -94,6 +94,7 @@ bool sm89FlashAttentionB13D32(
   int numKVHeads,
   int qHeadDim,
   int vHeadDim,
+  bool useBoth16Accum,
   cudaStream_t stream
 ) {
   if(batchSize != B || seqLen != S || numHeads != H || numKVHeads != H ||
@@ -102,11 +103,21 @@ bool sm89FlashAttentionB13D32(
     return false;
 
   Flash_fwd_params p = makeParams(q, k, v, output, lse);
-  run_flash_fwd<
-    86, D, D, 1,
-    cutlass::half_t, cutlass::half_t,
-    false, false, false, false, false, false, false, false, false, false
-  >(p, stream);
+  if(useBoth16Accum) {
+    run_flash_fwd<
+      86, D, D, 1,
+      cutlass::half_t, cutlass::half_t,
+      false, false, false, false, false, false, false, false, false, false,
+      cutlass::half_t
+    >(p, stream);
+  }
+  else {
+    run_flash_fwd<
+      86, D, D, 1,
+      cutlass::half_t, cutlass::half_t,
+      false, false, false, false, false, false, false, false, false, false
+    >(p, stream);
+  }
   return cudaPeekAtLastError() == cudaSuccess;
 }
 

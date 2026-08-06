@@ -66,6 +66,7 @@ struct Options {
   bool useQKVRoPEGemm = false;
   int ropeBatchGroup = 1;
   bool useFlashAttention = false;
+  bool useFlashAttentionBoth16 = false;
   bool useDualGemmSwiGLU = false;
   bool useLinear2Gemm = false;
   bool useOutProjGemm = false;

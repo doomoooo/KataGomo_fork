@@ -1,3 +1,56 @@
+diff --git a/hopper/flash_fwd_launch_template.h b/hopper/flash_fwd_launch_template.h
+index 43567a5..988679d 100644
+--- a/hopper/flash_fwd_launch_template.h
++++ b/hopper/flash_fwd_launch_template.h
+@@ -29,3 +29,4 @@ template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element,
+           bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
+-          bool PackGQA, bool Split, bool V_colmajor>
++          bool PackGQA, bool Split, bool V_colmajor,
++          typename ElementAccum = float>  // KATAGO_FLASH_BOTH16_ACCUM
+ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+@@ -55,3 +56,3 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+         flash::CollectiveMainloopFwdSm90<kStages, ClusterShape, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm90, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, HasQv, MmaPV_is_RS, IntraWGOverlap, PackGQA, Split, V_colmajor>,
+-        flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm80, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, PackGQA, Split>
++        flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, ElementAccum, cutlass::arch::Sm80, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, PackGQA, Split>
+     >;
+diff --git a/hopper/mainloop_fwd_sm80.hpp b/hopper/mainloop_fwd_sm80.hpp
+index 297927b..53d340f 100644
+--- a/hopper/mainloop_fwd_sm80.hpp
++++ b/hopper/mainloop_fwd_sm80.hpp
+@@ -60,9 +60,13 @@ struct CollectiveMainloopFwdSm80 {
+     using MMA_Atom_Arch = std::conditional_t<
+         ArchTag::kMinComputeCapability >= 80,
+         std::conditional_t<
+-            std::is_same_v<Element, cutlass::half_t>,
+-            MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>,
+-            MMA_Atom<SM80_16x8x16_F32BF16BF16F32_TN>
++            std::is_same_v<ElementAccum, cutlass::half_t>,
++            MMA_Atom<SM80_16x8x16_F16F16F16F16_TN>,  // KATAGO_FLASH_BOTH16_ACCUM
++            std::conditional_t<
++                std::is_same_v<Element, cutlass::half_t>,
++                MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>,
++                MMA_Atom<SM80_16x8x16_F32BF16BF16F32_TN>
++            >
+         >,
+         MMA_Atom<SM75_16x8x8_F32F16F16F32_TN>
+     >;
+diff --git a/hopper/softmax.h b/hopper/softmax.h
+index 8fcdb6b..8d46c42 100644
+--- a/hopper/softmax.h
++++ b/hopper/softmax.h
+@@ -159,8 +159,11 @@ struct Softmax {
+         // Reshape acc_o from (MMA=4, MMA_M, MMA_K) to (nrow=(2, MMA_M), ncol=(2, MMA_K))
+         Tensor acc_o_rowcol = make_tensor(acc_o.data(), flash::convert_layout_acc_rowcol(acc_o.layout()));
++        using ElementOAccum = typename decltype(acc_o_rowcol)::value_type;  // KATAGO_FLASH_BOTH16_ACCUM
+         static_assert(CUTE_STATIC_V(size<0>(acc_o_rowcol)) == kNRows);
+         #pragma unroll
+         for (int mi = 0; mi < size<0>(acc_o_rowcol); ++mi) {
+             #pragma unroll
+-            for (int ni = 0; ni < size<1>(acc_o_rowcol); ++ni) { acc_o_rowcol(mi, ni) *= scores_scale(mi); }
++            for (int ni = 0; ni < size<1>(acc_o_rowcol); ++ni) {
++                acc_o_rowcol(mi, ni) = ElementOAccum(float(acc_o_rowcol(mi, ni)) * scores_scale(mi));
++            }
+         }
 diff --git a/hopper/tile_size.h b/hopper/tile_size.h
 index 8353542..d2a0098 100644
 --- a/hopper/tile_size.h

@@ -992,6 +992,7 @@ struct Sm89AttentionBlock {
   const bool useQKVRoPEGemm;
   const int ropeBatchGroup;
   const bool useFlashAttention;
+  const bool useFlashAttentionBoth16;
   const bool useOutProjGemm;
   const Sm89TransformerRMSNorm preLN;
   const Sm89MatMul qProj;
@@ -1017,7 +1018,7 @@ struct Sm89AttentionBlock {
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, int ropeBatchGroup_, bool useFlashAttention_, bool useOutProjGemm_, bool shareModelWeights_)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, int ropeBatchGroup_, bool useFlashAttention_, bool useFlashAttentionBoth16_, bool useOutProjGemm_, bool shareModelWeights_)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -1035,6 +1036,7 @@ struct Sm89AttentionBlock {
       useQKVRoPEGemm(useQKVRoPEGemm_),
       ropeBatchGroup(ropeBatchGroup_),
       useFlashAttention(useFlashAttention_),
+      useFlashAttentionBoth16(useFlashAttentionBoth16_),
       useOutProjGemm(useOutProjGemm_),
       preLN(&desc->preLN, useFP16, useRMSNormOpt_),
       qProj(&desc->qProj, useFP16, shareModelWeights_),
@@ -1236,7 +1238,8 @@ struct Sm89AttentionBlock {
       SizedBuf<void*> lseBuf(&scratch->allocator, sm89FlashAttentionLseBytesB13D32());
       usedSDPA = sm89FlashAttentionB13D32(
         (const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (half*)attnOutBuf.buf,
-        (float*)lseBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim, ctx->stream
+        (float*)lseBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim,
+        useFlashAttentionBoth16, ctx->stream
       );
     }
 #endif
@@ -1553,6 +1556,7 @@ struct Sm89NestedBlock {
     bool useQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
+    bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
@@ -1606,7 +1610,7 @@ struct Sm89NestedBlock {
           ctx, (const TransformerAttentionDesc*)desc->blocks[i].second.get(), nnX, nnY,
           useFP16, useNHWC, useWideQKV_, useFusedResidual_, useRMSNormOpt_,
           useFusedQKRoPE_, usePrecomputedQKRoPE_, useQKVRoPEGemm_,
-          ropeBatchGroup_, useFlashAttention_,
+          ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
           useOutProjGemm_, shareModelWeights_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
@@ -1773,6 +1777,7 @@ struct Sm89Trunk {
     bool useQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
+    bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
@@ -1816,7 +1821,7 @@ struct Sm89Trunk {
         (const NestedBottleneckResidualBlockDesc*)desc->blocks[i].second.get(),
         maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_,
         useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_, usePrecomputedQKRoPE_,
-        useQKVRoPEGemm_, ropeBatchGroup_, useFlashAttention_,
+        useQKVRoPEGemm_, ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
         useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
         usePostConvGemm_, useLinear2PostBNSilu_, usePersistingL2Trunk_,
         persistingL2TrunkHitRatio_,
@@ -2397,6 +2402,7 @@ struct Sm89Forward::Impl {
   const bool useQKVRoPEGemm;
   const int ropeBatchGroup;
   const bool useFlashAttention;
+  const bool useFlashAttentionBoth16;
   const bool useDualGemmSwiGLU;
   const bool useLinear2Gemm;
   const bool useOutProjGemm;
@@ -2444,6 +2450,7 @@ struct Sm89Forward::Impl {
     bool useQKVRoPEGemm_,
     int ropeBatchGroup_,
     bool useFlashAttention_,
+    bool useFlashAttentionBoth16_,
     bool useDualGemmSwiGLU_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
@@ -2482,6 +2489,7 @@ struct Sm89Forward::Impl {
       useQKVRoPEGemm(useQKVRoPEGemm_),
       ropeBatchGroup(ropeBatchGroup_),
       useFlashAttention(useFlashAttention_),
+      useFlashAttentionBoth16(useFlashAttentionBoth16_),
       useDualGemmSwiGLU(useDualGemmSwiGLU_),
       useLinear2Gemm(useLinear2Gemm_),
       useOutProjGemm(useOutProjGemm_),
@@ -2510,7 +2518,7 @@ struct Sm89Forward::Impl {
       trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC,
         useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_,
         usePrecomputedQKRoPE_, useQKVRoPEGemm_, ropeBatchGroup_,
-        useFlashAttention_, useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_,
+        useFlashAttention_, useFlashAttentionBoth16_, useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_,
         usePreConvGemm_, usePostConvGemm_, usePostConvBNSilu_,
         useLinear2PostBNSilu_,
         usePersistingL2Trunk_,
@@ -2660,6 +2668,7 @@ Sm89Forward::Sm89Forward(
   bool useQKVRoPEGemm,
   int ropeBatchGroup,
   bool useFlashAttention,
+  bool useFlashAttentionBoth16,
   bool useDualGemmSwiGLU,
   bool useLinear2Gemm,
   bool useOutProjGemm,
@@ -2685,7 +2694,7 @@ Sm89Forward::Sm89Forward(
   : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC,
       useFP16, useNHWC, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
       useFusedQKRoPE, usePrecomputedQKRoPE, useQKVRoPEGemm,
-      ropeBatchGroup, useFlashAttention,
+      ropeBatchGroup, useFlashAttention, useFlashAttentionBoth16,
       useDualGemmSwiGLU, useLinear2Gemm,
       useOutProjGemm, usePreConvGemm, usePostConvGemm, usePostConvBNSilu,
       useLinear2PostBNSilu,
