@@ -76,6 +76,11 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(SM120_SEARCH_LINEAR2_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_stub.cu"
     CACHE FILEPATH "Exact-batch linear2 AOT candidate used by the whole-graph search slot")
+  set(SM120_SEARCH_FA4_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/sm120_search_fa4_stub.cpp"
+    CACHE FILEPATH "Exact-batch FA4 AOT bridge used by the whole-graph search slot")
+  set(SM120_SEARCH_FA4_OBJECT "" CACHE FILEPATH
+    "Exact-batch FA4 AOT host object used by the whole-graph search slot")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm120.cpp
@@ -92,6 +97,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     ${SM120_SEARCH_FFN_SOURCE}
     ${SM120_SEARCH_QKV_SOURCE}
     ${SM120_SEARCH_LINEAR2_SOURCE}
+    ${SM120_SEARCH_FA4_SOURCE}
     neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
@@ -436,6 +442,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   # `_cuda*` bridge (fa4_cuda_bridge.cpp) plus the CUDA driver API.
   target_link_libraries(katago CUDA::cublas CUDA::cublasLt ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
   target_link_libraries(katago ${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/fa4_sm120_b13.o)
+  if(SM120_SEARCH_FA4_OBJECT)
+    target_link_libraries(katago ${SM120_SEARCH_FA4_OBJECT})
+  endif()
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   target_compile_definitions(katago PRIVATE USE_TENSORRT_BACKEND)
   find_package(CUDAToolkit REQUIRED)

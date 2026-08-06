@@ -21,7 +21,8 @@ import subprocess
 import sys
 
 
-FAMILIES = ("ffn", "qkv", "linear2")
+SLOT_FAMILIES = ("ffn", "qkv", "linear2")
+SEARCH_FAMILIES = SLOT_FAMILIES + ("fa4", "l2")
 SLOT_CACHE_KEYS = {
     "ffn": "SM120_SEARCH_FFN_SOURCE",
     "qkv": "SM120_SEARCH_QKV_SOURCE",
@@ -93,7 +94,7 @@ def initialize_active_slots(
 ) -> dict[str, pathlib.Path]:
     active_dir.mkdir(parents=True, exist_ok=True)
     result = {}
-    for family in FAMILIES:
+    for family in SLOT_FAMILIES:
         target = active_dir / f"active-{family}.cu"
         stub = repo / "cpp/neuralnet/tilelang_aot" / f"sm120_search_{family}_stub.cu"
         if (
@@ -136,17 +137,38 @@ def candidate_override(family: str, candidate_value: dict) -> str:
 
 def full_override(
     family: str, candidate_value: dict, device: int, streams: int, extra: str,
+    isolate_family: bool = False,
 ) -> str:
     values = [
         f"numNNServerThreadsPerModel={streams}",
         f"cudaPersistingL2StreamsSm120={streams}",
-        "cudaUsePersistingL2Trunk=false",
-        "cudaUsePersistingL2Inner=false",
     ]
+    if isolate_family and family != "l2":
+        values.extend([
+            "cudaUsePersistingL2Trunk=false",
+            "cudaUsePersistingL2Inner=false",
+        ])
     values.extend(f"cudaDeviceToUseThread{index}={device}" for index in range(streams))
     for other_family, key in TACTIC_CONFIG_KEYS.items():
-        requested = candidate_override(family, candidate_value) if other_family == family else "disabled"
+        if other_family == family:
+            requested = candidate_override(family, candidate_value)
+        else:
+            requested = "disabled" if isolate_family else "auto"
         values.append(f"{key}={requested}")
+    if family == "l2":
+        for key, value in candidate_value["config"].items():
+            if isinstance(value, bool):
+                value = str(value).lower()
+            values.append(f"{key}={value}")
+    if family == "fa4":
+        if candidate_value.get("implementation") == "fallback":
+            values.append("cudaUseFlashAttentionSm120=false")
+        else:
+            values.extend([
+                "cudaUseFlashAttentionSm120=true",
+                "cudaFlashAttentionSm120Accum=both16",
+                f"cudaFlashAttentionAotTacticSm120={candidate_value['id']}",
+            ])
     if extra.strip():
         values.extend(item.strip() for item in extra.split(",") if item.strip())
     return ",".join(values)
@@ -155,7 +177,7 @@ def full_override(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--space", required=True)
-    parser.add_argument("--family", choices=FAMILIES, required=True)
+    parser.add_argument("--family", choices=SEARCH_FAMILIES, required=True)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--build-dir", required=True)
     parser.add_argument("--active-source-dir", required=True)
@@ -169,12 +191,21 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--s1-warmup", type=int, default=5)
     parser.add_argument("--s1-iterations", type=int, default=20)
+    parser.add_argument("--fa4-python", default=sys.executable)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--cmake-arg", action="append", default=[])
     parser.add_argument("--runner", default="")
     parser.add_argument("--override-config", default="")
     parser.add_argument("--candidate-ids", default="")
     parser.add_argument("--keep-other-slots", action="store_true")
+    parser.add_argument(
+        "--isolate-family",
+        action="store_true",
+        help=(
+            "diagnostic only: disable other AOT families and L2; the default "
+            "keeps the accepted common graph active"
+        ),
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -196,8 +227,32 @@ def main() -> None:
     if missing:
         raise ValueError(f"batches outside materialized space: {missing}")
 
+    common_graph_policy = (
+        "isolated diagnostic" if args.isolate_family
+        else "preserve config and exact-batch automatic winners"
+    )
+    regime = {
+        "config": str(pathlib.Path(args.config).resolve()),
+        "config_sha256": sha256_file(pathlib.Path(args.config).resolve()),
+        "model": str(pathlib.Path(args.model).resolve()),
+        "model_sha256": sha256_file(pathlib.Path(args.model).resolve()),
+        "cuda_device_ordinal": args.device,
+        "streams": args.streams,
+        "iterations": args.iterations,
+        "warmup": args.warmup,
+        "repeats": args.repeats,
+        "runner": runner,
+        "extra_override_config": args.override_config,
+        "common_graph_policy": common_graph_policy,
+    }
+
     if output.exists():
         payload = json.loads(output.read_text())
+        if payload.get("regime") != regime:
+            raise ValueError(
+                "refusing to mix tactic results from different measurement "
+                f"regimes in {output}"
+            )
     else:
         payload = {
             "schema": 1,
@@ -209,6 +264,8 @@ def main() -> None:
             "space": str(space_path),
             "acceptance_metric": "natural whole-graph S2 total throughput",
             "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
+            "common_graph_policy": common_graph_policy,
+            "regime": regime,
             "rows": [],
         }
     completed_keys = {
@@ -217,8 +274,37 @@ def main() -> None:
     }
 
     active = initialize_active_slots(
-        repo, active_dir, args.family, args.keep_other_slots,
+        repo, active_dir,
+        args.family if args.family in SLOT_FAMILIES else "",
+        args.keep_other_slots,
     )
+    fa4_active_dir = active_dir / "fa4"
+    fa4_bridge = fa4_active_dir / "active-fa4.cpp"
+    fa4_object = fa4_active_dir / "active-fa4.o"
+    if args.family == "fa4":
+        fa4_active_dir.mkdir(parents=True, exist_ok=True)
+        bootstrap = next(
+            item for item in batch_spaces[batches[0]]["fa4"]
+            if item.get("implementation") != "fallback"
+        )
+        command = runner + [
+            args.fa4_python, str(repo / "cpp/neuralnet/fa4_aot/build_aot.py"),
+            "--batch", str(batches[0]),
+            "--device", str(args.device),
+            "--output-dir", str(fa4_active_dir),
+            "--artifact-stem", "active-fa4",
+            "--symbol-prefix", "fa4_search",
+            "--candidate-id", bootstrap["id"],
+            "--bridge-path", str(fa4_bridge),
+            "--tile-m", str(bootstrap["tile_m"]),
+            "--tile-n", str(bootstrap["tile_n"]),
+            "--num-stages", str(bootstrap["num_stages"]),
+        ]
+        run_checked(command, logs / "bootstrap-fa4")
+        args.cmake_arg.extend([
+            f"-DSM120_SEARCH_FA4_SOURCE={fa4_bridge}",
+            f"-DSM120_SEARCH_FA4_OBJECT={fa4_object}",
+        ])
     binary = configure_build(
         repo, build_dir, active, args.jobs, logs, args.cmake_arg,
     )
@@ -245,7 +331,7 @@ def main() -> None:
                 "started_utc": utc_now(),
             }
             try:
-                if implementation == "tilelang":
+                if implementation == "tilelang" and args.family in SLOT_FAMILIES:
                     candidate_dir = generated / f"b{batch}" / candidate_id
                     command = runner + [
                         sys.executable, str(generator),
@@ -266,7 +352,48 @@ def main() -> None:
                         ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
                         logs / f"{prefix}-build",
                     )
-                elif implementation != "fallback":
+                elif implementation == "historical_tilelang" and args.family == "ffn":
+                    candidate_dir = generated / f"b{batch}" / candidate_id
+                    command = runner + [
+                        sys.executable,
+                        str(repo / "python/sm120_historical_ffn/generate.py"),
+                        "--batch", str(batch),
+                        "--space", str(space_path),
+                        "--output-dir", str(candidate_dir),
+                        "--source-path", str(active[args.family]),
+                        "--candidate-id", candidate_id,
+                    ]
+                    run_checked(command, logs / f"{prefix}-generate")
+                    metadata_path = candidate_dir / f"ffn-{candidate_id}.json"
+                    row["generator_metadata"] = json.loads(metadata_path.read_text())
+                    run_checked(
+                        ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
+                        logs / f"{prefix}-build",
+                    )
+                elif args.family == "fa4" and implementation == "fa4_cute":
+                    command = runner + [
+                        args.fa4_python,
+                        str(repo / "cpp/neuralnet/fa4_aot/build_aot.py"),
+                        "--batch", str(batch),
+                        "--device", str(args.device),
+                        "--output-dir", str(fa4_active_dir),
+                        "--artifact-stem", "active-fa4",
+                        "--symbol-prefix", "fa4_search",
+                        "--candidate-id", candidate_id,
+                        "--bridge-path", str(fa4_bridge),
+                        "--tile-m", str(candidate_value["tile_m"]),
+                        "--tile-n", str(candidate_value["tile_n"]),
+                        "--num-stages", str(candidate_value["num_stages"]),
+                    ]
+                    run_checked(command, logs / f"{prefix}-generate")
+                    row["generator_metadata"] = json.loads(
+                        (fa4_active_dir / "active-fa4.json").read_text()
+                    )
+                    run_checked(
+                        ["cmake", "--build", str(build_dir), f"-j{args.jobs}"],
+                        logs / f"{prefix}-build",
+                    )
+                elif args.family != "l2" and implementation != "fallback":
                     row.update({
                         "status": "unsupported_generator",
                         "finished_utc": utc_now(),
@@ -281,7 +408,7 @@ def main() -> None:
                 benchmark_records = []
                 override = full_override(
                     args.family, candidate_value, args.device, args.streams,
-                    args.override_config,
+                    args.override_config, args.isolate_family,
                 )
                 for repeat in range(args.repeats):
                     command = runner + [

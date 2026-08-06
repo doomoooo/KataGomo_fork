@@ -17,6 +17,14 @@ typedef cudaError_t (*WideQKVAotLaunchFn)(
   const half*, const half*, half*, cudaStream_t);
 typedef cudaError_t (*ResidualGemmAotLaunchFn)(
   const half*, const half*, half*, cudaStream_t);
+typedef cudaError_t (*FA4AotLaunchFn)(
+  void*, void*, void*, void*, int, int, int, int, float, cudaStream_t);
+
+struct FA4AotTactic {
+  int batchSize;
+  const char* id;
+  FA4AotLaunchFn launch;
+};
 
 struct FusedFFNAotTactic {
   int batchSize;
@@ -53,6 +61,8 @@ const WideQKVAotTactic* findWideQKVAotTactic(
 const ResidualGemmAotTactic* findResidualGemmAotTactic(
   int batchSize, int gpuClass, int streams, int inputChannels,
   const char* requestedId);
+const FA4AotTactic* findFA4AotTactic(
+  int batchSize, const char* requestedId);
 
 void launchFusedFFNB13(
   const half* input,

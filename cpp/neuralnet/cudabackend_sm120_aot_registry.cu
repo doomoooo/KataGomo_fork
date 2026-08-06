@@ -18,6 +18,10 @@ extern "C" int sm120_search_linear2_batch();
 extern "C" const char* sm120_search_linear2_id();
 extern "C" cudaError_t sm120_search_linear2_launch(
   const half*, const half*, half*, cudaStream_t);
+extern "C" int sm120_search_fa4_batch();
+extern "C" const char* sm120_search_fa4_id();
+extern "C" cudaError_t sm120_search_fa4_launch(
+  void*, void*, void*, void*, int, int, int, int, float, cudaStream_t);
 
 cudaError_t launchFfnCurrent(
   const half* input, const half* linearWeights, const half* gateWeights,
@@ -74,6 +78,8 @@ const WideQKVAotTactic searchQkvTactic = {
 const ResidualGemmAotTactic searchLinear2Tactic = {
   sm120_search_linear2_batch(), SM120_GPU_OTHER, 0, 1152,
   sm120_search_linear2_id(), false, sm120_search_linear2_launch};
+const FA4AotTactic searchFA4Tactic = {
+  sm120_search_fa4_batch(), sm120_search_fa4_id(), sm120_search_fa4_launch};
 
 template<typename T, size_t N>
 const T* findTactic(
@@ -140,6 +146,13 @@ const ResidualGemmAotTactic* findResidualGemmAotTactic(
     }
   }
   return nullptr;
+}
+
+const FA4AotTactic* findFA4AotTactic(
+  int batchSize, const char* requestedId
+) {
+  return requestedId != nullptr && searchFA4Tactic.batchSize == batchSize &&
+    std::strcmp(searchFA4Tactic.id, requestedId) == 0 ? &searchFA4Tactic : nullptr;
 }
 
 } // namespace Sm120Backend

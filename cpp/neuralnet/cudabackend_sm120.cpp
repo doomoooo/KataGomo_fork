@@ -261,6 +261,8 @@ Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm120Backend", true);
   o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm120", true);
+  o.fa4AotTactic = cfg.contains("cudaFlashAttentionAotTacticSm120") ?
+    cfg.getString("cudaFlashAttentionAotTacticSm120") : "builtin-both16";
   if(cfg.contains("cudaFlashAttentionSm120Accum"))
     o.flashAttentionAccum = cfg.getString("cudaFlashAttentionSm120Accum");
   if(o.flashAttentionAccum != "none" && o.flashAttentionAccum != "fp32" &&
@@ -627,11 +629,14 @@ Sm120Model::Sm120Model(
     sm120GpuClass = SM120_GPU_RTX5080;
   else if(std::strstr(deviceProp.name, "RTX 5090 D") != NULL)
     sm120GpuClass = SM120_GPU_RTX5090D;
+  fa4AotByBatch.resize(maxBatchSize + 1, nullptr);
   fusedFFNAotByBatch.resize(maxBatchSize + 1, nullptr);
   wideQKVAotByBatch.resize(maxBatchSize + 1, nullptr);
   linear2AotByBatch.resize(maxBatchSize + 1, nullptr);
   outProjectionAotByBatch.resize(maxBatchSize + 1, nullptr);
   for(int batch = 1; batch <= maxBatchSize; batch++) {
+    fa4AotByBatch[batch] = findFA4AotTactic(
+      batch, options.fa4AotTactic.c_str());
     if(options.useFusedFFN) {
       fusedFFNAotByBatch[batch] = findFusedFFNAotTactic(
         batch, sm120GpuClass, options.persistingL2Streams,
@@ -817,6 +822,22 @@ bool Sm120Model::attention(
   if(numHeads != numKVHeads || qHeadDim != 32 || vHeadDim != 32 || seqLen != 361)
     return false;
   if(batchSize < 1 || batchSize > maxBatchSize)
+    return false;
+
+  const FA4AotTactic* searchTactic = fa4AotByBatch[batchSize];
+  if(searchTactic != nullptr) {
+    float scale = 1.0f / std::sqrt((float)qHeadDim);
+    cudaError_t status = searchTactic->launch(
+      qBuf, kBuf, vBuf, attnOutBuf, batchSize, seqLen, numHeads,
+      qHeadDim, scale, stream);
+    if(status != cudaSuccess)
+      return false;
+    if(!loggedFa4 && logger != NULL)
+      logger->write("SM120 backend: FA4 AOT active, tactic=" + string(searchTactic->id));
+    loggedFa4 = true;
+    return true;
+  }
+  if(options.fa4AotTactic != "builtin-both16")
     return false;
 
   call_once(fa4LoadOnce, []() { fa4_Kernel_Module_Load(&fa4Module); });

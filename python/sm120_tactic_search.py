@@ -2,10 +2,11 @@
 """Low-cost fixed-19x19 SM120 batch/tactic search orchestration.
 
 This tool intentionally keeps whole-graph measurements separate from kernel
-microbenchmarks.  ``grid`` finds the left edge of the throughput plateau for a
-GPU.  ``space`` materializes the small candidate families documented in
-BATCH-GPU-PORTABILITY.md.  Generated AOT kernels and profiler results can then
-refer to the stable candidate keys emitted here.
+microbenchmarks. ``grid`` characterizes the full requested batch range and may
+also report a plateau for deployment analysis. ``space`` always materializes
+the small candidate families for every explicitly requested batch; a plateau
+boundary never prunes the tactic search. Generated AOT kernels and profiler
+results can then refer to the stable candidate keys emitted here.
 """
 
 from __future__ import annotations
@@ -219,36 +220,57 @@ def candidate_space(batch: int) -> dict:
     qkv = [
         candidate("qkv-m128-n128-k64-s2-tilelang-planar", m=128, n=128, k=64, stages=2, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-m128-n128-k32-s3-tilelang-planar", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
-        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-planar", m=128, n=128, k=64, stages=2, threads=128, implementation="cute", copy_atom="4x2", output="planar"),
+        candidate("qkv-m128-n128-k64-s2-cute-atom4x2-packed", m=128, n=128, k=64, stages=2, threads=128, implementation="cute", copy_atom="4x2", output="packed"),
         candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-fallback-three-gemm", implementation="fallback"),
     ]
     linear2 = [
         candidate("linear2-m128-n128-k32-s4-tilelang-64k", m=128, n=128, k=32, stages=4, threads=128, min_blocks=3, implementation="tilelang", dynamic_smem_bytes=65536),
-        candidate("linear2-m128-n128-k32-s3-tilelang-49k", m=128, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", dynamic_smem_bytes=49152),
+        candidate("linear2-m128-n128-k32-s3-mb2-tilelang-49k", m=128, n=128, k=32, stages=3, threads=128, min_blocks=2, implementation="tilelang", dynamic_smem_bytes=49152),
         candidate("linear2-m128-n96-k32-s4-tilelang", m=128, n=96, k=32, stages=4, threads=128, min_blocks=3, implementation="tilelang"),
-        candidate("linear2-m128-n128-k32-s3-cutlass-49k", m=128, n=128, k=32, stages=3, threads=128, implementation="cutlass", dynamic_smem_bytes=49152),
         candidate("linear2-fallback-cublas-beta1", implementation="fallback"),
     ]
     l2 = [
-        candidate("l2-off", trunk=False, inner=False, hit_ratio=0.0, config={"cudaUsePersistingL2Trunk": False, "cudaUsePersistingL2Inner": False}),
-        candidate("l2-trunk-auto", trunk=True, inner=False, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": False, "cudaPersistingL2HitRatioSm120": 1.0}),
-        candidate("l2-trunk-inner-auto", trunk=True, inner=True, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": True, "cudaPersistingL2HitRatioSm120": 1.0}),
-    ]
-    fa4 = [
         candidate(
-            f"fa4-b{batch}-s361-h12-d32-tm128-tn128-s1-both16",
+            "l2-off", trunk=False, inner=False, hit_ratio=0.0,
+            config={
+                "cudaUsePersistingL2Trunk": False,
+                "cudaUsePersistingL2Inner": False,
+            },
+        )
+    ]
+    for inner in (False, True):
+        scope = "trunk-inner" if inner else "trunk"
+        for ratio in (0.5, 0.75, 1.0):
+            ratio_id = str(ratio).replace(".", "p")
+            l2.append(candidate(
+                f"l2-{scope}-ratio-{ratio_id}",
+                trunk=True,
+                inner=inner,
+                hit_ratio=ratio,
+                actual_grant_limited=True,
+                config={
+                    "cudaUsePersistingL2Trunk": True,
+                    "cudaUsePersistingL2Inner": inner,
+                    "cudaPersistingL2HitRatioSm120": ratio,
+                },
+            ))
+    fa4 = []
+    for tile_n in (64, 128):
+        fa4.append(candidate(
+            f"fa4-b{batch}-s361-h12-d32-tm128-tn{tile_n}-s1-both16",
             batch=batch,
             seq_len=361,
             heads=12,
             head_dim=32,
-            tile_n=128,
+            tile_m=128,
+            tile_n=tile_n,
             num_stages=1,
             accumulation="both16",
             exact_shape_aot=True,
-        ),
-        candidate("fa4-official-attention", implementation="fallback"),
-    ]
+            implementation="fa4_cute",
+        ))
+    fa4.append(candidate("fa4-official-attention", implementation="fallback"))
 
     # The previously accepted 5080 implementations are generator families,
     # not B19-only anchors. Materialize them for every requested batch so the
@@ -261,11 +283,7 @@ def candidate_space(batch: int) -> dict:
         "ffn": deduplicate_candidates(ffn),
         "qkv": deduplicate_candidates(qkv),
         "linear2": deduplicate_candidates(linear2),
-        "l2_first_round": l2,
-        "l2_positive_refinement": [
-            candidate(f"l2-refine-ratio-{str(ratio).replace('.', 'p')}", hit_ratio=ratio, actual_grant_limited=True, config={"cudaPersistingL2HitRatioSm120": ratio})
-            for ratio in (0.5, 0.75, 1.0)
-        ],
+        "l2": l2,
     }
 
 
@@ -305,7 +323,7 @@ def entry_applies(entry: dict, gpu_classes: tuple[str, ...], batch: int, streams
 def merge_extra_candidates(space: dict, extras: list[dict], gpu_classes: tuple[str, ...], streams: int) -> None:
     for entry in extras:
         family = entry["family"]
-        if family not in ("ffn", "qkv", "linear2", "l2_first_round", "fa4", "elementwise"):
+        if family not in ("ffn", "qkv", "linear2", "l2", "fa4", "elementwise"):
             raise ValueError(f"unsupported candidate family {family}")
         candidate_value = entry["candidate"]
         if not isinstance(candidate_value, dict) or not candidate_value.get("id"):
@@ -325,7 +343,10 @@ def write_space(args: argparse.Namespace) -> None:
         "gpu_classes": gpu_classes,
         "streams": args.streams,
         "fixed_board": [19, 19],
-        "workflow_gate": "correctness -> S1/NCU -> natural whole-graph S2",
+        "workflow_gate": (
+            "generator correctness + S1 metadata -> natural whole-graph S2 "
+            "for every candidate -> long S2/accuracy/Nsys/NCU for finalists"
+        ),
         "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
         "batch_policy": "only explicitly requested batches; no implicit anchors",
         "batches": [candidate_space(batch) for batch in batches],
@@ -381,8 +402,9 @@ def check_winner(args: argparse.Namespace) -> None:
     if payload.get("schema") != 2:
         raise ValueError("winner checks require a schema-2 generated space")
     batch_space = next((item for item in payload["batches"] if item["batch"] == args.batch), None)
-    family = "l2_first_round" if args.family == "l2" else args.family
-    ids = set() if batch_space is None else {item["id"] for item in batch_space.get(family, [])}
+    ids = set() if batch_space is None else {
+        item["id"] for item in batch_space.get(args.family, [])
+    }
     if args.candidate_id not in ids:
         raise RuntimeError(
             "integration forbidden: profiler winner is outside the materialized "

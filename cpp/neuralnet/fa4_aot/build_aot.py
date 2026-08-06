@@ -15,6 +15,8 @@ after correctness and natural whole-graph S2 validation.
 """
 
 import argparse
+import hashlib
+import json
 import os
 import sys
 
@@ -24,13 +26,22 @@ parser.add_argument("--batch", type=int, required=True)
 parser.add_argument("--device", type=int, required=True)
 parser.add_argument("--output-dir")
 parser.add_argument("--artifact-stem")
+parser.add_argument("--symbol-prefix", default="fa4")
+parser.add_argument("--candidate-id")
+parser.add_argument("--bridge-path")
+parser.add_argument("--tile-m", type=int, default=128)
+parser.add_argument("--tile-n", type=int, default=128)
+parser.add_argument("--num-stages", type=int, default=1)
 args = parser.parse_args()
 if args.batch < 1:
     parser.error("--batch must be positive")
+if args.tile_m <= 0 or args.tile_n <= 0 or args.num_stages <= 0:
+    parser.error("attention tile and stage values must be positive")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.abspath(args.output_dir or HERE)
 ARTIFACT_STEM = args.artifact_stem or f"fa4_sm120_b{args.batch}"
+SYMBOL_PREFIX = args.symbol_prefix
 os.makedirs(OUT_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASH_ATTENTION_ARCH", "sm_120")
@@ -124,9 +135,9 @@ fa_fwd = FlashAttentionForwardSm120(
     is_causal=False,
     is_local=False,
     pack_gqa=False,
-    tile_m=128,
-    tile_n=128,
-    num_stages=1,
+    tile_m=args.tile_m,
+    tile_n=args.tile_n,
+    num_stages=args.num_stages,
     num_threads=128,
     Q_in_regs=False,
     score_mod=None,
@@ -146,9 +157,74 @@ compiled = cute.compile(
     None, AuxData(), None, None, stream,
 )
 
-compiled.export_to_c(OUT_DIR, ARTIFACT_STEM, "fa4")
+compiled.export_to_c(OUT_DIR, ARTIFACT_STEM, SYMBOL_PREFIX)
+
+if args.bridge_path:
+    if not args.candidate_id:
+        parser.error("--bridge-path requires --candidate-id")
+    bridge_path = os.path.abspath(args.bridge_path)
+    if os.path.dirname(bridge_path) != OUT_DIR:
+        raise ValueError("FA4 bridge and generated header must share --output-dir")
+    bridge = f'''#include "{ARTIFACT_STEM}.h"
+
+#include <cmath>
+#include <mutex>
+
+namespace {{
+
+{SYMBOL_PREFIX}_Kernel_Module_t module = {{}};
+std::once_flag loadOnce;
+
+}} // namespace
+
+extern "C" int sm120_search_fa4_batch() {{ return {B}; }}
+extern "C" const char* sm120_search_fa4_id() {{ return {json.dumps(args.candidate_id)}; }}
+extern "C" cudaError_t sm120_search_fa4_launch(
+  void* q, void* k, void* v, void* output,
+  int batch, int seq, int heads, int dim, float scale, cudaStream_t stream
+) {{
+  if(batch != {B} || seq != {S} || heads != {H} || dim != {D})
+    return cudaErrorInvalidValue;
+  std::call_once(loadOnce, []() {{ {SYMBOL_PREFIX}_Kernel_Module_Load(&module); }});
+  {SYMBOL_PREFIX}_Tensor_mQ_t tq = {{q, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
+  {SYMBOL_PREFIX}_Tensor_mK_t tk = {{k, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
+  {SYMBOL_PREFIX}_Tensor_mV_t tv = {{v, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
+  {SYMBOL_PREFIX}_Tensor_mO_t to = {{output, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
+  int32_t status = cute_dsl_{SYMBOL_PREFIX}_wrapper(
+    &module, &tq, &tk, &tv, &to, scale, stream);
+  return status == 0 ? cudaPeekAtLastError() : cudaErrorUnknown;
+}}
+'''
+    with open(bridge_path, "w", encoding="utf-8") as bridge_file:
+        bridge_file.write(bridge)
+
+    artifacts = {}
+    for suffix in (".h", ".o"):
+        path = os.path.join(OUT_DIR, ARTIFACT_STEM + suffix)
+        with open(path, "rb") as artifact_file:
+            artifacts[suffix] = hashlib.sha256(artifact_file.read()).hexdigest()
+    artifacts["bridge"] = hashlib.sha256(bridge.encode()).hexdigest()
+    with open(os.path.join(OUT_DIR, ARTIFACT_STEM + ".json"), "w") as metadata_file:
+        json.dump({
+            "schema": 1,
+            "candidate_id": args.candidate_id,
+            "batch": B,
+            "fixed_shape": {"sequence": S, "heads": H, "head_dim": D},
+            "accumulation": {"qk": QK_ACC, "pv": PV_ACC},
+            "tile": {
+                "m": args.tile_m,
+                "n": args.tile_n,
+                "num_stages": args.num_stages,
+            },
+            "artifact_stem": ARTIFACT_STEM,
+            "symbol_prefix": SYMBOL_PREFIX,
+            "sha256": artifacts,
+            "acceptance_metric": "natural whole-graph S2 total throughput",
+        }, metadata_file, indent=2)
+        metadata_file.write("\n")
 print(
     f"AOT export OK (B={B}, QK_ACC={QK_ACC}, PV_ACC={PV_ACC}, "
+    f"tile={args.tile_m}x{args.tile_n}/S{args.num_stages}, "
     "fixed full-board S361, no mask) ->",
     OUT_DIR,
 )

@@ -35,6 +35,7 @@ namespace Sm120Backend {
 struct FusedFFNAotTactic;
 struct WideQKVAotTactic;
 struct ResidualGemmAotTactic;
+struct FA4AotTactic;
 
 // Trampoline for the official backend apply(). cudabackend.cpp supplies it so Sm120Model never
 // needs the internal Model type; ctx is the official Model pointer.
@@ -230,6 +231,7 @@ struct Options {
   // Historical optimization switches, defaults = final accepted values from the 5080 history.
   bool useFlashAttention = true;
   std::string flashAttentionAccum = "both16"; // "none","fp32","qk16","pv16","both16"
+  std::string fa4AotTactic = "builtin-both16";
   bool useWideQKV = true;
   bool useWideQKVSingleStreamSchedule = false;
   bool useQKVStrided = false;
@@ -680,6 +682,7 @@ class Sm120Model {
   float persistingL2TrunkHitRatio;
   float persistingL2InnerHitRatio;
   std::vector<const FusedFFNAotTactic*> fusedFFNAotByBatch;
+  std::vector<const FA4AotTactic*> fa4AotByBatch;
   std::vector<const WideQKVAotTactic*> wideQKVAotByBatch;
   std::vector<const ResidualGemmAotTactic*> linear2AotByBatch;
   std::vector<const ResidualGemmAotTactic*> outProjectionAotByBatch;
