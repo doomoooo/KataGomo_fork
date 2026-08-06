@@ -94,7 +94,10 @@ def utc_now() -> str:
 
 
 def override_for(device: int, streams: int, extra: str) -> str:
-    values = [f"numNNServerThreadsPerModel={streams}"]
+    values = [
+        f"numNNServerThreadsPerModel={streams}",
+        f"cudaPersistingL2StreamsSm120={streams}",
+    ]
     for stream in range(streams):
         values.append(f"cudaDeviceToUseThread{stream}={device}")
     if extra.strip():
@@ -262,9 +265,9 @@ def candidate_space(batch: int, gpu_classes: tuple[str, ...]) -> dict:
         candidate("linear2-m128-n96-k32-s4-tilelang", m=128, n=96, k=32, stages=4, implementation="tilelang"),
     ]
     l2 = [
-        candidate("l2-off", trunk=False, inner=False, hit_ratio=0.0),
-        candidate("l2-trunk-auto", trunk=True, inner=False, hit_ratio="auto"),
-        candidate("l2-trunk-inner-auto", trunk=True, inner=True, hit_ratio="auto"),
+        candidate("l2-off", trunk=False, inner=False, hit_ratio=0.0, config={"cudaUsePersistingL2Trunk": False, "cudaUsePersistingL2Inner": False}),
+        candidate("l2-trunk-auto", trunk=True, inner=False, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": False, "cudaPersistingL2HitRatioSm120": 1.0}),
+        candidate("l2-trunk-inner-auto", trunk=True, inner=True, hit_ratio=1.0, actual_grant_limited=True, config={"cudaUsePersistingL2Trunk": True, "cudaUsePersistingL2Inner": True, "cudaPersistingL2HitRatioSm120": 1.0}),
     ]
 
     # Exact historical implementations remain candidates at their anchor key.
@@ -282,7 +285,10 @@ def candidate_space(batch: int, gpu_classes: tuple[str, ...]) -> dict:
         "qkv": deduplicate_candidates(qkv),
         "linear2": deduplicate_candidates(linear2),
         "l2_first_round": l2,
-        "l2_positive_refinement_hit_ratios": [0.5, 0.75, 1.0],
+        "l2_positive_refinement": [
+            candidate(f"l2-refine-ratio-{str(ratio).replace('.', 'p')}", hit_ratio=ratio, actual_grant_limited=True, config={"cudaPersistingL2HitRatioSm120": ratio})
+            for ratio in (0.5, 0.75, 1.0)
+        ],
     }
 
 

@@ -296,6 +296,10 @@ Options parseOptions(ConfigParser& cfg) {
   o.useGraph = getBoolOpt(cfg, "cudaUseGraph", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
+  o.persistingL2Streams = cfg.contains("cudaPersistingL2StreamsSm120") ?
+    cfg.getInt("cudaPersistingL2StreamsSm120", 1, 16) : 2;
+  o.persistingL2HitRatio = cfg.contains("cudaPersistingL2HitRatioSm120") ?
+    cfg.getDouble("cudaPersistingL2HitRatioSm120", 0.0, 1.0) : 1.0;
   o.useOuterProjectionAot = getBoolOpt(cfg, "cudaUseOuterProjectionAot", true);
   o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", true);
   o.shareWideQKVWeights = getBoolOpt(cfg, "cudaShareWideQKVWeights", false);
@@ -599,7 +603,7 @@ Sm120Model::Sm120Model(
     throw StringError("Sm120Model: null construction argument");
   if(options.useProjectionGemmLt)
     ltMatmulState = make_unique<LtMatmulState>();
-  if(options.usePersistingL2Trunk && maxBatchSize == 13 && nnXLen == 19 && nnYLen == 19 &&
+  if(options.usePersistingL2Trunk && nnXLen == 19 && nnYLen == 19 &&
      useFP16 && useNHWC && desc->trunk.trunkNumChannels == 768) {
     int device = 0;
     int maxPersistingBytes = 0;
@@ -618,7 +622,7 @@ Sm120Model::Sm120Model(
     }
     const size_t windowsPerStream =
       persistingL2TrunkWindowBytes + persistingL2InnerWindowBytes;
-    const size_t totalWindowBytes = 2 * windowsPerStream;
+    const size_t totalWindowBytes = (size_t)options.persistingL2Streams * windowsPerStream;
     if(persistingL2TrunkWindowBytes <= (size_t)maxWindowBytes &&
        persistingL2InnerWindowBytes <= (size_t)maxWindowBytes &&
        maxPersistingBytes > 0) {
@@ -627,8 +631,10 @@ Sm120Model::Sm120Model(
         cudaLimitPersistingL2CacheSize, persistingL2RequestedBytes));
       CUDA_ERR("Sm120PersistingL2", cudaDeviceGetLimit(
         &persistingL2ActualBytes, cudaLimitPersistingL2CacheSize));
-      persistingL2TrunkHitRatio = std::min(
+      const float grantedHitRatio = std::min(
         1.0f, (float)((double)persistingL2ActualBytes / (double)totalWindowBytes));
+      persistingL2TrunkHitRatio = std::min(
+        (float)options.persistingL2HitRatio, grantedHitRatio);
       persistingL2TrunkActive = persistingL2TrunkHitRatio > 0.0f;
       if(persistingL2InnerWindowBytes > 0) {
         persistingL2InnerHitRatio = persistingL2TrunkHitRatio;

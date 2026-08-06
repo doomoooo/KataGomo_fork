@@ -255,6 +255,8 @@ struct Options {
   bool useGraph = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
+  int persistingL2Streams = 2;
+  double persistingL2HitRatio = 1.0;
   bool useOuterProjectionAot = true;
   bool shareModelWeights = true;
   bool shareWideQKVWeights = false;
