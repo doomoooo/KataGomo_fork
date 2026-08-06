@@ -468,6 +468,9 @@ def main() -> None:
     stages = int(candidate_value["stages"])
     weight_count = 2 if args.family == "ffn" else 1
     dynamic_smem = (block_m * block_k + weight_count * block_k * block_n) * 2 * stages
+    output_columns = 1152 if args.family in ("ffn", "qkv") else 384
+    grid_x = (output_columns + block_n - 1) // block_n
+    grid_y = (m + block_m - 1) // block_m
     source = append_wrapper(
         source, args.family, candidate_value, args.batch, dynamic_smem,
         args.fat_symbol_token,
@@ -495,6 +498,11 @@ def main() -> None:
         "source": str(source_path.resolve()),
         "source_sha256": hashlib.sha256(source.encode("ascii")).hexdigest(),
         "dynamic_smem_bytes": dynamic_smem,
+        "launch": {
+            "grid": [grid_x, grid_y, 1],
+            "block": [int(candidate_value.get("threads", 128)), 1, 1],
+            "cta_count": grid_x * grid_y,
+        },
         "fat_symbol_token": args.fat_symbol_token,
         "launch_symbol": (
             fat_launch_symbol(args.family, args.fat_symbol_token)

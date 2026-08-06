@@ -110,6 +110,7 @@ def initialize_active_slots(
         stub = repo / "cpp/neuralnet/tilelang_aot" / f"sm120_search_{family}_stub.cu"
         if (
             force_all_stubs
+            or family == target_family
             or not target.exists()
             or (family != target_family and not keep_other_slots)
             or target.read_text().startswith(
