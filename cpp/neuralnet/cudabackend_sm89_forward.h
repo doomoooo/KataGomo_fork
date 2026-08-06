@@ -73,6 +73,7 @@ class Sm89Forward {
     bool usePreConvGemm,
     bool usePostConvGemm,
     bool usePostConvBNSilu,
+    bool useLinear2PostBNSilu,
     bool usePersistingL2Trunk,
     float persistingL2TrunkHitRatio,
     bool usePersistingL2Inner,

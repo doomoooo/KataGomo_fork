@@ -1320,13 +1320,28 @@ struct Sm89FFNBlock {
 #endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
   std::unique_ptr<Sm89Backend::Sm89Linear2GemmB13> linear2Gemm;
+  std::unique_ptr<Sm89Backend::Sm89Linear2BnGemmB13> linear2PostBnGemm;
 #endif
 
   Sm89FFNBlock() = delete;
   Sm89FFNBlock(const Sm89FFNBlock&) = delete;
   Sm89FFNBlock& operator=(const Sm89FFNBlock&) = delete;
 
-  Sm89FFNBlock(const TransformerFFNDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideFFN, bool useFusedResidual_, bool useRMSNormOpt_, bool useDualGemmSwiGLU_, bool useLinear2Gemm_, bool shareModelWeights_)
+  Sm89FFNBlock(
+    const TransformerFFNDesc* desc,
+    int nnX,
+    int nnY,
+    bool useFP16,
+    bool useNHWC,
+    bool useWideFFN,
+    bool useFusedResidual_,
+    bool useRMSNormOpt_,
+    bool useDualGemmSwiGLU_,
+    bool useLinear2Gemm_,
+    bool useLinear2PostBNSilu_,
+    const Sm89BatchNorm* followingBN,
+    bool shareModelWeights_
+  )
     : name(desc->name),
       numChannels(desc->numChannels),
       ffnChannels(desc->ffnChannels),
@@ -1349,6 +1364,7 @@ struct Sm89FFNBlock {
 #endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
       , linear2Gemm(nullptr)
+      , linear2PostBnGemm(nullptr)
 #endif
   {
     if(!desc->useSwiGLU)
@@ -1371,8 +1387,25 @@ struct Sm89FFNBlock {
 #endif
     }
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-    if(useLinear2Gemm && useFP16 && useFusedResidual_)
+    if(useLinear2Gemm && useFP16 && useFusedResidual_) {
       linear2Gemm = std::make_unique<Sm89Backend::Sm89Linear2GemmB13>((const half*)linear2.matBuf);
+      if(
+        useLinear2PostBNSilu_ && followingBN != nullptr &&
+        followingBN->usingFP16 && followingBN->usingNHWC &&
+        followingBN->numChannels == numChannels &&
+        followingBN->activation == ACTIVATION_SILU &&
+        followingBN->mergedScaleBuf != nullptr && followingBN->mergedBiasBuf != nullptr
+      ) {
+        linear2PostBnGemm = std::make_unique<Sm89Backend::Sm89Linear2BnGemmB13>(
+          (const half*)linear2.matBuf,
+          (const half*)followingBN->mergedScaleBuf,
+          (const half*)followingBN->mergedBiasBuf
+        );
+      }
+    }
+#else
+    (void)useLinear2PostBNSilu_;
+    (void)followingBN;
 #endif
   }
 
@@ -1381,7 +1414,7 @@ struct Sm89FFNBlock {
       cudaFree(ffnWeightsBuf);
   }
 
-  void apply(
+  bool apply(
     Sm89Ctx* ctx,
     Sm89Scratch* scratch,
     int batchSize,
@@ -1434,9 +1467,18 @@ struct Sm89FFNBlock {
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
 
-    bool usedLinear2Gemm = false;
+    bool usedLinear2PostBN = false;
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-    if(linear2Gemm != nullptr && usingFP16) {
+    if(linear2PostBnGemm != nullptr && usingFP16 && maskBuf == NULL) {
+      usedLinear2PostBN = linear2PostBnGemm->applyAccumulateAndActivate(
+        (const half*)ffnBuf, (half*)trunkBuf, (half*)trunkScratchBuf,
+        batchSize, seqLen, ffnChannels, numChannels, ctx->stream
+      );
+    }
+#endif
+    bool usedLinear2Gemm = usedLinear2PostBN;
+#ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
+    if(!usedLinear2PostBN && linear2Gemm != nullptr && usingFP16) {
       usedLinear2Gemm = linear2Gemm->applyAccumulate(
         (const half*)ffnBuf, (half*)trunkBuf,
         batchSize, seqLen, ffnChannels, numChannels, ctx->stream
@@ -1457,6 +1499,7 @@ struct Sm89FFNBlock {
         customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+    return usedLinear2PostBN;
   }
 };
 
@@ -1480,7 +1523,7 @@ struct Sm89NestedBlock {
   const Sm89Conv preConv;
   const Sm89BatchNorm postBN;
   const Sm89Conv postConv;
-  vector<std::function<void(Sm89Ctx*, Sm89Scratch*, int, void*, void*, void*, void*, size_t)>> innerBlocks;
+  vector<std::function<bool(Sm89Ctx*, Sm89Scratch*, int, void*, void*, void*, void*, size_t)>> innerBlocks;
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
   std::unique_ptr<Sm89Backend::Sm89PreConvGemmB13> preConvGemm;
 #endif
@@ -1515,6 +1558,7 @@ struct Sm89NestedBlock {
     bool useOutProjGemm_,
     bool usePreConvGemm_,
     bool usePostConvGemm_,
+    bool useLinear2PostBNSilu_,
     bool usePersistingL2Trunk_,
     float persistingL2TrunkHitRatio_,
     bool usePersistingL2Inner_,
@@ -1567,18 +1611,20 @@ struct Sm89NestedBlock {
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf, workspaceBuf, workspaceBytes);
+          return false;
         });
       }
       else if(kind == TRANSFORMER_FFN_BLOCK_KIND) {
         auto block = std::make_shared<Sm89FFNBlock>(
           (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16,
           useNHWC, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useDualGemmSwiGLU_,
-          useLinear2Gemm_, shareModelWeights_
+          useLinear2Gemm_, useLinear2PostBNSilu_ && i + 1 == desc->blocks.size(),
+          &postBN, shareModelWeights_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
           (void)workspaceBuf;
           (void)workspaceBytes;
-          block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf);
+          return block->apply(ctx, scratch, batchSize, trunkBuf, trunkScratchBuf, maskBuf);
         });
       }
       else {
@@ -1643,10 +1689,15 @@ struct Sm89NestedBlock {
     if(!usedPreConvGemm)
       preConv.apply(ctx, batchSize, false, trunkScratchBuf, mid.buf, workspaceBuf, workspaceBytes);
 
+    bool postBNReady = false;
     for(const auto& fn : innerBlocks)
-      fn(ctx, scratch, batchSize, mid.buf, midScratch.buf, maskBuf, workspaceBuf, workspaceBytes);
+      postBNReady = fn(
+        ctx, scratch, batchSize, mid.buf, midScratch.buf,
+        maskBuf, workspaceBuf, workspaceBytes
+      );
 
-    postBN.apply(batchSize, mid.buf, maskBuf, midScratch.buf);
+    if(!postBNReady)
+      postBN.apply(batchSize, mid.buf, maskBuf, midScratch.buf);
     if(usePersistingL2Inner) {
       if(usePersistingL2Trunk) {
         const size_t trunkBytes = scratch->getBufSizeXY(
@@ -1728,6 +1779,7 @@ struct Sm89Trunk {
     bool usePreConvGemm_,
     bool usePostConvGemm_,
     bool usePostConvBNSilu_,
+    bool useLinear2PostBNSilu_,
     bool usePersistingL2Trunk_,
     float persistingL2TrunkHitRatio_,
     bool usePersistingL2Inner_,
@@ -1766,7 +1818,8 @@ struct Sm89Trunk {
         useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_, usePrecomputedQKRoPE_,
         useQKVRoPEGemm_, ropeBatchGroup_, useFlashAttention_,
         useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
-        usePostConvGemm_, usePersistingL2Trunk_, persistingL2TrunkHitRatio_,
+        usePostConvGemm_, useLinear2PostBNSilu_, usePersistingL2Trunk_,
+        persistingL2TrunkHitRatio_,
         usePersistingL2Inner_, persistingL2InnerHitRatio_, useScaleBiasSiluVec8_,
         useScaleBiasSiluVec4C384_,
         shareModelWeights_
@@ -2350,6 +2403,7 @@ struct Sm89Forward::Impl {
   const bool usePreConvGemm;
   const bool usePostConvGemm;
   const bool usePostConvBNSilu;
+  const bool useLinear2PostBNSilu;
   const bool usePersistingL2Trunk;
   const float persistingL2TrunkHitRatio;
   const bool usePersistingL2Inner;
@@ -2396,6 +2450,7 @@ struct Sm89Forward::Impl {
     bool usePreConvGemm_,
     bool usePostConvGemm_,
     bool usePostConvBNSilu_,
+    bool useLinear2PostBNSilu_,
     bool usePersistingL2Trunk_,
     float persistingL2TrunkHitRatio_,
     bool usePersistingL2Inner_,
@@ -2433,6 +2488,7 @@ struct Sm89Forward::Impl {
       usePreConvGemm(usePreConvGemm_),
       usePostConvGemm(usePostConvGemm_),
       usePostConvBNSilu(usePostConvBNSilu_),
+      useLinear2PostBNSilu(useLinear2PostBNSilu_),
       usePersistingL2Trunk(usePersistingL2Trunk_),
       persistingL2TrunkHitRatio(persistingL2TrunkHitRatio_),
       usePersistingL2Inner(usePersistingL2Inner_),
@@ -2456,6 +2512,7 @@ struct Sm89Forward::Impl {
         usePrecomputedQKRoPE_, useQKVRoPEGemm_, ropeBatchGroup_,
         useFlashAttention_, useDualGemmSwiGLU_, useLinear2Gemm_, useOutProjGemm_,
         usePreConvGemm_, usePostConvGemm_, usePostConvBNSilu_,
+        useLinear2PostBNSilu_,
         usePersistingL2Trunk_,
         persistingL2TrunkHitRatio_, usePersistingL2Inner_,
         persistingL2InnerHitRatio_, useScaleBiasSiluVec8_,
@@ -2609,6 +2666,7 @@ Sm89Forward::Sm89Forward(
   bool usePreConvGemm,
   bool usePostConvGemm,
   bool usePostConvBNSilu,
+  bool useLinear2PostBNSilu,
   bool usePersistingL2Trunk,
   float persistingL2TrunkHitRatio,
   bool usePersistingL2Inner,
@@ -2630,6 +2688,7 @@ Sm89Forward::Sm89Forward(
       ropeBatchGroup, useFlashAttention,
       useDualGemmSwiGLU, useLinear2Gemm,
       useOutProjGemm, usePreConvGemm, usePostConvGemm, usePostConvBNSilu,
+      useLinear2PostBNSilu,
       usePersistingL2Trunk,
       persistingL2TrunkHitRatio, usePersistingL2Inner,
       persistingL2InnerHitRatio, useScaleBiasSiluVec8,

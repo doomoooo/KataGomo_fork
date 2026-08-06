@@ -91,8 +91,8 @@ using DefaultPostConvEpilogue = typename DefaultPostConvKernel::Epilogue;
 using DefaultPostConvIterator = typename DefaultPostConvEpilogue::OutputTileIterator;
 using PostConvSwizzle = typename DefaultPostConvKernel::ThreadblockSwizzle;
 
-template<typename BaseIterator>
-class PostConvBnOutputTileIterator : public BaseIterator {
+template<typename BaseIterator, int OutputChannels>
+class ResidualBnOutputTileIterator : public BaseIterator {
  public:
   using Base = BaseIterator;
   using ThreadMap = typename Base::ThreadMap;
@@ -132,7 +132,7 @@ class PostConvBnOutputTileIterator : public BaseIterator {
 
  public:
   CUTLASS_DEVICE
-  PostConvBnOutputTileIterator(
+  ResidualBnOutputTileIterator(
     Params const& params,
     Element* pointer,
     TensorCoord extent,
@@ -166,7 +166,7 @@ class PostConvBnOutputTileIterator : public BaseIterator {
           CUTLASS_PRAGMA_UNROLL
           for(int column = 0; column < ThreadMap::Iterations::kColumn; column++) {
             int outputColumn = startColumn + column * ThreadMap::Delta::kColumn;
-            if(outputColumn < PostConvOutChannels) {
+            if(outputColumn < OutputChannels) {
               AccessType& access = accesses[
                 fragmentRow * ThreadMap::Iterations::kColumn + column
               ];
@@ -196,14 +196,15 @@ class PostConvBnOutputTileIterator : public BaseIterator {
   }
 
   CUTLASS_HOST_DEVICE
-  PostConvBnOutputTileIterator& operator++() {
+  ResidualBnOutputTileIterator& operator++() {
     Base::operator++();
     ++activatedIterator;
     return *this;
   }
 };
 
-using PostConvBnIterator = PostConvBnOutputTileIterator<DefaultPostConvIterator>;
+using PostConvBnIterator = ResidualBnOutputTileIterator<
+  DefaultPostConvIterator, PostConvOutChannels>;
 using PostConvBnEpilogue = cutlass::epilogue::threadblock::Epilogue<
   typename DefaultPostConvEpilogue::Shape,
   typename DefaultPostConvEpilogue::WarpMmaOperator,
@@ -217,6 +218,26 @@ using PostConvBnEpilogue = cutlass::epilogue::threadblock::Epilogue<
   DefaultPostConvEpilogue::Base::kFragmentsPerIteration>;
 using PostConvBnKernel = cutlass::gemm::kernel::Gemm<
   PostConvMma, PostConvBnEpilogue, PostConvSwizzle, false>;
+
+using DefaultLinear2Kernel = typename Gemm::GemmKernel;
+using Linear2Mma = typename DefaultLinear2Kernel::Mma;
+using DefaultLinear2Epilogue = typename DefaultLinear2Kernel::Epilogue;
+using DefaultLinear2Iterator = typename DefaultLinear2Epilogue::OutputTileIterator;
+using Linear2Swizzle = typename DefaultLinear2Kernel::ThreadblockSwizzle;
+using Linear2BnIterator = ResidualBnOutputTileIterator<DefaultLinear2Iterator, OutChannels>;
+using Linear2BnEpilogue = cutlass::epilogue::threadblock::Epilogue<
+  typename DefaultLinear2Epilogue::Shape,
+  typename DefaultLinear2Epilogue::WarpMmaOperator,
+  DefaultLinear2Epilogue::kPartitionsK,
+  Linear2BnIterator,
+  typename DefaultLinear2Epilogue::AccumulatorFragmentIterator,
+  typename DefaultLinear2Epilogue::WarpTileIterator,
+  typename DefaultLinear2Epilogue::SharedLoadIterator,
+  typename DefaultLinear2Epilogue::OutputOp,
+  typename DefaultLinear2Epilogue::Padding,
+  DefaultLinear2Epilogue::Base::kFragmentsPerIteration>;
+using Linear2BnKernel = cutlass::gemm::kernel::Gemm<
+  Linear2Mma, Linear2BnEpilogue, Linear2Swizzle, false>;
 
 Gemm::Arguments makeArguments(
   const half* weights,
@@ -286,6 +307,94 @@ bool Sm89Linear2GemmB13::applyAccumulate(
      outChannels != OutChannels || input == nullptr || output == nullptr)
     return false;
   return impl->applyAccumulate(input, output, stream);
+}
+
+struct Sm89Linear2BnGemmB13::Impl {
+  typename Linear2BnKernel::Params params;
+  bool initialized;
+
+  Impl(const half* weights, const half* bnScale, const half* bnBias)
+    : initialized(true)
+  {
+    cutlass::gemm::GemmCoord problem(Tokens, OutChannels, InChannels);
+    cutlass::gemm::GemmCoord gridShape = Linear2Swizzle::get_tiled_shape(
+      problem,
+      {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
+      1
+    );
+    using Layout = cutlass::layout::RowMajor;
+    Layout inputLayout(InChannels);
+    Layout outputLayout(OutChannels);
+    typename Linear2Mma::IteratorA::TensorRef nullInput(nullptr, inputLayout);
+    typename Linear2Mma::IteratorB::TensorRef weightRef(
+      reinterpret_cast<Element*>(const_cast<half*>(weights)), Layout(OutChannels)
+    );
+    typename Linear2BnIterator::TensorRef nullOutput(nullptr, outputLayout);
+    params = typename Linear2BnKernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      weightRef,
+      nullOutput,
+      nullOutput,
+      typename Epilogue::Params(1.0f, 1.0f)
+    );
+    params.params_D.scale = reinterpret_cast<const Element*>(bnScale);
+    params.params_D.bias = reinterpret_cast<const Element*>(bnBias);
+
+    int smemSize = int(sizeof(typename Linear2BnKernel::SharedStorage));
+    if(smemSize >= 48 * 1024)
+      initialized = cudaFuncSetAttribute(
+        cutlass::Kernel<Linear2BnKernel>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smemSize
+      ) == cudaSuccess;
+  }
+
+  bool apply(
+    const half* input,
+    half* residualOutput,
+    half* activatedOutput,
+    cudaStream_t stream
+  ) {
+    if(!initialized)
+      return false;
+    params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
+    params.ref_C.reset(reinterpret_cast<Element*>(residualOutput));
+    params.ref_D.reset(reinterpret_cast<Element*>(residualOutput));
+    params.params_D.activatedOutput = reinterpret_cast<Element*>(activatedOutput);
+    dim3 grid = Linear2Swizzle::get_grid_shape(params.grid_tiled_shape);
+    dim3 block(Linear2BnKernel::kThreadCount, 1, 1);
+    int smemSize = int(sizeof(typename Linear2BnKernel::SharedStorage));
+    cutlass::Kernel<Linear2BnKernel><<<grid, block, smemSize, stream>>>(params);
+    return cudaPeekAtLastError() == cudaSuccess;
+  }
+};
+
+Sm89Linear2BnGemmB13::Sm89Linear2BnGemmB13(
+  const half* weights,
+  const half* bnScale,
+  const half* bnBias
+) : impl(std::make_unique<Impl>(weights, bnScale, bnBias))
+{}
+
+Sm89Linear2BnGemmB13::~Sm89Linear2BnGemmB13() = default;
+
+bool Sm89Linear2BnGemmB13::applyAccumulateAndActivate(
+  const half* input,
+  half* residualOutput,
+  half* activatedOutput,
+  int batchSize,
+  int seqLen,
+  int inChannels,
+  int outChannels,
+  cudaStream_t stream
+) {
+  if(batchSize != B || seqLen != S || inChannels != InChannels ||
+     outChannels != OutChannels || input == nullptr || residualOutput == nullptr ||
+     activatedOutput == nullptr)
+    return false;
+  return impl->apply(input, residualOutput, activatedOutput, stream);
 }
 
 struct Sm89OutProjGemmB13::Impl {

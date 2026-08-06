@@ -85,6 +85,7 @@ Options parseOptions(ConfigParser& cfg) {
   o.usePreConvGemm = getBoolOpt(cfg, "cudaUsePreConvGemmSm89", false);
   o.usePostConvGemm = getBoolOpt(cfg, "cudaUsePostConvGemmSm89", false);
   o.usePostConvBNSilu = getBoolOpt(cfg, "cudaUsePostConvBNSiluSm89", false);
+  o.useLinear2PostBNSilu = getBoolOpt(cfg, "cudaUseLinear2PostBNSiluSm89", false);
   o.useBatchSharedRoPE = getBoolOpt(cfg, "cudaUseBatchSharedRoPE", false);
   o.useFusedFFN = getBoolOpt(cfg, "cudaUseFusedFFN", false);
   o.useInitialConvFrontend = getBoolOpt(cfg, "cudaUseInitialConvFrontend", false);
@@ -149,6 +150,7 @@ Sm89Model::Sm89Model(
       options.useDualGemmSwiGLU,
       options.useLinear2Gemm, options.useOutProjGemm, options.usePreConvGemm,
       options.usePostConvGemm, options.usePostConvBNSilu,
+      options.useLinear2PostBNSilu,
       options.usePersistingL2Trunk,
       persistingL2.trunkHitRatio, options.usePersistingL2Inner,
       persistingL2.innerHitRatio, options.useScaleBiasSiluVec8,

@@ -72,6 +72,7 @@ struct Options {
   bool usePreConvGemm = false;
   bool usePostConvGemm = false;
   bool usePostConvBNSilu = false;
+  bool useLinear2PostBNSilu = false;
   bool useBatchSharedRoPE = false;
   bool useFusedFFN = false;
   bool useInitialConvFrontend = false;

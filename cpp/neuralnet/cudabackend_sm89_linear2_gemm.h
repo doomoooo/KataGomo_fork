@@ -29,6 +29,33 @@ class Sm89Linear2GemmB13 {
   struct Impl;
   std::unique_ptr<Impl> impl;
 };
+
+class Sm89Linear2BnGemmB13 {
+ public:
+  Sm89Linear2BnGemmB13(
+    const half* weights,
+    const half* bnScale,
+    const half* bnBias
+  );
+  ~Sm89Linear2BnGemmB13();
+  Sm89Linear2BnGemmB13(const Sm89Linear2BnGemmB13&) = delete;
+  Sm89Linear2BnGemmB13& operator=(const Sm89Linear2BnGemmB13&) = delete;
+
+  bool applyAccumulateAndActivate(
+    const half* input,
+    half* residualOutput,
+    half* activatedOutput,
+    int batchSize,
+    int seqLen,
+    int inChannels,
+    int outChannels,
+    cudaStream_t stream
+  );
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl;
+};
 #endif
 
 #ifdef KATAGO_ENABLE_SM89_OUTPROJ_GEMM
