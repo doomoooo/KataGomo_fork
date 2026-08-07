@@ -2,6 +2,13 @@
 #include "../neuralnet/modelversion.h"
 #include "../core/test.h"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <exception>
+#include <mutex>
+#include <thread>
+
 using namespace std;
 
 //-------------------------------------------------------------------------------------
@@ -432,6 +439,188 @@ void NNEvaluator::killServerThreads() {
   testAssert(numOngoingEvals == 0);
   testAssert(numWaitingEvals == 0);
   testAssert(numEvalsToAwaken == 0);
+}
+
+NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(
+  int numWarmups, int numIterations, int phaseOffsetMicros
+) {
+  if(numIterations <= 0)
+    throw StringError("benchmarknn requires numIterations > 0");
+  if(numWarmups < 0)
+    throw StringError("benchmarknn requires numWarmups >= 0");
+  if(phaseOffsetMicros < -1)
+    throw StringError("benchmarknn phase offset must be -1 or nonnegative");
+  if(debugSkipNeuralNet || loadedModel == NULL || computeContext == NULL)
+    throw StringError("benchmarknn requires a real neural net model");
+
+  const int numServerThreads = (int)gpuIdxByServerThread.size();
+  const int batchSize = maxBatchSize;
+  if(numServerThreads <= 0 || batchSize <= 0)
+    throw StringError("benchmarknn: invalid server/batch topology");
+
+  NNEvalBenchmarkResult result;
+  result.batchSize = batchSize;
+  result.numServerThreads = numServerThreads;
+  result.numIterations = numIterations;
+  result.phaseOffsetMicros = phaseOffsetMicros;
+  result.perServerIterationSeconds.assign(numServerThreads, {});
+  result.perServerMedianSeconds.assign(numServerThreads, 0.0);
+  result.perServerNNEvalsPerSec.assign(numServerThreads, 0.0);
+  result.combinedWallSeconds = 0.0;
+  result.combinedNNEvalsPerSec = 0.0;
+  result.actualWallSeconds = 0.0;
+  result.actualWallPerForwardMs = 0.0;
+
+  std::exception_ptr firstError;
+  std::mutex errorMutex;
+  std::atomic<bool> anyError(false);
+
+  std::atomic<int> readyCount(0);
+  std::atomic<bool> startFlag(false);
+  std::unique_ptr<BenchmarkForwardBarrier> phaseBarrier;
+  if(phaseOffsetMicros >= 0)
+    phaseBarrier = std::make_unique<BenchmarkForwardBarrier>(numServerThreads);
+  std::chrono::steady_clock::time_point wallStart;
+  std::chrono::steady_clock::time_point wallEnd;
+
+  std::vector<std::thread> threads;
+  threads.reserve(numServerThreads);
+  for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
+    threads.emplace_back([&, threadIdx]() {
+      try {
+        // Mirror NNEvaluator::serve: one compute handle + input buffers per configured NN server
+        // thread, each with its own per-thread default CUDA stream.
+        NNServerBuf serverBuf(*this, loadedModel);
+        ComputeHandle* handle = NULL;
+        try {
+          handle = NeuralNet::createComputeHandle(
+            computeContext,
+            loadedModel,
+            logger,
+            maxBatchSize,
+            requireExactNNLen,
+            inputsUseNHWC,
+            gpuIdxByServerThread[threadIdx],
+            threadIdx
+          );
+          maybeWarmupComputeHandle(handle, threadIdx);
+
+          // Fill all rows with a fixed empty board so every iteration runs the same real inputs.
+          Board board(nnXLen, nnYLen);
+          BoardHistory history(
+            board, P_BLACK, Rules::getTrompTaylorish(), 0,
+            modelPreferPassAliveUnderSuicideRules()
+          );
+          MiscNNInputParams nnInputParams;
+          SGFMetadata sgfMeta;
+          const SGFMetadata* sgfMetaPtr = NULL;
+          if(numInputMetaChannels > 0) {
+            sgfMeta = SGFMetadata::makeDummyWarmupProfile();
+            sgfMetaPtr = &sgfMeta;
+          }
+
+          std::vector<std::unique_ptr<NNResultBuf>> ownedBufs;
+          std::vector<NNResultBuf*> resultBufs;
+          ownedBufs.reserve(batchSize);
+          resultBufs.reserve(batchSize);
+          for(int row = 0; row < batchSize; row++) {
+            ownedBufs.push_back(std::make_unique<NNResultBuf>());
+            NNResultBuf* buf = ownedBufs.back().get();
+            fillRowBufs(board, history, P_BLACK, sgfMetaPtr, nnInputParams, *buf);
+            buf->symmetry = 0;
+            buf->policyOptimism = 0.0f;
+            resultBufs.push_back(buf);
+          }
+
+          // One full getOutput populates the host input arrays and warms lazy graph compilation.
+          // Its H2D/D2H/postprocessing are all excluded from the timed benchmark below.
+          std::vector<NNOutput*> outputs;
+          outputs.reserve(batchSize);
+          for(int row = 0; row < batchSize; row++) {
+            NNOutput* out = new NNOutput();
+            out->nnXLen = nnXLen;
+            out->nnYLen = nnYLen;
+            out->whiteOwnerMap = NULL;
+            outputs.push_back(out);
+          }
+          NeuralNet::getOutput(handle, serverBuf.inputBuffers, batchSize, resultBufs.data(), outputs);
+          for(NNOutput* out : outputs)
+            delete out;
+
+          readyCount.fetch_add(1);
+          while(!startFlag.load())
+            std::this_thread::yield();
+
+          std::vector<double> times;
+#if defined(USE_CUDA_BACKEND) || defined(USE_TENSORRT_BACKEND)
+          if(!NeuralNet::benchmarkOutput(
+               handle, serverBuf.inputBuffers, batchSize, numWarmups, numIterations, times,
+               phaseBarrier.get(), threadIdx, phaseOffsetMicros
+             )) {
+            throw StringError("Current backend does not support pure-device benchmarknn");
+          }
+#else
+          throw StringError("benchmarknn requires a CUDA or TensorRT build");
+#endif
+          result.perServerIterationSeconds[threadIdx] = std::move(times);
+        }
+        catch(...) {
+          if(handle != NULL)
+            NeuralNet::freeComputeHandle(handle);
+          throw;
+        }
+        NeuralNet::freeComputeHandle(handle);
+      }
+      catch(...) {
+        anyError.store(true);
+        std::lock_guard<std::mutex> lock(errorMutex);
+        if(firstError == nullptr)
+          firstError = std::current_exception();
+      }
+    });
+  }
+
+  while(readyCount.load() < numServerThreads && !anyError.load())
+    std::this_thread::yield();
+  wallStart = std::chrono::steady_clock::now();
+  startFlag.store(true);
+
+  for(std::thread& t : threads)
+    t.join();
+  wallEnd = std::chrono::steady_clock::now();
+
+  if(firstError != nullptr)
+    std::rethrow_exception(firstError);
+
+  result.actualWallSeconds = std::chrono::duration<double>(wallEnd - wallStart).count();
+  result.actualWallPerForwardMs =
+    result.actualWallSeconds / (double)(numWarmups + numIterations) * 1000.0;
+
+  double combinedNNEvalsPerSec = 0.0;
+  double maxMedianSeconds = 0.0;
+  for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
+    std::vector<double>& times = result.perServerIterationSeconds[threadIdx];
+    if(times.size() != (size_t)numIterations)
+      throw StringError("benchmarknn: server thread produced an unexpected number of timings");
+    std::vector<double> sorted = times;
+    std::sort(sorted.begin(), sorted.end());
+    double median =
+      sorted.size() % 2 == 1
+      ? sorted[sorted.size() / 2]
+      : 0.5 * (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]);
+    result.perServerMedianSeconds[threadIdx] = median;
+    result.perServerNNEvalsPerSec[threadIdx] = batchSize / median;
+    combinedNNEvalsPerSec += result.perServerNNEvalsPerSec[threadIdx];
+    maxMedianSeconds = std::max(maxMedianSeconds, median);
+  }
+
+  // Per-server medians are measured while all servers run concurrently, so total throughput is the
+  // sum of per-server throughputs. combinedWallSeconds is the per-batch wall time of the slowest
+  // server (i.e. one concurrent batch), deliberately excluding model load and warmup.
+  result.combinedWallSeconds = maxMedianSeconds;
+  result.combinedNNEvalsPerSec = combinedNNEvalsPerSec;
+
+  return result;
 }
 
 void NNEvaluator::fillRowBufs(

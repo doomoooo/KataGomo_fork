@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "origin": {
+    "hostPath": "/data/wangyize/katago/third_party/benchmarks/tilelang-katago",
+    "capturedUtc": "2026-08-06T19:28:55Z",
+    "note": "The containing /data/wangyize/katago directory was not a Git worktree; individual source hashes are authoritative."
+  },
+  "historicalSources": {
+    "export_ffn_aot_sm120.py": "f0d3bfe96d263d9a8e9b0cc756830928c6d39e8085f901f88b482c0884ce1466",
+    "onnx_kernels.py": "6386d94cf2ded04728bb8139c1f35339e9c5969981e786b7d3e2b8685c29ba48",
+    "tune_ffn_swiglu.py": "56bef6f7dd36b2f3921e9cc25e067df1edfbbb6dce2e14843bf60487d7c35901"
+  },
+  "dependencies": {
+    "pythonHistorical": "3.10.12",
+    "tilelangVersion": "0.1.13",
+    "tilelangGitRevision": "8001cc4ccf6149382d2019654a19f59c1d4d0482",
+    "tilelangGitTree": "49f50071da5a0a0dd46296965847446d9ad727cf",
+    "tilelangPackageTreeSha256": "f20f03fdf1f9924f6d1540aac7202035be8ff2839f3e3d72b28783bd11e879e0",
+    "historicalPipFreezeSha256": "3704b3fca84fe62052a367d3368cce1005dfc27f01303e43be66fc9936f7336c",
+    "cudaCompilerHistorical": "CUDA 13.2.78",
+    "cudaNvccHistoricalSha256": "02afd6a20bd29fae33bf278fa847a4e9711db25afec4a1bf648be81a3b210af0"
+  },
+  "golden": {
+    "b19RenamedDeviceSourceSha256": "905d8068911c4c1e08408ebf4c8968dd4c6e5e97189abb2057c2aec2669aaa81",
+    "b19HistoricalWrappedSourceSha256": "1c798c20d634887b75704e4392870616fd6ed5db549f27eaf0c3352dd7a7b28c",
+    "b19HistoricalObjectSha256": "a2d52b56f0282106cb61db88d6f3b6552b5a6d3d43eccf39e1223799ccf428de"
+  }
+}

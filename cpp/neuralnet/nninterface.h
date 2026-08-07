@@ -9,6 +9,10 @@
 #include "../neuralnet/desc.h"
 #include "../neuralnet/nninputs.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 // Defined in nneval.h
 struct NNResultBuf;
 
@@ -26,6 +30,48 @@ struct InputBuffers;
 
 // A handle to the loaded neural network model.
 struct LoadedModel;
+
+// Optional one-shot barrier for diagnosing multi-stream phase sensitivity in benchmarknn.
+// A negative CLI offset leaves this unused and preserves the normal benchmark path.
+struct BenchmarkForwardBarrier {
+  const int participants;
+  std::atomic<int> ready;
+  std::atomic<bool> release;
+
+  explicit BenchmarkForwardBarrier(int participants_)
+    : participants(participants_), ready(0), release(false) {}
+
+  void arriveAndWait(int threadIdx, int phaseOffsetMicros) {
+    ready.fetch_add(1,std::memory_order_acq_rel);
+    while(ready.load(std::memory_order_acquire) < participants)
+      std::this_thread::yield();
+    release.store(true,std::memory_order_release);
+    while(!release.load(std::memory_order_acquire))
+      std::this_thread::yield();
+    if(threadIdx > 0 && phaseOffsetMicros > 0) {
+      const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::microseconds((long long)threadIdx * phaseOffsetMicros);
+      while(std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    }
+  }
+};
+
+// Raw per-head output pointers filled by getRawNNOutputs() after a getOutput() call. All arrays
+// are host memory owned by the InputBuffers; the layout of the policy arrays depends on the
+// backend (CUDA: NHWC position-major with numPolicyChannels floats per position; TensorRT: NCHW
+// channel-major). The element counts are per single row.
+struct RawNNOutputs {
+  const float* policyPassResults;
+  const float* policyResults;
+  const float* valueResults;
+  const float* scoreValueResults;
+  const float* ownershipResults;
+  size_t numPolicyChannels;
+  size_t numValueChannels;
+  size_t numScoreValueChannels;
+  size_t numOwnershipChannels;
+};
 
 // Generic interface to neural net inference.
 // There is a single CUDA backend.
@@ -122,6 +168,27 @@ namespace NeuralNet {
     std::vector<NNOutput*>& outputs
   );
 
+  // After getOutput, expose the raw per-head result arrays (logits before any postprocessing)
+  // for the most recent forward pass. Backends own the concrete InputBuffers layout, so they
+  // fill this struct.
+  void getRawNNOutputs(InputBuffers* buffers, RawNNOutputs& out);
+
+  // Benchmark the pure device forward pass only. Host input arrays in `buffers` must already be
+  // populated (e.g. by one getOutput call). One-time H2D preparation is performed here before the
+  // timed loop; the loop repeatedly runs the backend forward on device without H2D/D2H copies or
+  // postprocessing, recording one GPU-visible elapsed time (seconds) per iteration into
+  // `iterationSeconds`. Returns false for backends that cannot run this pure-device benchmark.
+  bool benchmarkOutput(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int batchSize,
+    int numWarmups,
+    int numIterations,
+    std::vector<double>& iterationSeconds,
+    BenchmarkForwardBarrier* phaseBarrier,
+    int serverThreadIdx,
+    int phaseOffsetMicros
+  );
 
   // FOR TESTING -----------------------------------------------------------------------
   // For all of the below, the input buffers must have exactly the size expected of the input for the operation.

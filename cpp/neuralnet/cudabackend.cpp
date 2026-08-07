@@ -29,12 +29,15 @@
 #include "../neuralnet/sgfmetadata.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/desc.h"
+#include "../neuralnet/cudabackend_sm120.h"
 
 #include "../core/simpleallocator.h"
 #include "../core/test.h"
 #include "../core/hash.h"
 
 #include "../external/half-2.2.0/include/half.hpp"
+
+#include <optional>
 
 //------------------------
 #include "../core/using.h"
@@ -297,6 +300,10 @@ struct SDPAGraphCache {
 struct CudaHandles {
   cublasHandle_t cublas;
   cudnnHandle_t cudnn;
+  // Each NN server thread owns a private stream. cuBLAS/cuDNN default to the legacy stream (NULL),
+  // so they must be explicitly bound to this stream; custom kernels launched from this thread already
+  // land on the same per-thread default stream because CUDA_API_PER_THREAD_DEFAULT_STREAM is defined.
+  cudaStream_t stream;
   const int majorComputeCapability;
   const int minorComputeCapability;
   std::unique_ptr<SDPAGraphCache> sdpaCache;
@@ -313,6 +320,32 @@ struct CudaHandles {
   // Controls whether 1x1 NHWC convs run as a cuBLAS GEMM (vs cuDNN). Auto = matmul iff FP16.
   // True/False force the choice regardless of precision.
   enabled_t use1x1MatmulMode;
+  // SM120 attention hook (thin dispatch). Null on non-SM120 handles; the
+  // implementation lives entirely in cudabackend_sm120.cpp.
+  Sm120Backend::Sm120AttentionFn sm120Attention;
+  void* sm120AttentionContext;
+  Sm120Backend::Sm120FFNSingleGemmFn sm120FFNSingleGemm;
+  void* sm120FFNSingleGemmContext;
+  Sm120Backend::Sm120MatMulFn sm120MatMul;
+  void* sm120MatMulContext;
+  Sm120Backend::Sm120QKVStridedFn sm120QKVStrided;
+  void* sm120QKVStridedContext;
+  Sm120Backend::Sm120FusedResidualGemmFn sm120FusedResidualGemm;
+  void* sm120FusedResidualGemmContext;
+  Sm120Backend::Sm120RMSNormFn sm120RMSNorm;
+  void* sm120RMSNormContext;
+  Sm120Backend::Sm120FusedQKRoPEFn sm120FusedQKRoPE;
+  void* sm120FusedQKRoPEContext;
+  Sm120Backend::Sm120SwiGLUFn sm120SwiGLU;
+  void* sm120SwiGLUContext;
+  Sm120Backend::Sm120AffineSiluFn sm120AffineSilu;
+  void* sm120AffineSiluContext;
+  Sm120Backend::Sm120FusedPolicyP1Fn sm120FusedPolicyP1;
+  void* sm120FusedPolicyP1Context;
+  Sm120Backend::Sm120PersistingL2Fn sm120PersistingL2;
+  void* sm120PersistingL2Context;
+  Sm120Backend::Sm120PersistingL2Fn sm120PersistingL2Inner;
+  void* sm120PersistingL2InnerContext;
 
   CudaHandles(int major, int minor)
     : majorComputeCapability(major),
@@ -322,10 +355,37 @@ struct CudaHandles {
       isWarmup(false),
       cudaDisableGraphSDPA(false),
       loggedGraphSDPADisabled(false),
-      use1x1MatmulMode(enabled_t::Auto)
+      use1x1MatmulMode(enabled_t::Auto),
+      sm120Attention(NULL),
+      sm120AttentionContext(NULL),
+      sm120FFNSingleGemm(NULL),
+      sm120FFNSingleGemmContext(NULL),
+      sm120MatMul(NULL),
+      sm120MatMulContext(NULL),
+      sm120QKVStrided(NULL),
+      sm120QKVStridedContext(NULL),
+      sm120FusedResidualGemm(NULL),
+      sm120FusedResidualGemmContext(NULL),
+      sm120RMSNorm(NULL),
+      sm120RMSNormContext(NULL),
+      sm120FusedQKRoPE(NULL),
+      sm120FusedQKRoPEContext(NULL),
+      sm120SwiGLU(NULL),
+      sm120SwiGLUContext(NULL),
+      sm120AffineSilu(NULL),
+      sm120AffineSiluContext(NULL),
+      sm120FusedPolicyP1(NULL),
+      sm120FusedPolicyP1Context(NULL),
+      sm120PersistingL2(NULL),
+      sm120PersistingL2Context(NULL),
+      sm120PersistingL2Inner(NULL),
+      sm120PersistingL2InnerContext(NULL)
   {
     CUBLAS_ERR("CudaHandles",cublasCreate(&cublas));
     CUDNN_ERR("CudaHandles",cudnnCreate(&cudnn));
+    stream = cudaStreamPerThread;
+    CUBLAS_ERR("CudaHandles",cublasSetStream(cublas, stream));
+    CUDNN_ERR("CudaHandles",cudnnSetStream(cudnn, stream));
   }
 
   ~CudaHandles() {
@@ -905,7 +965,15 @@ struct BatchNormLayer {
     const void* maskBuf, //ok to be null
     void* outputBuf
   ) const {
-    (void)cudaHandles;
+    if(usingFP16 && usingNHWC && cudaHandles->sm120AffineSilu != NULL &&
+       cudaHandles->sm120AffineSilu(
+         cudaHandles->sm120AffineSiluContext,
+         inputBuf, outputBuf, mergedScaleBuf, mergedBiasBuf, maskBuf,
+         batchSize, nnXLen * nnYLen, numChannels, activation, usingFP16,
+         cudaHandles->stream)) {
+      CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+      return;
+    }
     if(!usingFP16) {
       if(!usingNHWC)
         customCudaApplyCScaleBiasNCHW((const float*)inputBuf,(float*)outputBuf,(const float*)mergedScaleBuf,(const float*)mergedBiasBuf,
@@ -989,9 +1057,23 @@ struct MatMulLayer {
     void* workspaceBuf,
     size_t workspaceBytes
   ) const {
-    (void)workspaceBuf;
-    (void)workspaceBytes;
     assert(inChannels > 0 && outChannels > 0);
+
+    if(cudaHandles->sm120MatMul != NULL &&
+       cudaHandles->sm120MatMul(
+         cudaHandles->sm120MatMulContext,
+         cudaHandles->stream,
+         matBuf,
+         inputBuf,
+         outputBuf,
+         workspaceBuf,
+         workspaceBytes,
+         batchSize,
+         inChannels,
+         outChannels,
+         usingFP16
+       ))
+      return;
 
     if(!usingFP16) {
       const float alpha = 1.0f;
@@ -1457,7 +1539,18 @@ struct NestedBottleneckResidualBlock {
     SizedBuf<void*> mid(scratch->allocator, scratch->getBufSizeXY(normActConv1.outChannels));
     SizedBuf<void*> midScratch(scratch->allocator, scratch->getBufSizeXY(normActConv1.outChannels));
     assert(normActConv1.outChannels == normActConv2.inChannels);
-    normActConv1.apply(cudaHandles,batchSize,false,trunkBuf,trunkScratchBuf,mid.buf,maskBuf,workspaceBuf,workspaceBytes);
+    normActConv1.norm.apply(cudaHandles,batchSize,trunkBuf,maskBuf,trunkScratchBuf);
+#ifdef DEBUG_INTERMEDIATE_VALUES
+    CudaUtils::debugPrint3D(string("AFTER NORM "), trunkScratchBuf, batchSize, normActConv1.inChannels, normActConv1.nnXLen*normActConv1.nnYLen, normActConv1.usingNHWC, normActConv1.usingFP16);
+#endif
+    if(cudaHandles->sm120PersistingL2Inner != NULL) {
+      cudaHandles->sm120PersistingL2Inner(
+        cudaHandles->sm120PersistingL2InnerContext,
+        cudaHandles->stream,
+        mid.buf,
+        scratch->getBufSizeXY(normActConv1.outChannels));
+    }
+    normActConv1.conv.apply(cudaHandles,batchSize,false,trunkScratchBuf,mid.buf,workspaceBuf,workspaceBytes);
     blocks.apply(
       cudaHandles,
       scratch,
@@ -1469,7 +1562,18 @@ struct NestedBottleneckResidualBlock {
       workspaceBuf,
       workspaceBytes
     );
-    normActConv2.apply(cudaHandles,batchSize,true,mid.buf,midScratch.buf,trunkBuf,maskBuf,workspaceBuf,workspaceBytes);
+    normActConv2.norm.apply(cudaHandles,batchSize,mid.buf,maskBuf,midScratch.buf);
+#ifdef DEBUG_INTERMEDIATE_VALUES
+    CudaUtils::debugPrint3D(string("AFTER NORM "), midScratch.buf, batchSize, normActConv2.inChannels, normActConv2.nnXLen*normActConv2.nnYLen, normActConv2.usingNHWC, normActConv2.usingFP16);
+#endif
+    if(cudaHandles->sm120PersistingL2Inner != NULL) {
+      cudaHandles->sm120PersistingL2Inner(
+        cudaHandles->sm120PersistingL2InnerContext,
+        cudaHandles->stream,
+        trunkBuf,
+        scratch->getBufSizeXY(normActConv1.inChannels));
+    }
+    normActConv2.conv.apply(cudaHandles,batchSize,true,midScratch.buf,trunkBuf,workspaceBuf,workspaceBytes);
   }
 
 };
@@ -1521,7 +1625,22 @@ struct TransformerRMSNormLayer {
     void* outputBuf,
     const void* maskBuf
   ) const {
-    (void)cudaHandles;
+    if(cudaHandles->sm120RMSNorm != NULL &&
+       cudaHandles->sm120RMSNorm(
+         cudaHandles->sm120RMSNormContext,
+         inputBuf,
+         outputBuf,
+         weightBuf,
+         zeroBetaBuf,
+         maskBuf,
+         batchSize,
+         xySize,
+         numChannels,
+         epsilon,
+         usingFP16,
+         cudaHandles->stream)) {
+      return;
+    }
     // RMSNormGammaBetaNHWC with gamma=weight, beta=zero, mask, identity activation.
     if(!usingFP16) {
       customCudaRMSNormGammaBetaNHWC(
@@ -1800,47 +1919,104 @@ struct TransformerAttentionBlock {
     // MatMulLayer expects input as [inChannels, batchSize], which matches.
     int matBatchSize = batchSize * seqLen;
 
-    SizedBuf<void*> qBuf(scratch->allocator, (size_t)qTotalDim * matBatchSize * bytesPerElt);
-    SizedBuf<void*> kBuf(scratch->allocator, (size_t)kTotalDim * matBatchSize * bytesPerElt);
-    SizedBuf<void*> vBuf(scratch->allocator, (size_t)vTotalDim * matBatchSize * bytesPerElt);
-
-    qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf.buf, workspaceBuf, workspaceBytes);
-    kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf.buf, workspaceBuf, workspaceBytes);
-    vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf.buf, workspaceBuf, workspaceBytes);
+    std::optional<SizedBuf<void*> > qkvStorage;
+    std::optional<SizedBuf<void*> > qStorage;
+    std::optional<SizedBuf<void*> > kStorage;
+    std::optional<SizedBuf<void*> > vStorage;
+    void* qBuf;
+    void* kBuf;
+    void* vBuf;
+    bool packedQKV = false;
+    if(cudaHandles->sm120QKVStrided != NULL) {
+      qkvStorage.emplace(
+        scratch->allocator,
+        (size_t)(qTotalDim + kTotalDim + vTotalDim) * matBatchSize * bytesPerElt);
+      qBuf = qkvStorage->buf;
+      kBuf = (char*)qBuf + (size_t)qTotalDim * matBatchSize * bytesPerElt;
+      vBuf = (char*)kBuf + (size_t)kTotalDim * matBatchSize * bytesPerElt;
+      const bool allowPackedOutput = useRope && learnableRope && maskBuf == NULL;
+      bool usedQKVStrided = cudaHandles->sm120QKVStrided(
+        cudaHandles->sm120QKVStridedContext,
+        cudaHandles->cublas,
+        cudaHandles->stream,
+        qProj.matBuf,
+        kProj.matBuf,
+        vProj.matBuf,
+        trunkScratchBuf,
+        qBuf,
+        allowPackedOutput,
+        &packedQKV,
+        matBatchSize,
+        inChannels,
+        qTotalDim,
+        kTotalDim,
+        vTotalDim,
+        usingFP16);
+      if(usedQKVStrided && packedQKV) {
+        // The AOT buffer is [token,Q384,K384,V384].
+        kBuf = (char*)qBuf + (size_t)qTotalDim * bytesPerElt;
+        vBuf = (char*)qBuf + (size_t)(qTotalDim + kTotalDim) * bytesPerElt;
+      }
+      else if(!usedQKVStrided) {
+        qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf, workspaceBuf, workspaceBytes);
+        kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf, workspaceBuf, workspaceBytes);
+        vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf, workspaceBuf, workspaceBytes);
+      }
+    }
+    else {
+      qStorage.emplace(scratch->allocator, (size_t)qTotalDim * matBatchSize * bytesPerElt);
+      kStorage.emplace(scratch->allocator, (size_t)kTotalDim * matBatchSize * bytesPerElt);
+      vStorage.emplace(scratch->allocator, (size_t)vTotalDim * matBatchSize * bytesPerElt);
+      qBuf = qStorage->buf;
+      kBuf = kStorage->buf;
+      vBuf = vStorage->buf;
+      qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf, workspaceBuf, workspaceBytes);
+      kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf, workspaceBuf, workspaceBytes);
+      vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf, workspaceBuf, workspaceBytes);
+    }
 
 #ifdef DEBUG_INTERMEDIATE_VALUES
-    CudaUtils::debugPrint2D("CUDA Attn Q", qBuf.buf, matBatchSize, qTotalDim, usingFP16);
+    CudaUtils::debugPrint2D("CUDA Attn Q", qBuf, matBatchSize, qTotalDim, usingFP16);
 #endif
 
     // Step 3: Apply RoPE to Q and K
     // Q is [qTotalDim, seqLen*batchSize] column-major = [batchSize*seqLen, qTotalDim] row-major
     if(useRope) {
-      if(learnableRope) {
+      bool usedFusedQKRoPE = false;
+      if(learnableRope && cudaHandles->sm120FusedQKRoPE != NULL) {
+        usedFusedQKRoPE = cudaHandles->sm120FusedQKRoPE(
+          cudaHandles->sm120FusedQKRoPEContext,
+          qBuf, kBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads,
+          qHeadDim, ropeNumPairs, nnXLen, packedQKV, usingFP16, cudaHandles->stream);
+      }
+      if(packedQKV && !usedFusedQKRoPE)
+        throw StringError("CUDA attention: packed QKV requires the SM120 packed RoPE path");
+      if(!usedFusedQKRoPE && learnableRope) {
         // Table-free recompute path (cos/sin computed in-kernel from ropeFreqsBuf).
         if(!usingFP16) {
-          customCudaApplyRoPELearnableRecompute((float*)qBuf.buf, ropeFreqsBuf,
+          customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf,
             batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-          customCudaApplyRoPELearnableRecompute((float*)kBuf.buf, ropeFreqsBuf,
+          customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf,
             batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
         }
         else {
-          customCudaApplyRoPELearnableRecompute((half*)qBuf.buf, ropeFreqsBuf,
+          customCudaApplyRoPELearnableRecompute((half*)qBuf, ropeFreqsBuf,
             batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
-          customCudaApplyRoPELearnableRecompute((half*)kBuf.buf, ropeFreqsBuf,
+          customCudaApplyRoPELearnableRecompute((half*)kBuf, ropeFreqsBuf,
             batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen);
         }
       }
-      else {
+      else if(!usedFusedQKRoPE) {
         if(!usingFP16) {
-          customCudaApplyRoPE((float*)qBuf.buf, (const float*)ropeCosTable, (const float*)ropeSinTable,
+          customCudaApplyRoPE((float*)qBuf, (const float*)ropeCosTable, (const float*)ropeSinTable,
             batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, learnableRope);
-          customCudaApplyRoPE((float*)kBuf.buf, (const float*)ropeCosTable, (const float*)ropeSinTable,
+          customCudaApplyRoPE((float*)kBuf, (const float*)ropeCosTable, (const float*)ropeSinTable,
             batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, learnableRope);
         }
         else {
-          customCudaApplyRoPE((half*)qBuf.buf, (const half*)ropeCosTable, (const half*)ropeSinTable,
+          customCudaApplyRoPE((half*)qBuf, (const half*)ropeCosTable, (const half*)ropeSinTable,
             batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, learnableRope);
-          customCudaApplyRoPE((half*)kBuf.buf, (const half*)ropeCosTable, (const half*)ropeSinTable,
+          customCudaApplyRoPE((half*)kBuf, (const half*)ropeCosTable, (const half*)ropeSinTable,
             batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, learnableRope);
         }
       }
@@ -1856,6 +2032,33 @@ struct TransformerAttentionBlock {
     SizedBuf<void*> attnOutBuf(scratch->allocator, (size_t)numHeads * vHeadDim * seqLen * batchSize * bytesPerElt);
 
     bool usedSDPA = false;
+    // Thin SM120 dispatch: the FA4 AOT kernel lives in cudabackend_sm120.cpp.
+    if(cudaHandles->sm120Attention != NULL &&
+       cudaHandles->sm120Attention(
+         cudaHandles->sm120AttentionContext,
+         cudaHandles,
+         scratch,
+         qBuf,
+         kBuf,
+         vBuf,
+         packedQKV,
+         maskBuf,
+         attnOutBuf.buf,
+         batchSize,
+         seqLen,
+         numHeads,
+         numKVHeads,
+         qHeadDim,
+         vHeadDim,
+         usingFP16,
+         cudaHandles->stream,
+         workspaceBuf,
+         workspaceBytes
+       )) {
+      usedSDPA = true;
+    }
+    if(packedQKV && !usedSDPA)
+      throw StringError("CUDA attention: packed QKV requires the SM120 FA4 path");
 #if KATAGO_CUDA_HAS_SDPA
     SDPAGraphCache* sdpaCache = cudaHandles->sdpaCache.get();
     // Report once if cudaDisableGraphSDPA is the only reason we are not taking the cudnn graph SDPA path,
@@ -1866,15 +2069,15 @@ struct TransformerAttentionBlock {
         cudaHandles->logger->write(
           "Cuda backend: cudaDisableGraphSDPA is set, using the custom attention kernel instead of the cudnn graph SDPA path that would otherwise have been used");
     }
-    if(usingFP16 && sdpaCache != NULL && !cudaHandles->cudaDisableGraphSDPA) {
+    if(!usedSDPA && usingFP16 && sdpaCache != NULL && !cudaHandles->cudaDisableGraphSDPA) {
       bool hasMask = (maskBuf != NULL);
       SDPAGraphKey sdpaKey = {numHeads, numKVHeads, qHeadDim, vHeadDim, seqLen, batchSize, hasMask, usingFP16};
       auto plan = sdpaCache->getOrBuildPlan(cudaHandles->cudnn, sdpaKey, cudaHandles->logger, cudaHandles->isWarmup);
       if(plan != nullptr) {
         std::unordered_map<int64_t, void*> variant_pack = {
-          {SDPAPlanForBatchSize::Q_UID, qBuf.buf},
-          {SDPAPlanForBatchSize::K_UID, kBuf.buf},
-          {SDPAPlanForBatchSize::V_UID, vBuf.buf},
+          {SDPAPlanForBatchSize::Q_UID, qBuf},
+          {SDPAPlanForBatchSize::K_UID, kBuf},
+          {SDPAPlanForBatchSize::V_UID, vBuf},
           {SDPAPlanForBatchSize::O_UID, attnOutBuf.buf},
         };
 
@@ -1913,23 +2116,40 @@ struct TransformerAttentionBlock {
     if(!usedSDPA) {
       if(!usingFP16) {
         customCudaFlashAttention(
-          (const float*)qBuf.buf, (const float*)kBuf.buf, (const float*)vBuf.buf,
+          (const float*)qBuf, (const float*)kBuf, (const float*)vBuf,
           (const float*)maskBuf, (float*)attnOutBuf.buf,
           batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
       }
       else {
         customCudaFlashAttention(
-          (const half*)qBuf.buf, (const half*)kBuf.buf, (const half*)vBuf.buf,
+          (const half*)qBuf, (const half*)kBuf, (const half*)vBuf,
           (const half*)maskBuf, (half*)attnOutBuf.buf,
           batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim);
       }
       CUDA_ERR(name.c_str(), cudaPeekAtLastError());
     }
 
-    // Step 5: Output projection
+    // Steps 5-6: output projection and residual addition. On fixed full-board
+    // SM120 inputs the projection can accumulate directly into trunk.
     // attnOutBuf is [numHeads*vHeadDim, seqLen*batchSize] col-major
     // outProj maps to [inChannels, seqLen*batchSize]
-    outProj.apply(cudaHandles, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf, workspaceBuf, workspaceBytes);
+    bool usedFusedResidual = false;
+    if(cudaHandles->sm120FusedResidualGemm != NULL) {
+      usedFusedResidual = cudaHandles->sm120FusedResidualGemm(
+        cudaHandles->sm120FusedResidualGemmContext,
+        cudaHandles->cublas,
+        cudaHandles->stream,
+        outProj.matBuf,
+        attnOutBuf.buf,
+        trunkBuf,
+        maskBuf,
+        matBatchSize,
+        outProj.inChannels,
+        outProj.outChannels,
+        usingFP16);
+    }
+    if(!usedFusedResidual)
+      outProj.apply(cudaHandles, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf, workspaceBuf, workspaceBytes);
 
 #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D("CUDA Attn outProj", trunkScratchBuf, batchSize, inChannels, seqLen, usingNHWC, usingFP16, maskBuf);
@@ -1937,13 +2157,15 @@ struct TransformerAttentionBlock {
 
     // Step 6: Residual addition: trunk += trunkScratch * mask
     // NHWC: trunk is [N, XY, C], mask is [N, XY]
-    if(!usingFP16) {
-      customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels);
+    if(!usedFusedResidual) {
+      if(!usingFP16) {
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, inChannels);
+      }
+      else {
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels);
+      }
+      CUDA_ERR(name.c_str(), cudaPeekAtLastError());
     }
-    else {
-      customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, inChannels);
-    }
-    CUDA_ERR(name.c_str(), cudaPeekAtLastError());
 
 #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D("CUDA Attn residual", trunkBuf, batchSize, inChannels, seqLen, usingNHWC, usingFP16, maskBuf);
@@ -2040,20 +2262,46 @@ struct TransformerFFNBlock {
 
     // Step 2: linear1 projection
     SizedBuf<void*> ffnBuf(scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
-    linear1.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, ffnBuf.buf, workspaceBuf, workspaceBytes);
+    bool usedWideFFNSingleGemm = false;
+    if(cudaHandles->sm120FFNSingleGemm != NULL) {
+      SizedBuf<void*> wideFFNBuf(
+        scratch->allocator, (size_t)ffnChannels * 2 * matBatchSize * bytesPerElt);
+      usedWideFFNSingleGemm = cudaHandles->sm120FFNSingleGemm(
+        cudaHandles->sm120FFNSingleGemmContext,
+        cudaHandles->cublas,
+        cudaHandles->stream,
+        linear1.matBuf,
+        linearGate->matBuf,
+        trunkScratchBuf,
+        wideFFNBuf.buf,
+        ffnBuf.buf,
+        matBatchSize,
+        numChannels,
+        ffnChannels,
+        usingFP16);
+    }
+    if(!usedWideFFNSingleGemm)
+      linear1.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, ffnBuf.buf, workspaceBuf, workspaceBytes);
 
     // Step 3: SwiGLU
-    {
+    if(!usedWideFFNSingleGemm) {
       SizedBuf<void*> gateBuf(scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
       linearGate->apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, gateBuf.buf, workspaceBuf, workspaceBytes);
 
       if((size_t)ffnChannels * (size_t)matBatchSize >= (size_t)2147483647)
         throw StringError("CUDA SwiGLU element count exceeds the 32-bit index limit used by the kernel");
       int totalSize = (int)((size_t)ffnChannels * matBatchSize);
-      if(!usingFP16) {
+      bool usedSm120SwiGLU = false;
+      if(cudaHandles->sm120SwiGLU != NULL) {
+        usedSm120SwiGLU = cudaHandles->sm120SwiGLU(
+          cudaHandles->sm120SwiGLUContext,
+          ffnBuf.buf, gateBuf.buf, ffnBuf.buf, matBatchSize, ffnChannels,
+          usingFP16, cudaHandles->stream);
+      }
+      if(!usedSm120SwiGLU && !usingFP16) {
         customCudaSwiGLU((const float*)ffnBuf.buf, (const float*)gateBuf.buf, (float*)ffnBuf.buf, totalSize);
       }
-      else {
+      else if(!usedSm120SwiGLU) {
         customCudaSwiGLU((const half*)ffnBuf.buf, (const half*)gateBuf.buf, (half*)ffnBuf.buf, totalSize);
       }
       CUDA_ERR(name.c_str(), cudaPeekAtLastError());
@@ -2063,17 +2311,35 @@ struct TransformerFFNBlock {
     CudaUtils::debugPrint2D("CUDA FFN SwiGLU", ffnBuf.buf, matBatchSize, ffnChannels, usingFP16);
 #endif
 
-    // Step 4: linear2 projection back to trunk channels
-    linear2.apply(cudaHandles, scratch, matBatchSize, ffnBuf.buf, trunkScratchBuf, workspaceBuf, workspaceBytes);
+    // Steps 4-5: linear2 and residual addition.
+    bool usedFusedResidual = false;
+    if(cudaHandles->sm120FusedResidualGemm != NULL) {
+      usedFusedResidual = cudaHandles->sm120FusedResidualGemm(
+        cudaHandles->sm120FusedResidualGemmContext,
+        cudaHandles->cublas,
+        cudaHandles->stream,
+        linear2.matBuf,
+        ffnBuf.buf,
+        trunkBuf,
+        maskBuf,
+        matBatchSize,
+        linear2.inChannels,
+        linear2.outChannels,
+        usingFP16);
+    }
+    if(!usedFusedResidual)
+      linear2.apply(cudaHandles, scratch, matBatchSize, ffnBuf.buf, trunkScratchBuf, workspaceBuf, workspaceBytes);
 
     // Step 5: Residual addition: trunk += trunkScratch * mask
-    if(!usingFP16) {
-      customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
+    if(!usedFusedResidual) {
+      if(!usingFP16) {
+        customCudaMaskedResidualAddNHWC((float*)trunkBuf, (const float*)trunkScratchBuf, (const float*)maskBuf, batchSize, seqLen, numChannels);
+      }
+      else {
+        customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
+      }
+      CUDA_ERR(name.c_str(), cudaPeekAtLastError());
     }
-    else {
-      customCudaMaskedResidualAddNHWC((half*)trunkBuf, (const half*)trunkScratchBuf, (const half*)maskBuf, batchSize, seqLen, numChannels);
-    }
-    CUDA_ERR(name.c_str(), cudaPeekAtLastError());
 
 #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D("CUDA FFN residual", trunkBuf, batchSize, numChannels, seqLen, usingNHWC, usingFP16, maskBuf);
@@ -2509,6 +2775,14 @@ struct Trunk {
 
     SizedBuf<void*> trunkScratch(scratch->allocator, scratch->getBufSizeXY(trunkNumChannels));
 
+    if(cudaHandles->sm120PersistingL2 != NULL) {
+      cudaHandles->sm120PersistingL2(
+        cudaHandles->sm120PersistingL2Context,
+        cudaHandles->stream,
+        trunkScratch.buf,
+        scratch->getBufSizeXY(trunkNumChannels));
+    }
+
     //Feed the conv into trunkScratch.buf, not trunkBuf
     initialConv->apply(cudaHandles,batchSize,false,inputBuf,trunkScratch.buf,workspaceBuf,workspaceBytes);
 
@@ -2575,6 +2849,14 @@ struct Trunk {
     }
     else {
       trunkTipRMSNorm->apply(cudaHandles,scratch,batchSize,trunkScratch.buf,trunkBuf,maskBuf,maskSumBuf);
+    }
+
+    if(cudaHandles->sm120PersistingL2 != NULL) {
+      cudaHandles->sm120PersistingL2(
+        cudaHandles->sm120PersistingL2Context,
+        cudaHandles->stream,
+        NULL,
+        0);
     }
 
     #ifdef DEBUG_INTERMEDIATE_VALUES
@@ -2739,26 +3021,41 @@ struct PolicyHead {
     CudaUtils::debugPrint2D(string("g1 biases"), g1Bias.buf, batchSize, p1Channels, false);
     #endif
 
-    float* p1OutBufA;
-    float* p1OutBufB;
-    if(!usingFP16) {
-      p1OutBufA = (float*)p1Out.buf;
+    float* p1OutBufA = NULL;
+    float* p1OutBufB = NULL;
+    bool usedFusedPolicyP1 = false;
+    if(usingFP16 && usingNHWC && maskFloatBuf == NULL &&
+       cudaHandles->sm120FusedPolicyP1 != NULL) {
+      usedFusedPolicyP1 = cudaHandles->sm120FusedPolicyP1(
+        cudaHandles->sm120FusedPolicyP1Context,
+        p1Out.buf, (float*)p1Out2.buf, (const float*)g1Bias.buf,
+        (const float*)p1BN.mergedScaleBuf, (const float*)p1BN.mergedBiasBuf,
+        batchSize, nnXLen * nnYLen, p1Channels, usingFP16, usingNHWC,
+        cudaHandles->stream);
+    }
+    if(usedFusedPolicyP1) {
       p1OutBufB = (float*)p1Out2.buf;
     }
     else {
-      customCudaCopyFromHalf((const half*)p1Out.buf,(float*)p1Out2.buf,batchSize*p1Channels*nnXLen*nnYLen);
+      if(!usingFP16) {
+        p1OutBufA = (float*)p1Out.buf;
+        p1OutBufB = (float*)p1Out2.buf;
+      }
+      else {
+        customCudaCopyFromHalf((const half*)p1Out.buf,(float*)p1Out2.buf,batchSize*p1Channels*nnXLen*nnYLen);
+        CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+        p1OutBufA = (float*)p1Out2.buf;
+        p1OutBufB = (float*)p1Out.buf;
+      }
+
+      if(!usingNHWC)
+        customCudaAddNCBiasInplaceNCHW(p1OutBufA,(float*)g1Bias.buf,batchSize,p1Channels,nnXLen*nnYLen);
+      else
+        customCudaAddNCBiasInplaceNHWC(p1OutBufA,(float*)g1Bias.buf,batchSize,nnXLen*nnYLen,p1Channels);
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
-      p1OutBufA = (float*)p1Out2.buf;
-      p1OutBufB = (float*)p1Out.buf;
+
+      p1BN.apply(cudaHandles,batchSize,p1OutBufA,maskFloatBuf,p1OutBufB);
     }
-
-    if(!usingNHWC)
-      customCudaAddNCBiasInplaceNCHW(p1OutBufA,(float*)g1Bias.buf,batchSize,p1Channels,nnXLen*nnYLen);
-    else
-      customCudaAddNCBiasInplaceNHWC(p1OutBufA,(float*)g1Bias.buf,batchSize,nnXLen*nnYLen,p1Channels);
-    CUDA_ERR(name.c_str(),cudaPeekAtLastError());
-
-    p1BN.apply(cudaHandles,batchSize,p1OutBufA,maskFloatBuf,p1OutBufB);
     p2Conv.apply(cudaHandles,batchSize,false,p1OutBufB,(float*)policyBuf,workspaceBuf,workspaceBytes);
 
     if(modelVersion >= 15) {
@@ -2771,7 +3068,10 @@ struct PolicyHead {
     }
 
     #ifdef DEBUG_INTERMEDIATE_VALUES
-    CudaUtils::debugPrint3D(string("p1 after-gpool-sum"), p1OutBufA, batchSize, p1Channels, nnXLen*nnYLen, usingNHWC, false);
+    CudaUtils::debugPrint3D(
+      string(usedFusedPolicyP1 ? "p1 after fused-gpool-bn" : "p1 after-gpool-sum"),
+      usedFusedPolicyP1 ? p1OutBufB : p1OutBufA,
+      batchSize, p1Channels, nnXLen*nnYLen, usingNHWC, false);
     CudaUtils::debugPrint2D(string("policypass"), policyPassBuf, batchSize, 1, false);
     CudaUtils::debugPrint3D(string("policy"), policyBuf, batchSize, p2Channels, nnXLen*nnYLen, usingNHWC, false);
     #endif
@@ -3157,6 +3457,35 @@ struct Model {
 
 };
 
+// Trampoline used by Sm120Backend::Sm120Model to delegate to the official backend apply().
+// Keeps the internal Model type opaque to cudabackend_sm120.cpp.
+static void applyOfficialModel(
+  void* ctx,
+  CudaHandles* cudaHandles_,
+  ScratchBuffers* scratch,
+  int batchSize,
+  bool requireExactNNLen,
+  void* inputBuf,
+  void* inputGlobalBuf,
+  void* inputMetaBuf,
+  float* policyPassBuf,
+  float* policyBuf,
+  float* valueBuf,
+  float* scoreValueBuf,
+  void* ownershipBuf,
+  void* workspaceBuf,
+  size_t workspaceBytes
+) {
+  Model* model = (Model*)ctx;
+  model->apply(
+    cudaHandles_, scratch, batchSize, requireExactNNLen,
+    inputBuf, inputGlobalBuf, inputMetaBuf,
+    policyPassBuf, policyBuf,
+    valueBuf, scoreValueBuf, ownershipBuf,
+    workspaceBuf, workspaceBytes
+  );
+}
+
 
 //------------------------------------------------------------------------------
 
@@ -3320,6 +3649,8 @@ struct ComputeContext {
   bool cudaDisableGraphSDPA;
   // Whether 1x1 NHWC convs use the cuBLAS GEMM path. Auto = matmul iff FP16.
   enabled_t use1x1MatmulMode;
+  // SM120-specific backend options; only used when a server thread is on a SM120 device.
+  Sm120Backend::Options sm120Options;
 };
 
 ComputeContext* NeuralNet::createComputeContext(
@@ -3349,6 +3680,7 @@ ComputeContext* NeuralNet::createComputeContext(
     cfg.contains("cudaDisableGraphSDPA") ? cfg.getBool("cudaDisableGraphSDPA") : false;
   context->use1x1MatmulMode =
     cfg.contains("cudaUse1x1Matmul") ? cfg.getEnabled("cudaUse1x1Matmul") : enabled_t::Auto;
+  context->sm120Options = Sm120Backend::parseOptions(cfg);
   return context;
 }
 
@@ -3369,6 +3701,8 @@ struct ComputeHandle {
   const bool requireExactNNLen;
   const bool inputsUseNHWC;
   const bool usingNHWC;
+  // Set only on SM120 devices; routes apply() to the SM120-specific path.
+  std::unique_ptr<Sm120Backend::Sm120Model> sm120Model;
 
   ComputeHandle(
     const ComputeContext* context,
@@ -3398,10 +3732,106 @@ struct ComputeHandle {
     scratch = std::make_unique<ScratchBuffers>(maxBatchSize, nnXLen, nnYLen, useFP16);
     buffers = std::make_unique<Buffers>(cudaHandles.get(), *model, *scratch);
 
+    if(Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+       context->sm120Options.enabled) {
+      sm120Model = std::make_unique<Sm120Backend::Sm120Model>(
+        model.get(), &applyOfficialModel, cudaHandles.get(), &(loadedModel->modelDesc),
+        maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
+        context->sm120Options
+      );
+      if(sm120Model->hasPersistingL2Trunk()) {
+        cudaHandles->sm120PersistingL2 = &Sm120Backend::applyPersistingL2Window;
+        cudaHandles->sm120PersistingL2Context = sm120Model.get();
+      }
+      if(sm120Model->hasPersistingL2Inner()) {
+        cudaHandles->sm120PersistingL2Inner = &Sm120Backend::applyPersistingL2Window;
+        cudaHandles->sm120PersistingL2InnerContext = sm120Model.get();
+      }
+      cudaHandles->sm120Attention = &Sm120Backend::applyAttention;
+      cudaHandles->sm120AttentionContext = sm120Model.get();
+      if(context->sm120Options.useFusedFFN || context->sm120Options.useWideFFNSingleGemm) {
+        cudaHandles->sm120FFNSingleGemm = &Sm120Backend::applyFFNSingleGemm;
+        cudaHandles->sm120FFNSingleGemmContext = sm120Model.get();
+      }
+      if(context->sm120Options.useProjectionGemmLt) {
+        cudaHandles->sm120MatMul = &Sm120Backend::applyMatMulLt;
+        cudaHandles->sm120MatMulContext = sm120Model.get();
+      }
+      if(context->sm120Options.useQKVStrided ||
+         (context->sm120Options.useWideQKV && context->sm120Options.useQKVGemmAot)) {
+        cudaHandles->sm120QKVStrided = &Sm120Backend::applyQKVStrided;
+        cudaHandles->sm120QKVStridedContext = sm120Model.get();
+      }
+      if(context->sm120Options.useFusedResidualGemm) {
+        cudaHandles->sm120FusedResidualGemm = &Sm120Backend::applyFusedResidualGemm;
+        cudaHandles->sm120FusedResidualGemmContext = sm120Model.get();
+      }
+      if(context->sm120Options.useRMSNorm384) {
+        cudaHandles->sm120RMSNorm = &Sm120Backend::applyRMSNorm;
+        cudaHandles->sm120RMSNormContext = sm120Model.get();
+      }
+      if(context->sm120Options.useFusedQKRoPE) {
+        cudaHandles->sm120FusedQKRoPE = &Sm120Backend::applyFusedQKRoPE;
+        cudaHandles->sm120FusedQKRoPEContext = sm120Model.get();
+      }
+      if(context->sm120Options.useSwiGLU1152) {
+        cudaHandles->sm120SwiGLU = &Sm120Backend::applySwiGLU;
+        cudaHandles->sm120SwiGLUContext = sm120Model.get();
+      }
+      if(context->sm120Options.useAffineSiluHalf2) {
+        cudaHandles->sm120AffineSilu = &Sm120Backend::applyAffineSilu;
+        cudaHandles->sm120AffineSiluContext = sm120Model.get();
+      }
+      if(context->sm120Options.useFusedPolicyP1) {
+        cudaHandles->sm120FusedPolicyP1 = &Sm120Backend::applyFusedPolicyP1;
+        cudaHandles->sm120FusedPolicyP1Context = sm120Model.get();
+      }
+    }
+
     //Synchronize after creating buffers and copying all the weights, just in case
     CUDA_ERR("ComputeHandle", cudaDeviceSynchronize());
   }
   ~ComputeHandle() {
+  }
+
+  void apply(
+    CudaHandles* cudaHandles_,
+    ScratchBuffers* scratch_,
+    int batchSize,
+    bool requireExactNNLen_,
+
+    void* inputBuf,
+    void* inputGlobalBuf,
+    void* inputMetaBuf,
+
+    float* policyPassBuf,
+    float* policyBuf,
+
+    float* valueBuf,
+    float* scoreValueBuf,
+    void* ownershipBuf,
+
+    void* workspaceBuf,
+    size_t workspaceBytes
+  ) const {
+    if(sm120Model != nullptr) {
+      sm120Model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+    }
+    else {
+      model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+    }
   }
 
   ComputeHandle() = delete;
@@ -3495,6 +3925,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   );
   gpuHandle->cudaHandles->logger = logger;
   gpuHandle->cudaHandles->cudaDisableGraphSDPA = context->cudaDisableGraphSDPA;
+  if(gpuHandle->sm120Model != nullptr)
+    gpuHandle->sm120Model->setLogger(logger);
   return gpuHandle;
 }
 
@@ -3643,6 +4075,18 @@ void NeuralNet::freeInputBuffers(InputBuffers* inputBuffers) {
   delete inputBuffers;
 }
 
+void NeuralNet::getRawNNOutputs(InputBuffers* inputBuffers, RawNNOutputs& out) {
+  out.policyPassResults = inputBuffers->policyPassResults;
+  out.policyResults = inputBuffers->policyResults;
+  out.valueResults = inputBuffers->valueResults;
+  out.scoreValueResults = inputBuffers->scoreValueResults;
+  out.ownershipResults = inputBuffers->ownershipResults;
+  out.numPolicyChannels = inputBuffers->singlePolicyPassResultElts;
+  out.numValueChannels = inputBuffers->singleValueResultElts;
+  out.numScoreValueChannels = inputBuffers->singleScoreValueResultElts;
+  out.numOwnershipChannels = inputBuffers->singleOwnershipResultElts;
+}
+
 //---------------------------------------------------------------------------------------
 
 
@@ -3754,7 +4198,7 @@ void NeuralNet::getOutput(
     }
   }
 
-  gpuHandle->model->apply(
+  gpuHandle->apply(
     gpuHandle->cudaHandles.get(),
     scratch,
     batchSize,
@@ -3885,6 +4329,132 @@ void NeuralNet::getOutput(
     }
   }
 
+}
+
+static void cudaUploadBenchmarkInputs(ComputeHandle* gpuHandle, InputBuffers* inputBuffers, int batchSize) {
+  Buffers* buffers = gpuHandle->buffers.get();
+  const int numMetaFeatures = (int)inputBuffers->singleInputMetaElts;
+  if(!gpuHandle->usingFP16) {
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputBuf, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice));
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputGlobalBuf, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice));
+    if(numMetaFeatures > 0) {
+      CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputMetaBuf, inputBuffers->userInputMetaBuffer, inputBuffers->singleInputMetaBytes*batchSize, cudaMemcpyHostToDevice));
+    }
+  }
+  else {
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputBufFloat, inputBuffers->userInputBuffer, inputBuffers->singleInputBytes*batchSize, cudaMemcpyHostToDevice));
+    CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputGlobalBufFloat, inputBuffers->userInputGlobalBuffer, inputBuffers->singleInputGlobalBytes*batchSize, cudaMemcpyHostToDevice));
+    if(numMetaFeatures > 0) {
+      CUDA_ERR("benchmarkOutput",cudaMemcpy(buffers->inputMetaBufFloat, inputBuffers->userInputMetaBuffer, inputBuffers->singleInputMetaBytes*batchSize, cudaMemcpyHostToDevice));
+    }
+
+    customCudaCopyToHalf((const float*)buffers->inputBufFloat,(half*)buffers->inputBuf,inputBuffers->singleInputElts*batchSize);
+    CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    customCudaCopyToHalf((const float*)buffers->inputGlobalBufFloat,(half*)buffers->inputGlobalBuf,inputBuffers->singleInputGlobalElts*batchSize);
+    CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    if(numMetaFeatures > 0) {
+      customCudaCopyToHalf((const float*)buffers->inputMetaBufFloat,(half*)buffers->inputMetaBuf,inputBuffers->singleInputMetaElts*batchSize);
+      CUDA_ERR("benchmarkOutput",cudaPeekAtLastError());
+    }
+  }
+}
+
+bool NeuralNet::benchmarkOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  int numWarmups,
+  int numIterations,
+  vector<double>& iterationSeconds,
+  BenchmarkForwardBarrier* phaseBarrier,
+  int serverThreadIdx,
+  int phaseOffsetMicros
+) {
+  assert(batchSize > 0 && batchSize <= inputBuffers->maxBatchSize);
+  if(numWarmups < 0 || numIterations <= 0)
+    throw StringError("benchmarkOutput: invalid warmup/iteration count");
+
+  iterationSeconds.clear();
+
+  // One-time H2D preparation, excluded from the timed loop.
+  cudaUploadBenchmarkInputs(gpuHandle, inputBuffers, batchSize);
+
+  Buffers* buffers = gpuHandle->buffers.get();
+  ScratchBuffers* scratch = gpuHandle->scratch.get();
+
+  for(int w = 0; w < numWarmups; w++) {
+    gpuHandle->apply(
+      gpuHandle->cudaHandles.get(),
+      scratch,
+      batchSize,
+      gpuHandle->requireExactNNLen,
+      buffers->inputBuf,
+      buffers->inputGlobalBuf,
+      buffers->inputMetaBuf,
+      buffers->policyPassBuf,
+      buffers->policyBuf,
+      buffers->valueBuf,
+      buffers->scoreValueBuf,
+      buffers->ownershipBuf,
+      buffers->workspaceBuf,
+      buffers->workspaceBytes
+    );
+  }
+  CUDA_ERR("benchmarkOutput",cudaDeviceSynchronize());
+
+  std::vector<cudaEvent_t> startEvents(numIterations);
+  std::vector<cudaEvent_t> endEvents(numIterations);
+  for(int i = 0; i < numIterations; i++) {
+    CUDA_ERR("benchmarkOutput",cudaEventCreate(&startEvents[i]));
+    CUDA_ERR("benchmarkOutput",cudaEventCreate(&endEvents[i]));
+  }
+
+  if(phaseBarrier != NULL)
+    phaseBarrier->arriveAndWait(serverThreadIdx,phaseOffsetMicros);
+
+  try {
+    for(int i = 0; i < numIterations; i++) {
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(startEvents[i], gpuHandle->cudaHandles->stream));
+      gpuHandle->apply(
+        gpuHandle->cudaHandles.get(),
+        scratch,
+        batchSize,
+        gpuHandle->requireExactNNLen,
+        buffers->inputBuf,
+        buffers->inputGlobalBuf,
+        buffers->inputMetaBuf,
+        buffers->policyPassBuf,
+        buffers->policyBuf,
+        buffers->valueBuf,
+        buffers->scoreValueBuf,
+        buffers->ownershipBuf,
+        buffers->workspaceBuf,
+        buffers->workspaceBytes
+      );
+      CUDA_ERR("benchmarkOutput",cudaEventRecord(endEvents[i], gpuHandle->cudaHandles->stream));
+    }
+    CUDA_ERR("benchmarkOutput",cudaDeviceSynchronize());
+
+    iterationSeconds.reserve(numIterations);
+    for(int i = 0; i < numIterations; i++) {
+      float milliseconds = 0.0f;
+      CUDA_ERR("benchmarkOutput",cudaEventElapsedTime(&milliseconds,startEvents[i],endEvents[i]));
+      iterationSeconds.push_back((double)milliseconds / 1000.0);
+    }
+  }
+  catch(...) {
+    for(int i = 0; i < numIterations; i++) {
+      cudaEventDestroy(startEvents[i]);
+      cudaEventDestroy(endEvents[i]);
+    }
+    throw;
+  }
+
+  for(int i = 0; i < numIterations; i++) {
+    cudaEventDestroy(startEvents[i]);
+    cudaEventDestroy(endEvents[i]);
+  }
+  return true;
 }
 
 //TESTING ----------------------------------------------------------------------------------
