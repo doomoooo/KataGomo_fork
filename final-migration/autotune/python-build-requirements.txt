@@ -9,3 +9,4 @@ scikit-build-core==1.0.3
 cython==3.2.9
 patchelf==0.17.2.4
 packaging==26.3
+pathspec==1.1.1
