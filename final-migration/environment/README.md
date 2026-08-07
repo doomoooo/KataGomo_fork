@@ -7,8 +7,9 @@ setup.sh install   system + Python + latest locally built source dependencies
 setup.sh audit     version/library/path audit (no installation)
 setup.sh verify    compile/import smokes for third-party dependencies
 setup.sh build     build the KataGo CUDA backend
-setup.sh package   create a checked prebuilt distribution bundle
-setup.sh deploy    install a checked prebuilt bundle without source builds
+setup.sh package   create a checked, non-invasive `.tar` distribution
+setup.sh extract   verify/extract the tar into one empty isolated prefix
+setup.sh deploy    optionally install archived Python tools below that prefix
 setup.sh all       install, audit, verify, build
 ```
 
@@ -39,16 +40,14 @@ Configuration variables:
   memory-heavy.
 - `KATAGO_SMOKE_ARCHS`: space-separated CUDA smoke architectures; default
   detected architectures, falling back to `89 120`.
-- `KATAGO_PACKAGE_TAR=1`: additionally emit a `.tar.zst` distribution and an
-  external SHA-256 file for transfer.
 - `KATAGO_KEEP_SOURCE_BUILD_TREES=1`: retain ignored compiler intermediates;
   default discards them after the hashed wheel is installed to protect limited
   workspace capacity.
 - `KATAGO_RESUME_SOURCE_BUILD`: resume a specific interrupted source-build
   directory; every reused wheel is checked against its recorded SHA-256.
-- `KATAGO_SKIP_SYSTEM_BOOTSTRAP=1`: prebuilt deployment only; skip APT after
-  verifying that the bundle's exact CUDA toolkit and cuDNN package names are
-  already installed.
+- `KATAGO_MIN_DRIVER`: minimum target NVIDIA driver recorded in a tar; defaults
+  to the CUDA 13.2 build baseline (`595.45`) and must be updated when moving to
+  a CUDA release with a different compatibility floor.
 
 For source-capable dependencies, the setup checks current upstream HEAD and
 builds it locally. A local Git bundle seeds that checkout but does not prevent
@@ -76,10 +75,19 @@ TVM-FFI's independent HEAD can compile successfully while breaking TileLang's
 reflection registry at import time. The compatibility pin must be revalidated
 when either top-level project's metadata constraint changes.
 
-On a fresh machine the NVIDIA CUDA/cuDNN/driver meta packages resolve their
+On a fresh machine the bootstrap reads `/etc/os-release` and uses the matching
+NVIDIA Ubuntu repository (for example `ubuntu2204` or `ubuntu2404`); it does not
+hard-code one Ubuntu release. CUDA/cuDNN/profiler meta packages resolve their
 current repository versions. An already operational driver is deliberately
 left untouched. On a shared optimization host, use explicit package overrides
 instead of changing its compiler or driver underneath active sessions.
+
+The distributable path is separate from development bootstrap. It never uses
+APT: it bundles the compiled executable, a private ELF loader and user-space
+runtime libraries in a plain tar. `setup.sh extract ARCHIVE PREFIX` accepts only
+an empty, non-system prefix and all verification runs in place. Python wheels
+are archival/optional and require the recorded Python ABI; KataGo itself has no
+Python runtime dependency.
 
 TensorRT, Eigen, and OpenCL are intentionally out of scope and are not installed
 or tested by these scripts.

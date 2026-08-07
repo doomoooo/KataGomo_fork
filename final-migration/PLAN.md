@@ -21,7 +21,7 @@ Deliverables:
 - exact system/Python/resolved-source dependency inventory;
 - latest-source local builds for optimizer components, with local bundle
   seeding and explicit GitHub/proxy behavior;
-- a hash-checked prebuilt distribution path for future target machines;
+- a hash-checked, non-invasive tar distribution for future target machines;
 - compile smokes for CUDA, cuBLAS, cuDNN frontend, CUTLASS/CuTe, Triton,
   TileLang, and FlashAttention Python/CuTe imports;
 - a clean KataGo CUDA-backend build;
@@ -34,8 +34,9 @@ Acceptance:
 - a new driver installation is reported as requiring reboot;
 - the CUDA build completes and its executable answers `version`;
 - runtime library paths show which system and Python CUDA stacks are in use;
-- a packaged deployment can install the source-built wheels and CUDA backend
-  without cloning or compiling their sources.
+- a packaged deployment can extract the CUDA backend and its user-space runtime
+  into one empty prefix without APT or system writes; archived source-built
+  wheels can optionally be installed offline when the Python ABI matches.
 
 The current host passed these acceptance checks. A true blank-host run remains
 a release qualification whenever a new distribution is cut, because the

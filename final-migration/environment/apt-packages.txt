@@ -1,4 +1,4 @@
-# Ubuntu 24.04 packages installed by bootstrap-ubuntu.sh.
+# Ubuntu packages installed by bootstrap-ubuntu.sh.
 # NVIDIA repository packages are resolved separately in that script.
 build-essential
 ca-certificates

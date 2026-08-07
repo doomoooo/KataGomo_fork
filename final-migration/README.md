@@ -16,15 +16,16 @@ record used by the migration.
 - Active optimization worktrees are read-only inputs. Do not edit, merge, clean,
   or build in them from this migration.
 
-## Fresh Ubuntu entry point
+## Fresh Ubuntu development entry point
 
-On Ubuntu 24.04, from the repository root:
+On a supported Ubuntu amd64 release, from the repository root:
 
 ```bash
 ./final-migration/environment/setup.sh all
 ```
 
-The entry point installs and checks the system toolchain, creates an isolated
+The bootstrap selects the NVIDIA repository from the host's actual
+`VERSION_ID`; Ubuntu 24.04 is not hard-coded. The entry point installs and checks the system toolchain, creates an isolated
 Python environment, resolves the latest upstream source commits, builds them
 locally, runs compile smokes, and builds KataGo's CUDA backend. If a new NVIDIA
 driver was installed, reboot and run the same command again.
@@ -50,8 +51,17 @@ After a successful build, create the artifact intended for future machines:
 ```
 
 The bundle records resolved source revisions and hashes for every shipped wheel
-and CUDA-backend binary. A target can use either `setup.sh deploy BUNDLE` from
-the source tree or the bundle's standalone `installer/deploy-prebuilt.sh`.
+and CUDA-backend binary. It is a plain, non-invasive tar with its own user-space
+CUDA/cuDNN/C++/glibc runtime. A target needs only a compatible NVIDIA driver:
+
+```bash
+./BUNDLE.tar.install.sh BUNDLE.tar /persistent/isolated/katago
+/persistent/isolated/katago/bin/katago version
+```
+
+No target APT transaction or system path write occurs. The archived Python
+optimizer environment is optional and ABI-checked; it is not needed to run the
+CUDA backend.
 
 For non-installing checks on an already configured host:
 

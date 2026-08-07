@@ -1,28 +1,47 @@
-# Prebuilt CUDA-backend distribution
+# Prebuilt CUDA-backend tar
 
-This bundle contains the locally compiled optimizer wheels, their complete
-binary Python dependency closure, and the KataGo CUDA-backend executable.
-`SHA256SUMS` covers every shipped file.
+This archive is a non-invasive, relocatable KataGo CUDA-backend distribution.
+It contains the CUDA executable, its user-space CUDA/cuDNN/C++/glibc runtime,
+the compiled optimizer wheels, their offline Python wheel closure, build/source
+manifests, licenses, and `SHA256SUMS`. TensorRT is not included.
 
-On a fresh Ubuntu host, from outside the bundle:
+The only host dependency is an operational, sufficiently new NVIDIA driver.
+The archive deliberately loads `libcuda` from that driver; every other native
+runtime library is loaded from the extracted prefix. Nothing is installed into
+`/usr`, `/etc`, the package database, or the user's global Python environment.
+
+## Install the runtime
+
+Keep the tar, its `.sha256`, and the adjacent `.install.sh` together, then use
+an empty isolated prefix:
 
 ```bash
-./BUNDLE/installer/deploy-prebuilt.sh ./BUNDLE
+sha256sum --check BUNDLE.tar.install.sh.sha256
+./BUNDLE.tar.install.sh BUNDLE.tar /data/katago-runtime
+/data/katago-runtime/bin/katago version
 ```
 
-The installer verifies the complete bundle before changing the host, installs
-current CUDA/cuDNN system packages when needed, creates an isolated environment,
-and installs only local Python wheels. It does not clone optimizer sources or
-compile them. An operational NVIDIA driver is left unchanged; if a new driver
-is installed, reboot and rerun the command.
+The installer verifies the tar before extraction and then verifies every file,
+the bundled library resolution, driver version, and executable. It refuses
+system roots and non-empty prefixes. Removing that one prefix uninstalls the
+runtime.
 
-For a host whose recorded CUDA toolkit and cuDNN packages are already present,
-`KATAGO_SKIP_SYSTEM_BOOTSTRAP=1` skips all APT operations after verifying those
-two packages. This is also useful for a non-destructive bundle validation.
+## Optional archived Python tools
 
-The development setup follows current upstream releases. Deployment instead
-keeps the CUDA toolkit major.minor recorded at build time, while allowing
-compatible driver and library patch updates.
+The CUDA executable does not need Python. The wheel archive is retained so the
+exact locally compiled optimizer inputs can travel with a release. If the
+target has the same Python ABI recorded in `metadata/build-platform.txt`, it
+can be installed offline into another directory below the isolated prefix:
 
-Use `KATAGO_ENV_ROOT` to place the installed environment in a persistent data
-location. Large data must not be placed in a provider's ephemeral system path.
+```bash
+/data/katago-runtime/installer/deploy-prebuilt.sh \
+  /data/katago-runtime /data/katago-runtime/python-env
+```
+
+An ABI mismatch is reported without changing the target; the KataGo executable
+remains usable. Development hosts should build a new wheel set with their
+current upstream sources instead of silently reusing an incompatible ABI.
+
+The bundle targets Linux x86-64. Its private glibc loader makes it independent
+of the target Ubuntu release, subject to the target kernel and NVIDIA driver
+requirements recorded in `metadata/`.

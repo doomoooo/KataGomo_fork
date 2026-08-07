@@ -19,7 +19,13 @@ fi
 # shellcheck disable=SC1091
 source /etc/os-release
 [[ "${ID}" == "ubuntu" ]] || die "only Ubuntu is currently supported (found ${ID})"
-[[ "${VERSION_ID}" == "24.04" ]] || warn "baseline is Ubuntu 24.04; found ${VERSION_ID}"
+[[ "${VERSION_ID}" =~ ^[0-9]+\.[0-9]+$ ]] || die "unsupported Ubuntu VERSION_ID: ${VERSION_ID}"
+ubuntu_repository_id="ubuntu${VERSION_ID//./}"
+case "$(dpkg --print-architecture)" in
+  amd64) nvidia_repository_arch="x86_64" ;;
+  *) die "the current compiled dependency set supports Ubuntu amd64 only" ;;
+esac
+nvidia_repository_url="https://developer.download.nvidia.com/compute/cuda/repos/${ubuntu_repository_id}/${nvidia_repository_arch}/"
 
 mkdir -p -- "${KATAGO_ENV_ROOT}/state"
 
@@ -60,26 +66,39 @@ log "installing Ubuntu build dependencies"
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${ubuntu_packages[@]}"
 
 ensure_cuda_repository() {
-  if [[ -r /etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list ]]; then
+  if grep -RqsF "${nvidia_repository_url}" /etc/apt/sources.list.d 2>/dev/null; then
     return 0
   fi
 
-  local keyring_deb=""
-  local local_keyring
+  local keyring_deb="" temp_dir=""
+  local local_keyring local_keyring_root local_keyring_list
   local_keyring="$(find "${KATAGO_LOCAL_ARCHIVE}/apt" -maxdepth 1 -type f -name 'cuda-keyring_*.deb' -print -quit 2>/dev/null || true)"
   if [[ -n "${local_keyring}" ]]; then
-    keyring_deb="${local_keyring}"
-    log "using local CUDA repository keyring: ${keyring_deb}"
-  else
-    local temp_dir
+    local_keyring_root="$(mktemp -d)"
+    dpkg-deb -x "${local_keyring}" "${local_keyring_root}"
+    local_keyring_list="$(find "${local_keyring_root}/etc/apt/sources.list.d" -type f -name 'cuda-*.list' -print -quit 2>/dev/null || true)"
+    if [[ -n "${local_keyring_list}" ]] && grep -qF "${nvidia_repository_url}" "${local_keyring_list}"; then
+      keyring_deb="${local_keyring}"
+      log "using Ubuntu ${VERSION_ID} local CUDA repository keyring: ${keyring_deb}"
+    else
+      warn "ignoring local CUDA keyring for a different Ubuntu release"
+    fi
+    find "${local_keyring_root}" -mindepth 1 -delete
+    rmdir "${local_keyring_root}"
+  fi
+  if [[ -z "${keyring_deb}" ]]; then
     temp_dir="$(mktemp -d)"
     keyring_deb="${temp_dir}/cuda-keyring.deb"
-    warn "CUDA repository keyring not present in local archive; downloading from NVIDIA"
+    warn "matching CUDA repository keyring not present locally; downloading for Ubuntu ${VERSION_ID}"
     curl -fL --retry 3 \
       -o "${keyring_deb}" \
-      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+      "${nvidia_repository_url}cuda-keyring_1.1-1_all.deb"
   fi
   dpkg -i "${keyring_deb}"
+  if [[ -n "${temp_dir}" ]]; then
+    find "${temp_dir}" -mindepth 1 -delete
+    rmdir "${temp_dir}"
+  fi
   apt-get update
 }
 

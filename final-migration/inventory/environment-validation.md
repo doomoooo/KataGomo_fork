@@ -42,11 +42,11 @@ Nsight Systems' private zlib; the build script now pins
 `/usr/lib/<multiarch>/libz.so` and packaging rejects `/opt/nvidia` or
 `/workspace` runtime resolutions.
 
-The checked distribution contains 81 files and approximately 3.1 GiB: the
-KataGo executable, five locally built source wheels, the CUTLASS DSL exception,
-the exact 53-wheel binary closure, source/build/platform manifests, installer,
-and `SHA256SUMS`. Deployment from that bundle into an empty isolated prefix
-completed with `--no-index`, imported all source components, and ran
-`katago version` successfully. The tested bundle directory is recorded by
-`.final-migration-env/state/latest-distribution`; it is intentionally outside
-Git and must travel with the release artifacts.
+The release form is a plain, non-invasive tar: the KataGo executable, locally
+built source wheels, the exact binary wheel closure, a private ELF loader and
+user-space CUDA/cuDNN/C++ runtime, manifests, licenses, installer, and
+`SHA256SUMS`. It writes only an explicitly supplied empty prefix and never runs
+APT on a target. The concrete file count, size, checksum, local empty-prefix
+test, and Ubuntu 22.04 remote test are regenerated when the final tar is cut;
+the current artifact is recorded outside Git at
+`.final-migration-env/state/latest-distribution`.
