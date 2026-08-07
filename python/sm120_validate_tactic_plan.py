@@ -27,10 +27,12 @@ try:
         last_json_object,
         load_plan,
         parse_int_set,
+        reproducibility_identity,
         sha256_file,
         utc_now,
     )
     from sm120_tactic_plan import FAMILIES, validate_plan
+    from sm120_device import query_cuda_device
 except ModuleNotFoundError:  # imported as ``python.sm120_validate_tactic_plan``
     from python.sm120_benchmark_metrics import benchmark_throughput, summarize_throughput
     from python.sm120_run_tactic_search import (
@@ -39,10 +41,12 @@ except ModuleNotFoundError:  # imported as ``python.sm120_validate_tactic_plan``
         last_json_object,
         load_plan,
         parse_int_set,
+        reproducibility_identity,
         sha256_file,
         utc_now,
     )
     from python.sm120_tactic_plan import FAMILIES, validate_plan
+    from python.sm120_device import query_cuda_device
 
 
 def write_json(path: pathlib.Path, payload: dict) -> None:
@@ -145,6 +149,7 @@ def main() -> None:
     model_path = pathlib.Path(args.model).resolve()
     binary_path = pathlib.Path(args.binary).resolve()
     repo = pathlib.Path(args.repo).resolve()
+    device_properties = query_cuda_device(args.device)
     if not binary_path.is_file():
         raise ValueError(f"binary does not exist: {binary_path}")
 
@@ -154,6 +159,7 @@ def main() -> None:
     for family in FAMILIES:
         validate_plan(
             plan, space, model_path, family, batches, args.streams, config_path,
+            device_properties=device_properties,
         )
 
     control_ids = {}
@@ -188,6 +194,11 @@ def main() -> None:
     orders = sequence_for(args.order)
     output = pathlib.Path(args.output).resolve()
     logs = output.parent / f"{output.stem}-logs"
+    environment = collect_environment(
+        repo, config_path, model_path,
+        {"cutlass": pathlib.Path(args.cutlass_root).resolve()},
+        args.fa4_python, device_properties,
+    )
     regime = {
         "plan": str(plan_path),
         "plan_sha256": sha256_file(plan_path),
@@ -202,6 +213,7 @@ def main() -> None:
         "binary": str(binary_path),
         "binary_sha256": sha256_file(binary_path),
         "cuda_device_ordinal": args.device,
+        "cuda_device_properties": device_properties,
         "streams": args.streams,
         "iterations": args.iterations,
         "warmup": args.warmup,
@@ -209,17 +221,13 @@ def main() -> None:
         "orders": orders,
         "runner": runner,
         "extra_override_config": args.override_config,
+        "reproducibility_identity": reproducibility_identity(environment),
     }
     if output.exists():
         payload = json.loads(output.read_text())
         if payload.get("regime") != regime:
             raise ValueError("validation output exists with a different regime")
     else:
-        environment = collect_environment(
-            repo, config_path, model_path,
-            {"cutlass": pathlib.Path(args.cutlass_root).resolve()},
-            args.fa4_python,
-        )
         payload = {
             "schema": 1,
             "kind": "sm120-abba-baab-validation",

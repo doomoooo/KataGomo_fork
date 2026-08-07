@@ -7,12 +7,6 @@
 
 namespace Sm120Backend {
 
-enum Sm120GpuClass {
-  SM120_GPU_OTHER = 0,
-  SM120_GPU_RTX5080 = 1,
-  SM120_GPU_RTX5090D = 2,
-};
-
 typedef cudaError_t (*FusedFFNAotLaunchFn)(
   const half*, const half*, const half*, half*, cudaStream_t);
 typedef cudaError_t (*WideQKVAotLaunchFn)(
@@ -30,7 +24,7 @@ struct FA4AotTactic {
 
 struct FusedFFNAotTactic {
   int batchSize;
-  int gpuClass;
+  int requiredNumSms;
   int streams;
   const char* id;
   bool automaticWinner;
@@ -39,7 +33,7 @@ struct FusedFFNAotTactic {
 
 struct WideQKVAotTactic {
   int batchSize;
-  int gpuClass;
+  int requiredNumSms;
   int streams;
   const char* id;
   bool automaticWinner;
@@ -49,7 +43,7 @@ struct WideQKVAotTactic {
 
 struct ResidualGemmAotTactic {
   int batchSize;
-  int gpuClass;
+  int requiredNumSms;
   int streams;
   int inputChannels;
   const char* id;
@@ -62,13 +56,14 @@ struct ResidualGemmAotTactic {
 const FusedFFNAotTactic* getSm120SearchFfnFatTactics(std::size_t& count);
 const WideQKVAotTactic* getSm120SearchQkvFatTactics(std::size_t& count);
 const ResidualGemmAotTactic* getSm120SearchLinear2FatTactics(std::size_t& count);
+const FA4AotTactic* getSm120SearchFA4FatTactics(std::size_t& count);
 
 const FusedFFNAotTactic* findFusedFFNAotTactic(
-  int batchSize, int gpuClass, int streams, const char* requestedId);
+  int batchSize, int numSms, int streams, const char* requestedId);
 const WideQKVAotTactic* findWideQKVAotTactic(
-  int batchSize, int gpuClass, int streams, const char* requestedId);
+  int batchSize, int numSms, int streams, const char* requestedId);
 const ResidualGemmAotTactic* findResidualGemmAotTactic(
-  int batchSize, int gpuClass, int streams, int inputChannels,
+  int batchSize, int numSms, int streams, int inputChannels,
   const char* requestedId);
 const FA4AotTactic* findFA4AotTactic(
   int batchSize, const char* requestedId);

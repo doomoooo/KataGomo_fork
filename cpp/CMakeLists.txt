@@ -89,6 +89,14 @@ if(USE_BACKEND STREQUAL "CUDA")
     "Semicolon-separated exact-batch QKV TileLang TUs linked for one fat scan")
   set(SM120_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING
     "Semicolon-separated exact-batch linear2 TileLang TUs linked for one fat scan")
+  set(SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe QKV bridge TUs linked for one fat scan")
+  set(SM120_SEARCH_QKV_FAT_OBJECTS "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe QKV AOT objects linked for one fat scan")
+  set(SM120_SEARCH_FA4_FAT_SOURCES "" CACHE STRING
+    "Semicolon-separated exact-batch FA4 bridge TUs linked for one fat scan")
+  set(SM120_SEARCH_FA4_FAT_OBJECTS "" CACHE STRING
+    "Semicolon-separated exact-batch FA4 AOT objects linked for one fat scan")
   set(SM120_SEARCH_FFN_FAT_REGISTRY_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_ffn_fat_stub.cu"
     CACHE FILEPATH "Generated exact-batch FFN fat-scan registry, or its empty stub")
@@ -98,6 +106,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_fat_stub.cu"
     CACHE FILEPATH "Generated exact-batch linear2 fat-scan registry, or its empty stub")
+  set(SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/sm120_search_fa4_fat_stub.cpp"
+    CACHE FILEPATH "Generated exact-batch FA4 fat-scan registry, or its empty stub")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm120.cpp
@@ -118,9 +129,12 @@ if(USE_BACKEND STREQUAL "CUDA")
     ${SM120_SEARCH_FFN_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_QKV_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE}
+    ${SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_FFN_FAT_SOURCES}
     ${SM120_SEARCH_QKV_FAT_SOURCES}
     ${SM120_SEARCH_LINEAR2_FAT_SOURCES}
+    ${SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_FA4_FAT_SOURCES}
     neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
@@ -148,6 +162,13 @@ if(USE_BACKEND STREQUAL "CUDA")
       CUDA_ARCHITECTURES "120"
       INCLUDE_DIRECTORIES
       "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/TileLang/src;${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cutlass/include"
+  )
+  set_source_files_properties(
+    ${SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_FA4_FAT_SOURCES}
+    ${SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE}
+    PROPERTIES
+      INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet"
   )
   # The vendored header-only cudnn_frontend library trips GCC's -Wnull-dereference from its -O2
   # interprocedural analysis (no source location, so an in-file #pragma can't suppress it). It's
@@ -480,6 +501,12 @@ if(USE_BACKEND STREQUAL "CUDA")
   endif()
   if(SM120_SEARCH_QKV_OBJECT)
     target_link_libraries(katago ${SM120_SEARCH_QKV_OBJECT})
+  endif()
+  if(SM120_SEARCH_QKV_FAT_OBJECTS)
+    target_link_libraries(katago ${SM120_SEARCH_QKV_FAT_OBJECTS})
+  endif()
+  if(SM120_SEARCH_FA4_FAT_OBJECTS)
+    target_link_libraries(katago ${SM120_SEARCH_FA4_FAT_OBJECTS})
   endif()
 elseif(USE_BACKEND STREQUAL "TENSORRT")
   target_compile_definitions(katago PRIVATE USE_TENSORRT_BACKEND)

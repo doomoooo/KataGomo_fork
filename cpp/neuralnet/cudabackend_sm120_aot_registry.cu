@@ -52,40 +52,41 @@ cudaError_t launchFfnSingleStream(
 // Shape values live only in this generated-style registry. Backend operator
 // code performs a data-driven lookup and contains no fixed-batch conditions.
 // Explicit requested IDs are search candidates on any SM120 GPU. "auto"
-// selects only an entry accepted for the exact GPU/batch/stream key.
+// selects only an entry accepted for the exact CUDA-reported SM-count,
+// batch, and stream key. No marketing-name matching is used at runtime.
 const FusedFFNAotTactic ffnTactics[] = {
-  {13, SM120_GPU_OTHER, 0, "ffn-m128-n64-k32-s2-mb3-exp", false, launchFfnCurrent},
-  {13, SM120_GPU_RTX5090D, 2, "ffn-m128-n64-k32-s2-mb3-areuse-exp", true, launchFfnAReuse},
-  {13, SM120_GPU_OTHER, 0, "ffn-m128-n64-k32-s3-single-stream-exp", false, launchFfnSingleStream},
+  {13, 0, 0, "ffn-m128-n64-k32-s2-mb3-exp", false, launchFfnCurrent},
+  {13, 170, 2, "ffn-m128-n64-k32-s2-mb3-areuse-exp", true, launchFfnAReuse},
+  {13, 0, 0, "ffn-m128-n64-k32-s3-single-stream-exp", false, launchFfnSingleStream},
 };
 
 const WideQKVAotTactic qkvTactics[] = {
-  {13, SM120_GPU_RTX5090D, 2, "qkv-m128-n128-k64-s2-tilelang-planar", true, false, launchWideQKVB13},
-  {13, SM120_GPU_OTHER, 0, "qkv-m128-n128-k32-s3-tilelang-planar", false, false, launchWideQKVB13S1},
+  {13, 170, 2, "qkv-m128-n128-k64-s2-tilelang-planar", true, false, launchWideQKVB13},
+  {13, 0, 0, "qkv-m128-n128-k32-s3-tilelang-planar", false, false, launchWideQKVB13S1},
 };
 
 const ResidualGemmAotTactic residualTactics[] = {
-  {13, SM120_GPU_RTX5090D, 2, 1152, "linear2-m128-n128-k32-s4-tilelang-64k", true, launchLinear2ResidualB13},
-  {13, SM120_GPU_OTHER, 0, 1152, "linear2-balanced-b13", false, launchLinear2ResidualB13Balanced},
-  {13, SM120_GPU_OTHER, 0, 384, "outproj-m128-n128-k32-s4-tilelang-64k", false, launchOutProjectionResidualB13},
+  {13, 170, 2, 1152, "linear2-m128-n128-k32-s4-tilelang-64k", true, launchLinear2ResidualB13},
+  {13, 0, 0, 1152, "linear2-balanced-b13", false, launchLinear2ResidualB13Balanced},
+  {13, 0, 0, 384, "outproj-m128-n128-k32-s4-tilelang-64k", false, launchOutProjectionResidualB13},
 };
 
 const FusedFFNAotTactic searchFfnTactic = {
-  sm120_search_ffn_batch(), SM120_GPU_OTHER, 0,
+  sm120_search_ffn_batch(), 0, 0,
   sm120_search_ffn_id(), false, sm120_search_ffn_launch};
 const WideQKVAotTactic searchQkvTactic = {
-  sm120_search_qkv_batch(), SM120_GPU_OTHER, 0,
+  sm120_search_qkv_batch(), 0, 0,
   sm120_search_qkv_id(), false, sm120_search_qkv_packed() != 0,
   sm120_search_qkv_launch};
 const ResidualGemmAotTactic searchLinear2Tactic = {
-  sm120_search_linear2_batch(), SM120_GPU_OTHER, 0, 1152,
+  sm120_search_linear2_batch(), 0, 0, 1152,
   sm120_search_linear2_id(), false, sm120_search_linear2_launch};
 const FA4AotTactic searchFA4Tactic = {
   sm120_search_fa4_batch(), sm120_search_fa4_id(), sm120_search_fa4_launch};
 
 template<typename T, size_t N>
 const T* findTactic(
-  const T (&tactics)[N], int batchSize, int gpuClass, int streams,
+  const T (&tactics)[N], int batchSize, int numSms, int streams,
   const char* requestedId
 ) {
   const bool automatic = requestedId == nullptr || std::strcmp(requestedId, "auto") == 0;
@@ -93,7 +94,7 @@ const T* findTactic(
     if(tactic.batchSize != batchSize)
       continue;
     if(automatic) {
-      if(tactic.automaticWinner && tactic.gpuClass == gpuClass && tactic.streams == streams)
+      if(tactic.automaticWinner && tactic.requiredNumSms == numSms && tactic.streams == streams)
         return &tactic;
     }
     else if(std::strcmp(tactic.id, requestedId) == 0) {
@@ -120,7 +121,7 @@ const T* findExplicitFatTactic(
 } // namespace
 
 const FusedFFNAotTactic* findFusedFFNAotTactic(
-  int batchSize, int gpuClass, int streams, const char* requestedId
+  int batchSize, int numSms, int streams, const char* requestedId
 ) {
   std::size_t fatCount = 0;
   const FusedFFNAotTactic* fatTactics = getSm120SearchFfnFatTactics(fatCount);
@@ -129,7 +130,7 @@ const FusedFFNAotTactic* findFusedFFNAotTactic(
   if(tactic != nullptr)
     return tactic;
   tactic = findTactic(
-    ffnTactics, batchSize, gpuClass, streams, requestedId);
+    ffnTactics, batchSize, numSms, streams, requestedId);
   if(tactic != nullptr)
     return tactic;
   return requestedId != nullptr && searchFfnTactic.batchSize == batchSize &&
@@ -137,7 +138,7 @@ const FusedFFNAotTactic* findFusedFFNAotTactic(
 }
 
 const WideQKVAotTactic* findWideQKVAotTactic(
-  int batchSize, int gpuClass, int streams, const char* requestedId
+  int batchSize, int numSms, int streams, const char* requestedId
 ) {
   std::size_t fatCount = 0;
   const WideQKVAotTactic* fatTactics = getSm120SearchQkvFatTactics(fatCount);
@@ -146,7 +147,7 @@ const WideQKVAotTactic* findWideQKVAotTactic(
   if(tactic != nullptr)
     return tactic;
   tactic = findTactic(
-    qkvTactics, batchSize, gpuClass, streams, requestedId);
+    qkvTactics, batchSize, numSms, streams, requestedId);
   if(tactic != nullptr)
     return tactic;
   return requestedId != nullptr && searchQkvTactic.batchSize == batchSize &&
@@ -154,7 +155,7 @@ const WideQKVAotTactic* findWideQKVAotTactic(
 }
 
 const ResidualGemmAotTactic* findResidualGemmAotTactic(
-  int batchSize, int gpuClass, int streams, int inputChannels,
+  int batchSize, int numSms, int streams, int inputChannels,
   const char* requestedId
 ) {
   std::size_t fatCount = 0;
@@ -173,7 +174,7 @@ const ResidualGemmAotTactic* findResidualGemmAotTactic(
     if(tactic.batchSize != batchSize || tactic.inputChannels != inputChannels)
       continue;
     if(automatic) {
-      if(tactic.automaticWinner && tactic.gpuClass == gpuClass && tactic.streams == streams)
+      if(tactic.automaticWinner && tactic.requiredNumSms == numSms && tactic.streams == streams)
         return &tactic;
     }
     else if(std::strcmp(tactic.id, requestedId) == 0) {
@@ -186,6 +187,12 @@ const ResidualGemmAotTactic* findResidualGemmAotTactic(
 const FA4AotTactic* findFA4AotTactic(
   int batchSize, const char* requestedId
 ) {
+  std::size_t fatCount = 0;
+  const FA4AotTactic* fatTactics = getSm120SearchFA4FatTactics(fatCount);
+  const FA4AotTactic* tactic = findExplicitFatTactic(
+    fatTactics, fatCount, batchSize, requestedId);
+  if(tactic != nullptr)
+    return tactic;
   return requestedId != nullptr && searchFA4Tactic.batchSize == batchSize &&
     std::strcmp(searchFA4Tactic.id, requestedId) == 0 ? &searchFA4Tactic : nullptr;
 }

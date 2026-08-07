@@ -9,6 +9,7 @@ from collections.abc import Iterable
 
 MIN_LONG_ITERATIONS = 1000
 MIN_STABLE_SAMPLES = 2
+MAX_STABLE_RELATIVE_SPREAD = 0.10
 
 
 def benchmark_throughput(record: dict) -> float:
@@ -35,10 +36,14 @@ def summarize_throughput(
         "measurement_warmup": int(warmup),
         "measurement_sample_count": len(values),
         "measurement_kind": "short_scan",
+        "measurement_relative_spread": (
+            (max(values) - min(values)) / median if median > 0.0 else float("inf")
+        ),
     }
     if (
         iterations >= MIN_LONG_ITERATIONS
         and len(values) >= MIN_STABLE_SAMPLES
+        and result["measurement_relative_spread"] <= MAX_STABLE_RELATIVE_SPREAD
     ):
         result.update({
             "measurement_kind": "long_stable",

@@ -16,10 +16,12 @@ sys.path.insert(0, str(PYTHON_DIR))
 
 from sm120_fat_scan import (  # noqa: E402
     isolate_tilelang_debug_symbols,
+    launch_symbol,
     render_registry,
     select_tilelang_requests,
     symbol_token,
 )
+from sm120_generate_cute_qkv_aot import render_bridge as render_cute_qkv_bridge  # noqa: E402
 from sm120_generate_tilelang_aot import append_wrapper  # noqa: E402
 from sm120_run_tactic_search import load_fat_bundle  # noqa: E402
 
@@ -62,10 +64,44 @@ class FatScanTests(unittest.TestCase):
             test_space(), "ffn", (1, 32), ("tile-a",)
         )
         source = render_registry("ffn", requests)
-        self.assertIn('{1, SM120_GPU_OTHER, 0, "tile-a", false,', source)
-        self.assertIn('{32, SM120_GPU_OTHER, 0, "tile-a", false,', source)
+        self.assertIn('{1, 0, 0, "tile-a", false,', source)
+        self.assertIn('{32, 0, 0, "tile-a", false,', source)
         for request in requests:
             self.assertEqual(source.count(request["launch_symbol"]), 2)
+
+    def test_qkv_registry_preserves_packed_output_abi(self) -> None:
+        token = symbol_token("qkv", 7, "cute-packed")
+        source = render_registry("qkv", [{
+            "batch": 7,
+            "candidate_id": "cute-packed",
+            "candidate": {"id": "cute-packed", "output": "packed"},
+            "symbol_token": token,
+            "launch_symbol": launch_symbol("qkv", token),
+        }])
+        self.assertIn(
+            '{7, 0, 0, "cute-packed", false, true,', source,
+        )
+
+    def test_fa4_registry_uses_exact_batch_id_getter(self) -> None:
+        token = symbol_token("fa4", 13, "fa4-n96")
+        source = render_registry("fa4", [{
+            "batch": 13,
+            "candidate_id": "fa4-n96",
+            "candidate": {"id": "fa4-n96"},
+            "symbol_token": token,
+            "launch_symbol": launch_symbol("fa4", token),
+        }])
+        self.assertIn('{13, "fa4-n96",', source)
+        self.assertIn("getSm120SearchFA4FatTactics", source)
+
+    def test_cute_qkv_fat_bridge_has_no_single_slot_exports(self) -> None:
+        token = symbol_token("qkv", 8, "cute-packed")
+        source = render_cute_qkv_bridge(
+            token, 8, "cute-packed", token,
+        )
+        self.assertIn(launch_symbol("qkv", token), source)
+        self.assertNotIn("sm120_search_qkv_batch()", source)
+        self.assertNotIn("sm120_search_qkv_id()", source)
 
     def test_debug_header_symbols_are_unique_per_tu(self) -> None:
         original = """#include <tl_templates/cuda/debug.h>
@@ -91,8 +127,11 @@ __global__ void kernel() { debug_print_msg("x"); }
         ).read_text()
         self.assertIn("SM120_SEARCH_FFN_SOURCE", cmake)
         self.assertIn("SM120_SEARCH_FFN_FAT_SOURCES", cmake)
+        self.assertIn("SM120_SEARCH_QKV_FAT_OBJECTS", cmake)
+        self.assertIn("SM120_SEARCH_FA4_FAT_OBJECTS", cmake)
         self.assertIn("searchFfnTactic", registry)
         self.assertIn("getSm120SearchFfnFatTactics", registry)
+        self.assertIn("getSm120SearchFA4FatTactics", registry)
         self.assertLess(
             registry.index("getSm120SearchFfnFatTactics", registry.index("findFusedFFNAotTactic")),
             registry.index("ffnTactics", registry.index("findFusedFFNAotTactic")),
@@ -175,6 +214,43 @@ metadata = {
                 test_space(), {(1, "tile-a")},
             )
             self.assertEqual(len(loaded["entries"]), 32)
+            migrated_space = test_space()
+            migrated_space["cuda_device_properties_at_space_generation"] = {
+                "compute_capability": [12, 0],
+                "multiprocessor_count": 170,
+            }
+            space_path.write_text(json.dumps(migrated_space))
+            loaded = load_fat_bundle(
+                output_dir / "manifest.json", "ffn", space_path,
+                migrated_space, {(1, "tile-a")},
+            )
+            self.assertEqual(
+                loaded["loaded_space_compatibility"],
+                "exact_candidate_projection",
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PYTHON_DIR / "sm120_prepare_tilelang_fat_scan.py"),
+                    "--space", str(space_path),
+                    "--family", "ffn",
+                    "--batches", "1-32",
+                    "--candidate-ids", "tile-a",
+                    "--device", "999",
+                    "--generator", str(generator_path),
+                    "--output-dir", str(output_dir),
+                    "--reuse-existing",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            migrated = json.loads((output_dir / "manifest.json").read_text())
+            self.assertTrue(all(item["reused"] for item in migrated["entries"]))
+            self.assertTrue(all(
+                item["reused_from_space_sha256"]
+                for item in migrated["entries"]
+            ))
             (output_dir / "manifest.json").unlink()
             subprocess.run(
                 [

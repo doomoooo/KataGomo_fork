@@ -16,8 +16,10 @@ after correctness and natural whole-graph S2 validation.
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
+import re
 import sys
 
 
@@ -29,6 +31,7 @@ parser.add_argument("--artifact-stem")
 parser.add_argument("--symbol-prefix", default="fa4")
 parser.add_argument("--candidate-id")
 parser.add_argument("--bridge-path")
+parser.add_argument("--fat-symbol-token")
 parser.add_argument("--tile-m", type=int, default=128)
 parser.add_argument("--tile-n", type=int, default=128)
 parser.add_argument("--num-stages", type=int, default=1)
@@ -37,6 +40,10 @@ if args.batch < 1:
     parser.error("--batch must be positive")
 if args.tile_m <= 0 or args.tile_n <= 0 or args.num_stages <= 0:
     parser.error("attention tile and stage values must be positive")
+if args.fat_symbol_token and not re.fullmatch(
+    r"[A-Za-z_][A-Za-z0-9_]*", args.fat_symbol_token
+):
+    parser.error("--fat-symbol-token must be a C identifier")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.abspath(args.output_dir or HERE)
@@ -61,10 +68,51 @@ from cutlass import Float16, Float32  # noqa: E402
 torch.cuda.set_device(args.device)
 
 from flash_attn.cute.flash_fwd_sm120 import FlashAttentionForwardSm120  # noqa: E402
+import flash_attn.cute.flash_fwd as flash_fwd_module  # noqa: E402
+import flash_attn.cute.flash_fwd_sm120 as flash_fwd_sm120_module  # noqa: E402
+import flash_attn.cute.mask as flash_mask_module  # noqa: E402
+import flash_attn.cute.softmax as flash_softmax_module  # noqa: E402
 from flash_attn.cute.cute_dsl_utils import to_cute_tensor  # noqa: E402
 from flash_attn.cute.utils import AuxData  # noqa: E402
 from cutlass.cute.export.c_header_generator import CuteCHeaderGenerator  # noqa: E402
 from quack import layout_utils  # noqa: E402
+
+
+def _file_identity(path):
+    resolved = os.path.realpath(path)
+    with open(resolved, "rb") as source_file:
+        digest = hashlib.sha256(source_file.read()).hexdigest()
+    return {"path": resolved, "sha256": digest}
+
+
+def _distribution_version(name):
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+PYTHON_ENVIRONMENT = {
+    "executable": sys.executable,
+    "version": sys.version,
+    "distributions": {
+        name: _distribution_version(name)
+        for name in (
+            "flash-attn-4", "nvidia-cutlass-dsl", "quack-kernels", "torch"
+        )
+    },
+    # Distribution versions alone are insufficient: the accepted both16 FA4
+    # path has historically carried a small upstream source patch. Hash the
+    # exact implementation files that select and lower the accumulator types.
+    "module_sources": {
+        "flash_attn.cute.flash_fwd": _file_identity(flash_fwd_module.__file__),
+        "flash_attn.cute.flash_fwd_sm120": _file_identity(
+            flash_fwd_sm120_module.__file__
+        ),
+        "flash_attn.cute.mask": _file_identity(flash_mask_module.__file__),
+        "flash_attn.cute.softmax": _file_identity(flash_softmax_module.__file__),
+    },
+}
 
 # AuxData is a compile-time marker the AOT C header generator does not know.
 # Skip it when emitting the C signature (no aux tensors in our kernel).
@@ -165,6 +213,15 @@ if args.bridge_path:
     bridge_path = os.path.abspath(args.bridge_path)
     if os.path.dirname(bridge_path) != OUT_DIR:
         raise ValueError("FA4 bridge and generated header must share --output-dir")
+    if args.fat_symbol_token:
+        exports = (
+            'extern "C" cudaError_t sm120_search_fa4_fat_launch_'
+            f'{args.fat_symbol_token}'
+        )
+    else:
+        exports = f'''extern "C" int sm120_search_fa4_batch() {{ return {B}; }}
+extern "C" const char* sm120_search_fa4_id() {{ return {json.dumps(args.candidate_id)}; }}
+extern "C" cudaError_t sm120_search_fa4_launch'''
     bridge = f'''#include "{ARTIFACT_STEM}.h"
 
 #include <cmath>
@@ -177,9 +234,7 @@ std::once_flag loadOnce;
 
 }} // namespace
 
-extern "C" int sm120_search_fa4_batch() {{ return {B}; }}
-extern "C" const char* sm120_search_fa4_id() {{ return {json.dumps(args.candidate_id)}; }}
-extern "C" cudaError_t sm120_search_fa4_launch(
+{exports}(
   void* q, void* k, void* v, void* output,
   int batch, int seq, int heads, int dim, float scale, cudaStream_t stream
 ) {{
@@ -218,6 +273,12 @@ extern "C" cudaError_t sm120_search_fa4_launch(
             },
             "artifact_stem": ARTIFACT_STEM,
             "symbol_prefix": SYMBOL_PREFIX,
+            "fat_symbol_token": args.fat_symbol_token,
+            "launch_symbol": (
+                f"sm120_search_fa4_fat_launch_{args.fat_symbol_token}"
+                if args.fat_symbol_token else "sm120_search_fa4_launch"
+            ),
+            "python_environment": PYTHON_ENVIRONMENT,
             "sha256": artifacts,
             "acceptance_metric": "natural whole-graph S2 total throughput",
         }, metadata_file, indent=2)

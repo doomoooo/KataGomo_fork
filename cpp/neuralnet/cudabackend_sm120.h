@@ -667,7 +667,7 @@ class Sm120Model {
   const bool useFP16;
   const bool useNHWC;
   Options options;
-  int sm120GpuClass;
+  int sm120NumSms;
   Logger* logger;
   bool loggedFallback;
   bool loggedFa4;

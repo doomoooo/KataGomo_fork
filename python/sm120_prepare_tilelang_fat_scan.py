@@ -76,7 +76,9 @@ def reusable_entry(
     metadata = json.loads(metadata_path.read_text())
     return (
         previous.get("generator_sha256") == generator_sha256
-        and previous.get("space_sha256") == space_sha256
+        # Space-level provenance (for example a newly recorded CUDA device)
+        # does not affect a generated TU. Exact candidate equality does.
+        and previous.get("candidate") == request["candidate"]
         and previous.get("source_sha256") == sha256_file(source_path)
         and previous.get("metadata_sha256") == sha256_file(metadata_path)
         and metadata.get("batch") == request["batch"]
@@ -107,6 +109,7 @@ def recover_existing_entry(
     ):
         return None
     return {
+        "candidate": request["candidate"],
         "generator_sha256": generator_sha256,
         "space_sha256": space_sha256,
         "source_sha256": source_sha256,
@@ -145,6 +148,7 @@ def write_checkpoint(
         "generator_sha256": generator_sha256,
         "registry_source": str(registry_path),
         "registry_sha256": sha256_file(registry_path),
+        "registry_abi": "sm120-numeric-sm-count-v2",
         "sources": [item["source"] for item in entries],
         "entries": entries,
     }
@@ -168,7 +172,10 @@ def main() -> None:
     parser.add_argument(
         "--reuse-existing",
         action="store_true",
-        help="reuse a TU only when generator, space, source, and metadata hashes match",
+        help=(
+            "reuse a TU only when generator, exact candidate projection, "
+            "source, and metadata hashes match"
+        ),
     )
     args = parser.parse_args()
 
@@ -241,6 +248,11 @@ def main() -> None:
             "metadata_sha256": sha256_file(metadata_path),
             "generator_sha256": generator_sha256,
             "space_sha256": space_sha256,
+            "reused_from_space_sha256": (
+                previous.get("space_sha256")
+                if reused and previous.get("space_sha256") != space_sha256
+                else None
+            ),
             "reused": reused,
             "recovered_without_prior_manifest": bool(
                 previous and previous.get("recovered_without_prior_manifest")

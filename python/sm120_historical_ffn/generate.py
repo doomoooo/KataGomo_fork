@@ -28,6 +28,13 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 ROOT = Path(__file__).resolve().parent
 UPSTREAM = ROOT / "upstream"
 MANIFEST_PATH = ROOT / "manifest.json"
+sys.path.insert(0, str(ROOT.parent))
+
+from sm120_fat_scan import (  # noqa: E402
+    isolate_tilelang_debug_symbols,
+    launch_symbol,
+    validate_symbol_token,
+)
 
 BOARD_AREA = 19 * 19
 COLUMNS = 1152
@@ -66,6 +73,24 @@ extern "C" const char* sm120_search_ffn_id() {
 }
 
 extern "C" cudaError_t sm120_search_ffn_launch(
+  const half* input, const half* linear_weights, const half* gate_weights,
+  half* output, cudaStream_t stream
+) {
+  KATAGO_KERNEL_NAME<<<
+    dim3(18, KATAGO_GRID_Y, 1), dim3(128, 1, 1), 32768, stream>>>(
+      reinterpret_cast<const half_t*>(input),
+      reinterpret_cast<const half_t*>(gate_weights),
+      reinterpret_cast<const half_t*>(linear_weights),
+      reinterpret_cast<half_t*>(output));
+  return cudaPeekAtLastError();
+}
+'''
+
+FAT_WRAPPER = r'''
+
+#include <cuda_runtime_api.h>
+
+extern "C" cudaError_t KATAGO_FAT_LAUNCH_SYMBOL(
   const half* input, const half* linear_weights, const half* gate_weights,
   half* output, cudaStream_t stream
 ) {
@@ -325,13 +350,22 @@ def generate_device_source(
 
 
 def append_search_wrapper(
-    device_source: str, *, batch: int, kernel_name: str
+    device_source: str, *, batch: int, kernel_name: str,
+    fat_symbol_token: str | None = None,
 ) -> str:
     grid_y = (batch * BOARD_AREA + BLOCK_M - 1) // BLOCK_M
     guarded = restrict_kernel_to_sm120(device_source, kernel_name)
+    if fat_symbol_token is None:
+        template = WRAPPER.replace("KATAGO_BATCH", str(batch))
+    else:
+        validate_symbol_token(fat_symbol_token)
+        guarded = isolate_tilelang_debug_symbols(guarded, fat_symbol_token)
+        template = FAT_WRAPPER.replace(
+            "KATAGO_FAT_LAUNCH_SYMBOL",
+            launch_symbol("ffn", fat_symbol_token),
+        )
     wrapper = (
-        WRAPPER.replace("KATAGO_BATCH", str(batch))
-        .replace("KATAGO_GRID_Y", str(grid_y))
+        template.replace("KATAGO_GRID_Y", str(grid_y))
         .replace("KATAGO_KERNEL_NAME", kernel_name)
     )
     return guarded + wrapper
@@ -375,6 +409,7 @@ def metadata_for(
     device_evidence: dict[str, Any],
     manifest: dict[str, Any],
     dependency_evidence: dict[str, Any],
+    fat_symbol_token: str | None,
 ) -> dict[str, Any]:
     rows = batch * BOARD_AREA
     grid_y = (rows + BLOCK_M - 1) // BLOCK_M
@@ -402,9 +437,14 @@ def metadata_for(
             "operationOrder": "half2 linear * (half2_fma(h2tanh_approx(half2_linear * 0.5), 0.5, 0.5)) * half2 gate",
         },
         "abi": {
-            "batchSymbol": "sm120_search_ffn_batch",
-            "idSymbol": "sm120_search_ffn_id",
-            "launchSymbol": "sm120_search_ffn_launch",
+            "batchSymbol": (
+                None if fat_symbol_token else "sm120_search_ffn_batch"
+            ),
+            "idSymbol": None if fat_symbol_token else "sm120_search_ffn_id",
+            "launchSymbol": (
+                launch_symbol("ffn", fat_symbol_token)
+                if fat_symbol_token else "sm120_search_ffn_launch"
+            ),
             "launchArguments": [
                 "const half* input[M,K]",
                 "const half* linear_weights[K,N]",
@@ -418,8 +458,13 @@ def metadata_for(
                 "linear_weights",
                 "output",
             ],
-            "singleActiveTranslationUnit": True,
+            "singleActiveTranslationUnit": fat_symbol_token is None,
         },
+        "fat_symbol_token": fat_symbol_token,
+        "launch_symbol": (
+            launch_symbol("ffn", fat_symbol_token)
+            if fat_symbol_token else "sm120_search_ffn_launch"
+        ),
         "source": str(source_path.resolve()),
         "sourceSha256": sha256_bytes(source.encode("utf-8")),
         "deviceSource": device_evidence,
@@ -460,6 +505,7 @@ def emit_one(
     candidate_id: str,
     manifest: dict[str, Any],
     dependency_evidence: dict[str, Any],
+    fat_symbol_token: str | None = None,
 ) -> dict[str, Any]:
     if not 1 <= batch <= 32:
         raise ValueError(f"batch must be in B1..B32, got B{batch}")
@@ -473,7 +519,8 @@ def emit_one(
         kernels, batch, manifest
     )
     source = append_search_wrapper(
-        device_source, batch=batch, kernel_name=kernel_name
+        device_source, batch=batch, kernel_name=kernel_name,
+        fat_symbol_token=fat_symbol_token,
     )
     actual_source_path = (
         source_path.resolve()
@@ -489,6 +536,7 @@ def emit_one(
         device_evidence=device_evidence,
         manifest=manifest,
         dependency_evidence=dependency_evidence,
+        fat_symbol_token=fat_symbol_token,
     )
     write_if_changed(
         metadata_path,
@@ -511,13 +559,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--space", type=Path)
     parser.add_argument("--family", choices=("ffn",), default="ffn")
     parser.add_argument("--candidate-id", default=CANDIDATE_ID)
+    parser.add_argument("--fat-symbol-token")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.fat_symbol_token:
+        validate_symbol_token(args.fat_symbol_token)
     if args.all_batches and args.source_path is not None:
         raise ValueError("--source-path cannot be combined with --all-batches")
+    if args.all_batches and args.fat_symbol_token is not None:
+        raise ValueError("--fat-symbol-token requires one exact --batch")
     manifest = load_manifest()
     dependency_evidence = verify_dependencies(manifest)
     kernels = load_historical_kernels()
@@ -539,6 +592,7 @@ def main() -> None:
                 candidate_id=args.candidate_id,
                 manifest=manifest,
                 dependency_evidence=dependency_evidence,
+                fat_symbol_token=args.fat_symbol_token,
             )
         )
     summary = {

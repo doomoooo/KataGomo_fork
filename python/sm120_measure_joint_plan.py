@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Measure one exact-batch SM120 tactic plan on the real whole graph.
 
-The short scans select one tactic per family and batch independently.  This
-runner materializes all selected single-slot artifacts for one batch into the
-same executable, pins every family in the override, and then runs the normal
-two-server ``benchmarknn`` graph.  It is intentionally resumable: a completed
-batch is retained in the JSON evidence file.
+This runner pins every family in the override and then runs the normal
+two-server ``benchmarknn`` graph. A coordinate fat bundle reuses one executable
+for every batch; legacy active-slot materialization remains available as a
+compatibility fallback. It is intentionally resumable: a completed batch is
+retained in the JSON evidence file.
 
 This is a producer-side measurement tool.  The portable plan remains the
 source of truth for selection; this file records the joint full-graph evidence
@@ -28,20 +28,34 @@ try:
     from sm120_benchmark_metrics import benchmark_throughput, summarize_throughput
     from sm120_run_tactic_search import (
         collect_environment,
+        implementation_identity,
         last_json_object,
         parse_int_set,
+        reproducibility_identity,
         sha256_file,
     )
-    from sm120_tactic_plan import FAMILIES, load_plan, validate_plan
+    from sm120_tactic_plan import (
+        FAMILIES, load_plan, validate_coordinate_coverage, validate_plan,
+    )
+    from sm120_prepare_coordinate_fat import (
+        FAT_FAMILIES, load_coordinate_fat_bundle,
+    )
 except ModuleNotFoundError:  # imported as python.sm120_measure_joint_plan
     from python.sm120_benchmark_metrics import benchmark_throughput, summarize_throughput
     from python.sm120_run_tactic_search import (
         collect_environment,
+        implementation_identity,
         last_json_object,
         parse_int_set,
+        reproducibility_identity,
         sha256_file,
     )
-    from python.sm120_tactic_plan import FAMILIES, load_plan, validate_plan
+    from python.sm120_tactic_plan import (
+        FAMILIES, load_plan, validate_coordinate_coverage, validate_plan,
+    )
+    from python.sm120_prepare_coordinate_fat import (
+        FAT_FAMILIES, load_coordinate_fat_bundle,
+    )
 
 
 SLOT_FAMILIES = ("ffn", "qkv", "linear2")
@@ -55,7 +69,7 @@ DEFAULT_QKV_ROOT = (
 )
 DEFAULT_SPACE = (
     "/workspace/results/rebuild/cross-batch-search/"
-    "space-5090d-b4-32-s2-v4.json"
+    "space-5090d-b4-32-s2-v6.json"
 )
 DEFAULT_PLAN = (
     "/workspace/results/rebuild/cross-batch-search/"
@@ -93,6 +107,8 @@ def copy_file(source: pathlib.Path, target: pathlib.Path) -> None:
     if not source.is_file():
         raise FileNotFoundError(source)
     target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_file() and source.read_bytes() == target.read_bytes():
+        return
     shutil.copyfile(source, target)
 
 
@@ -126,19 +142,52 @@ def source_from_plan(entry: dict) -> pathlib.Path | None:
 
 def prepare_ffn(
     repo: pathlib.Path, plan: dict, batch: int, active: pathlib.Path,
-    history_root: pathlib.Path,
+    history_root: pathlib.Path, python_executable: str, runner: list[str],
+    logs: pathlib.Path, space: pathlib.Path, device: int,
 ) -> dict:
     value = candidate(plan, "ffn", batch)
-    if value.get("implementation") != "historical_tilelang":
-        raise ValueError(f"joint runner currently expects historical FFN at B{batch}")
-    source = history_root / f"b{batch}-ffn" / (
-        f"ffn-{value['id']}.cu"
-    )
-    copy_file(source, active / "active-ffn.cu")
+    implementation = value.get("implementation", "tilelang")
+    active_source = active / "active-ffn.cu"
+    if implementation == "fallback":
+        source = repo / "cpp/neuralnet/tilelang_aot/sm120_search_ffn_stub.cu"
+        copy_file(source, active_source)
+        return {"candidate": value, "source": str(source)}
+    if implementation == "historical_tilelang":
+        source = history_root / f"b{batch}-ffn" / f"ffn-{value['id']}.cu"
+        if source.is_file():
+            copy_file(source, active_source)
+            return {
+                "candidate": value,
+                "source": str(source),
+                "source_sha256": sha256_file(source),
+            }
+        output_dir = active / "generated" / f"ffn-b{batch}-{value['id']}"
+        command = runner + [
+            python_executable,
+            str(repo / "python/sm120_historical_ffn/generate.py"),
+            "--batch", str(batch), "--space", str(space),
+            "--output-dir", str(output_dir),
+            "--source-path", str(active_source),
+            "--candidate-id", value["id"],
+        ]
+    elif implementation == "tilelang":
+        output_dir = active / "generated" / f"ffn-b{batch}-{value['id']}"
+        command = runner + [
+            python_executable,
+            str(repo / "python/sm120_generate_tilelang_aot.py"),
+            "--space", str(space), "--family", "ffn",
+            "--candidate-id", value["id"], "--batch", str(batch),
+            "--device", str(device), "--output-dir", str(output_dir),
+            "--source-path", str(active_source),
+        ]
+    else:
+        raise ValueError(f"unsupported FFN implementation at B{batch}: {implementation}")
+    run_command(command, logs / f"b{batch}-ffn-{value['id']}-generate")
     return {
         "candidate": value,
-        "source": str(source),
-        "source_sha256": sha256_file(source),
+        "source": str(active_source),
+        "source_sha256": sha256_file(active_source),
+        "generate_command": command,
     }
 
 
@@ -146,7 +195,7 @@ def prepare_qkv(
     repo: pathlib.Path, plan: dict, batch: int, active: pathlib.Path,
     generated_root: pathlib.Path, python_executable: str,
     runner: list[str], logs: pathlib.Path, space: pathlib.Path,
-    device: int,
+    device: int, cutlass_root: pathlib.Path,
 ) -> dict:
     value = candidate(plan, "qkv", batch)
     stub = repo / "cpp/neuralnet/tilelang_aot/sm120_search_qkv_stub.cu"
@@ -163,20 +212,33 @@ def prepare_qkv(
         generated_header = directory / "sm120_qkv_cute_active.h"
         generated_object = directory / "sm120_qkv_cute_active.o"
         if not (generated_source.is_file() and generated_header.is_file() and generated_object.is_file()):
-            raise FileNotFoundError(
-                f"missing materialized CuTe QKV B{batch}: {directory}"
-            )
-        copy_file(generated_source, active / "active-qkv-cute.cu")
+            command = runner + [
+                python_executable,
+                str(repo / "python/sm120_generate_cute_qkv_aot.py"),
+                "--batch", str(batch), "--output-dir", str(directory),
+                "--bridge-path", str(generated_source),
+                "--candidate-id", value["id"], "--device", str(device),
+                "--cutlass-root", str(cutlass_root),
+            ]
+            if value.get("max_active_clusters") is not None:
+                command.extend([
+                    "--max-active-clusters", str(value["max_active_clusters"]),
+                ])
+            run_command(command, logs / f"b{batch}-qkv-{value['id']}-generate")
+        copy_file(generated_source, active_source)
         copy_file(generated_header, active / "sm120_qkv_cute_active.h")
         copy_file(generated_object, active / "active-qkv-cute.o")
-        return {
+        result = {
             "candidate": value,
             "source": str(generated_source),
             "object": str(generated_object),
-            "bridge_source": str(active / "active-qkv-cute.cu"),
+            "bridge_source": str(active_source),
             "source_sha256": sha256_file(generated_source),
             "object_sha256": sha256_file(generated_object),
         }
+        if "command" in locals():
+            result["generate_command"] = command
+        return result
     if value.get("implementation") != "tilelang":
         raise ValueError(f"unsupported QKV implementation at B{batch}")
 
@@ -339,8 +401,12 @@ def main() -> None:
     parser.add_argument("--plan", default=DEFAULT_PLAN)
     parser.add_argument("--space", default=DEFAULT_SPACE)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--build-dir", required=True)
-    parser.add_argument("--active-dir", required=True)
+    parser.add_argument("--build-dir", default="")
+    parser.add_argument("--active-dir", default="")
+    parser.add_argument(
+        "--fat-bundle", default="",
+        help="reuse the coordinate fat binary without per-batch builds",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--model", required=True)
@@ -356,6 +422,10 @@ def main() -> None:
     parser.add_argument("--fa4-python", default="")
     parser.add_argument("--historical-root", default=DEFAULT_HISTORY_ROOT)
     parser.add_argument("--qkv-generated-root", default=DEFAULT_QKV_ROOT)
+    parser.add_argument(
+        "--cutlass-root", default="/workspace/third_party/cutlass",
+        help="pinned CUTLASS source used when a CuTe QKV object must be generated",
+    )
     args = parser.parse_args()
 
     repo = pathlib.Path(args.repo).resolve()
@@ -363,8 +433,11 @@ def main() -> None:
     space_path = pathlib.Path(args.space).resolve()
     config_path = pathlib.Path(args.config).resolve()
     model_path = pathlib.Path(args.model).resolve()
-    build_dir = pathlib.Path(args.build_dir).resolve()
-    active_dir = pathlib.Path(args.active_dir).resolve()
+    fat_bundle_path = pathlib.Path(args.fat_bundle).resolve() if args.fat_bundle else None
+    if fat_bundle_path is None and (not args.build_dir or not args.active_dir):
+        parser.error("active-slot mode requires --build-dir and --active-dir")
+    build_dir = pathlib.Path(args.build_dir).resolve() if args.build_dir else None
+    active_dir = pathlib.Path(args.active_dir).resolve() if args.active_dir else None
     output_path = pathlib.Path(args.output).resolve()
     logs = output_path.parent / f"{output_path.stem}-logs"
     runner = shlex.split(args.runner)
@@ -374,13 +447,34 @@ def main() -> None:
         else sys.executable
     )
     fa4_python = args.fa4_python or generator_python
+    try:
+        from sm120_device import query_cuda_device
+    except ModuleNotFoundError:
+        from python.sm120_device import query_cuda_device
+    device_properties = query_cuda_device(args.device)
     batches = parse_int_set(args.batches)
     plan = load_plan(plan_path)
     space = json.loads(space_path.read_text())
     space["_path"] = str(space_path)
+    fat_bundle = (
+        load_coordinate_fat_bundle(
+            fat_bundle_path, space, space_path, batches,
+        )
+        if fat_bundle_path is not None else None
+    )
     for family in FAMILIES:
-        validate_plan(plan, space, model_path, family, batches, args.streams, config_path)
+        validate_plan(
+            plan, space, model_path, family, batches, args.streams,
+            config_path, require_scan_bypass=False,
+            device_properties=device_properties,
+        )
+    validate_coordinate_coverage(plan, batches)
 
+    environment = collect_environment(
+        repo, config_path, model_path,
+        {"cutlass": pathlib.Path(args.cutlass_root).resolve()},
+        fa4_python, device_properties,
+    )
     regime = {
         "plan": str(plan_path), "plan_sha256": sha256_file(plan_path),
         "space": str(space_path), "space_sha256": sha256_file(space_path),
@@ -390,7 +484,21 @@ def main() -> None:
         "iterations": args.iterations, "warmup": args.warmup,
         "repeats": args.repeats, "batches": batches, "runner": runner,
         "generator_python": generator_python, "fa4_python": fa4_python,
-        "build_dir": str(build_dir), "active_dir": str(active_dir),
+        "cutlass_root": str(pathlib.Path(args.cutlass_root).resolve()),
+        "build_dir": str(build_dir) if build_dir is not None else None,
+        "active_dir": str(active_dir) if active_dir is not None else None,
+        "fat_bundle": (
+            {
+                "path": fat_bundle["_path"],
+                "sha256": fat_bundle["_sha256"],
+                "binary": fat_bundle["_binary"],
+                "binary_sha256": fat_bundle["binary_sha256"],
+            }
+            if fat_bundle is not None else None
+        ),
+        "cuda_device_properties": device_properties,
+        "implementation_identity": implementation_identity(repo),
+        "reproducibility_identity": reproducibility_identity(environment),
     }
     if output_path.is_file():
         payload = json.loads(output_path.read_text())
@@ -404,19 +512,17 @@ def main() -> None:
             "plan_id": plan["plan_id"],
             "regime": regime,
             "rows": [],
-            "environment": collect_environment(
-                repo, config_path, model_path,
-                {"cutlass": repo.parent / "third_party/cutlass"},
-                fa4_python,
-            ),
+            "environment": environment,
             "selection": {
                 "metric": "long-stable natural whole-graph benchmarknn combinedNNEvalsPerSec",
                 "policy": "one validated plan candidate per family and exact batch",
             },
         }
     completed = {int(row["batch"]) for row in payload.get("rows", []) if row.get("status") == "measured"}
-    active_dir.mkdir(parents=True, exist_ok=True)
-    build_dir.mkdir(parents=True, exist_ok=True)
+    if active_dir is not None:
+        active_dir.mkdir(parents=True, exist_ok=True)
+    if build_dir is not None:
+        build_dir.mkdir(parents=True, exist_ok=True)
 
     for batch in batches:
         if batch in completed:
@@ -434,25 +540,63 @@ def main() -> None:
             },
         }
         try:
-            ffn = prepare_ffn(repo, plan, batch, active_dir, pathlib.Path(args.historical_root).resolve())
-            qkv = prepare_qkv(
-                repo, plan, batch, active_dir,
-                pathlib.Path(args.qkv_generated_root).resolve(), generator_python,
-                runner, logs, space_path, args.device,
-            )
-            linear2 = prepare_linear2(
-                repo, plan, batch, active_dir, generator_python, runner,
-                logs, space_path, args.device,
-            )
-            fa4 = prepare_fa4(repo, plan, batch, active_dir, fa4_python, runner, logs, args.device)
-            row["artifacts"] = {"ffn": ffn, "qkv": qkv, "linear2": linear2, "fa4": fa4}
-            cmake = configure_command(repo, build_dir, active_dir, fa4, qkv)
-            row["commands"] = {"configure": cmake, "build": ["cmake", "--build", str(build_dir), f"-j{args.jobs}"]}
-            run_command(cmake, logs / f"b{batch}-configure")
-            run_command(["cmake", "--build", str(build_dir), f"-j{args.jobs}"], logs / f"b{batch}-build")
-            binary = build_dir / "katago"
-            if not binary.is_file():
-                raise RuntimeError(f"build did not produce {binary}")
+            if fat_bundle is not None:
+                artifacts = {}
+                for family in FAT_FAMILIES:
+                    value = candidate(plan, family, batch)
+                    if value.get("implementation", "tilelang") == "fallback":
+                        artifacts[family] = {
+                            "candidate": value,
+                            "implementation": "fallback",
+                            "linked_artifact": None,
+                        }
+                    else:
+                        key = (family, batch, value["id"])
+                        artifact = fat_bundle["_entries"].get(key)
+                        if artifact is None:
+                            raise ValueError(f"fat bundle has no runtime tactic for {key}")
+                        artifacts[family] = artifact
+                row["artifacts"] = artifacts
+                row["commands"] = {
+                    "configure": None,
+                    "build": None,
+                    "fat_bundle": fat_bundle["_path"],
+                }
+                binary = pathlib.Path(fat_bundle["_binary"])
+                binary_sha256 = fat_bundle["binary_sha256"]
+            else:
+                assert active_dir is not None and build_dir is not None
+                ffn = prepare_ffn(
+                    repo, plan, batch, active_dir,
+                    pathlib.Path(args.historical_root).resolve(), generator_python,
+                    runner, logs, space_path, args.device,
+                )
+                qkv = prepare_qkv(
+                    repo, plan, batch, active_dir,
+                    pathlib.Path(args.qkv_generated_root).resolve(), generator_python,
+                    runner, logs, space_path, args.device,
+                    pathlib.Path(args.cutlass_root).resolve(),
+                )
+                linear2 = prepare_linear2(
+                    repo, plan, batch, active_dir, generator_python, runner,
+                    logs, space_path, args.device,
+                )
+                fa4 = prepare_fa4(
+                    repo, plan, batch, active_dir, fa4_python, runner, logs,
+                    args.device,
+                )
+                row["artifacts"] = {
+                    "ffn": ffn, "qkv": qkv, "linear2": linear2, "fa4": fa4,
+                }
+                cmake = configure_command(repo, build_dir, active_dir, fa4, qkv)
+                build = ["cmake", "--build", str(build_dir), f"-j{args.jobs}"]
+                row["commands"] = {"configure": cmake, "build": build}
+                run_command(cmake, logs / f"b{batch}-configure")
+                run_command(build, logs / f"b{batch}-build")
+                binary = build_dir / "katago"
+                if not binary.is_file():
+                    raise RuntimeError(f"build did not produce {binary}")
+                binary_sha256 = sha256_file(binary)
             override = override_for(plan, batch, args.device, args.streams)
             samples = []
             records = []
@@ -474,7 +618,7 @@ def main() -> None:
             row.update({
                 "status": "measured", "finished_utc": utc_now(),
                 "override_config": override,
-                "binary": str(binary), "binary_sha256": sha256_file(binary),
+                "binary": str(binary), "binary_sha256": binary_sha256,
                 "nn_evals_per_sec_samples": samples,
                 "benchmark_records": records,
                 **summary,

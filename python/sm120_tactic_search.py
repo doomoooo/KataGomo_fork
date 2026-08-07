@@ -20,6 +20,11 @@ import statistics
 import subprocess
 import sys
 
+try:
+    from sm120_device import query_cuda_device
+except ModuleNotFoundError:  # imported as python.sm120_tactic_search
+    from python.sm120_device import query_cuda_device
+
 
 GPU_CLASSES = ("rtx5080", "rtx5090d")
 
@@ -341,12 +346,20 @@ def merge_extra_candidates(space: dict, extras: list[dict], gpu_classes: tuple[s
 def write_space(args: argparse.Namespace) -> None:
     gpu_classes = selected_gpu_classes(args.gpu_class)
     batches = parse_int_set(args.batches)
+    device_properties = query_cuda_device(args.device)
+    if device_properties.get("compute_capability") != [12, 0]:
+        raise ValueError(
+            "SM120 search-space generation requires a CUDA-reported "
+            f"compute capability of [12, 0], got "
+            f"{device_properties.get('compute_capability')}"
+        )
     payload = {
         "schema": 2,
         "gpu_class": args.gpu_class,
         "gpu_classes": gpu_classes,
         "streams": args.streams,
         "fixed_board": [19, 19],
+        "cuda_device_properties_at_space_generation": device_properties,
         "workflow_gate": (
             "correctness + local CUDA-event timing -> greedy local-best bundle "
             "curve -> natural whole-graph S2 coordinate scans near the plateau; "
@@ -505,6 +518,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     space = subparsers.add_parser("space", help="emit the pruned tactic family")
     space.add_argument("--gpu-class", required=True)
+    space.add_argument("--device", type=int, required=True)
     space.add_argument("--batches", required=True)
     space.add_argument("--streams", type=int, default=2)
     space.add_argument("--extra-candidates", action="append", default=[])

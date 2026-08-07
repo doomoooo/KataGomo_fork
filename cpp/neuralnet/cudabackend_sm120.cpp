@@ -596,7 +596,7 @@ Sm120Model::Sm120Model(
   useFP16(useFP16_),
   useNHWC(useNHWC_),
   options(options_),
-  sm120GpuClass(SM120_GPU_OTHER),
+  sm120NumSms(0),
   logger(NULL),
   loggedFallback(false),
   loggedFa4(false),
@@ -630,10 +630,9 @@ Sm120Model::Sm120Model(
   cudaDeviceProp deviceProp = {};
   CUDA_ERR("Sm120Model", cudaGetDevice(&device));
   CUDA_ERR("Sm120Model", cudaGetDeviceProperties(&deviceProp, device));
-  if(std::strstr(deviceProp.name, "RTX 5080") != NULL)
-    sm120GpuClass = SM120_GPU_RTX5080;
-  else if(std::strstr(deviceProp.name, "RTX 5090 D") != NULL)
-    sm120GpuClass = SM120_GPU_RTX5090D;
+  sm120NumSms = deviceProp.multiProcessorCount;
+  if(sm120NumSms <= 0)
+    throw StringError("Sm120Model: CUDA reported no streaming multiprocessors");
   fa4AotByBatch.resize(maxBatchSize + 1, nullptr);
   fusedFFNAotByBatch.resize(maxBatchSize + 1, nullptr);
   wideQKVAotByBatch.resize(maxBatchSize + 1, nullptr);
@@ -644,22 +643,22 @@ Sm120Model::Sm120Model(
       batch, options.fa4AotTactic.c_str());
     if(options.useFusedFFN) {
       fusedFFNAotByBatch[batch] = findFusedFFNAotTactic(
-        batch, sm120GpuClass, options.persistingL2Streams,
+        batch, sm120NumSms, options.persistingL2Streams,
         options.fusedFFNAotTactic.c_str());
     }
     if(options.useWideQKV && options.useQKVGemmAot) {
       wideQKVAotByBatch[batch] = findWideQKVAotTactic(
-        batch, sm120GpuClass, options.persistingL2Streams,
+        batch, sm120NumSms, options.persistingL2Streams,
         options.wideQKVAotTactic.c_str());
     }
     if(options.useLinear2ResidualAot) {
       linear2AotByBatch[batch] = findResidualGemmAotTactic(
-        batch, sm120GpuClass, options.persistingL2Streams, 1152,
+        batch, sm120NumSms, options.persistingL2Streams, 1152,
         options.linear2AotTactic.c_str());
     }
     if(options.useOutProjectionResidualAot) {
       outProjectionAotByBatch[batch] = findResidualGemmAotTactic(
-        batch, sm120GpuClass, options.persistingL2Streams, 384,
+        batch, sm120NumSms, options.persistingL2Streams, 384,
         options.outProjectionAotTactic.c_str());
     }
   }

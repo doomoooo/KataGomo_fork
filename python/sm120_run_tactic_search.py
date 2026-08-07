@@ -105,6 +105,40 @@ def sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def implementation_identity(repo: pathlib.Path) -> dict[str, str | None]:
+    """Hash the code that makes completed-row resume decisions meaningful."""
+    relative_paths = (
+        "cpp/CMakeLists.txt",
+        "cpp/command/benchmarknn.cpp",
+        "cpp/neuralnet/cudabackend_sm120.cpp",
+        "cpp/neuralnet/cudabackend_sm120.h",
+        "cpp/neuralnet/cudabackend_sm120_aot_registry.cu",
+        "cpp/neuralnet/cudabackend_sm120_kernels.cu",
+        "cpp/neuralnet/cudabackend_sm120_kernels.h",
+        "cpp/neuralnet/fa4_aot/build_aot.py",
+        "python/sm120_benchmark_metrics.py",
+        "python/sm120_device.py",
+        "python/sm120_coordinate_search.py",
+        "python/sm120_fat_scan.py",
+        "python/sm120_generate_cute_qkv_aot.py",
+        "python/sm120_generate_tilelang_aot.py",
+        "python/sm120_historical_ffn/generate.py",
+        "python/sm120_historical_ffn/manifest.json",
+        "python/sm120_run_tactic_search.py",
+        "python/sm120_tactic_search.py",
+        "python/sm120_measure_joint_plan.py",
+        "python/sm120_tactic_plan.py",
+    )
+    result = {
+        relative: sha256_file(repo / relative)
+        for relative in relative_paths
+        if (repo / relative).is_file()
+    }
+    head = capture_command(["git", "-C", str(repo), "rev-parse", "HEAD"])
+    result["git_head"] = head.get("stdout", "").strip() or None
+    return result
+
+
 def load_candidate_selection(
     selection_path: pathlib.Path, space_path: pathlib.Path, space: dict,
     family: str, batches: list[int],
@@ -201,6 +235,12 @@ def load_fat_bundle(
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema") != 1 or manifest.get("family") != family:
         raise ValueError(f"unsupported fat manifest for {family}: {manifest_path}")
+    if manifest.get("registry_abi") != "sm120-numeric-sm-count-v2":
+        raise ValueError(
+            "fat manifest uses the obsolete product-name registry ABI; "
+            "rerun sm120_prepare_tilelang_fat_scan.py --reuse-existing to "
+            f"rewrite it: {manifest_path}"
+        )
     legacy_complete = (
         manifest.get("complete") is None
         and manifest.get("finished_utc")
@@ -215,11 +255,7 @@ def load_fat_bundle(
     if not manifest.get("complete") and not legacy_complete:
         raise ValueError(f"fat manifest is incomplete: {manifest_path}")
     expected_space_sha256 = sha256_file(space_path)
-    if manifest.get("space_sha256") != expected_space_sha256:
-        raise ValueError(
-            "fat manifest search-space hash does not match the current space: "
-            f"{manifest_path}"
-        )
+    exact_space_match = manifest.get("space_sha256") == expected_space_sha256
 
     registry_path = pathlib.Path(manifest["registry_source"])
     if not registry_path.is_file():
@@ -234,8 +270,6 @@ def load_fat_bundle(
         key = (int(entry["batch"]), str(entry["candidate_id"]))
         if key in entries:
             raise ValueError(f"duplicate fat manifest entry: B{key[0]}/{key[1]}")
-        if entry.get("space_sha256") != expected_space_sha256:
-            raise ValueError(f"fat entry search-space hash mismatch: {key}")
         batch_space = batch_spaces.get(key[0])
         if batch_space is None:
             raise ValueError(f"fat entry is outside the current space: {key}")
@@ -266,6 +300,10 @@ def load_fat_bundle(
         )
     manifest["path"] = str(manifest_path.resolve())
     manifest["sha256"] = sha256_file(manifest_path)
+    manifest["loaded_space_compatibility"] = (
+        "exact_sha256" if exact_space_match else "exact_candidate_projection"
+    )
+    manifest["loaded_space_sha256"] = expected_space_sha256
     return manifest
 
 
@@ -440,6 +478,36 @@ def collect_environment(
             "sha256": sha256_file(model_path),
         },
     }
+
+
+def reproducibility_identity(snapshot: dict) -> dict:
+    """Stable toolchain subset used to keep resumed rows reproducible."""
+    command_identity = {}
+    for key in ("nvcc_version", "cmake_version", "gcc_version", "gxx_version"):
+        value = snapshot.get("commands", {}).get(key)
+        if isinstance(value, dict):
+            command_identity[key] = {
+                field: value.get(field)
+                for field in ("returncode", "stdout", "stderr", "error")
+                if field in value
+            }
+    third_party = {
+        name: {
+            key: value.get(key)
+            for key in ("revision", "dirty", "status")
+        }
+        for name, value in snapshot.get("third_party", {}).items()
+        if isinstance(value, dict)
+    }
+    identity = {
+        "python": snapshot.get("python"),
+        "packages": snapshot.get("packages"),
+        "cudnn_version_from_torch": snapshot.get("cudnn_version_from_torch"),
+        "environment": snapshot.get("environment"),
+        "commands": command_identity,
+        "third_party": third_party,
+    }
+    return json.loads(json.dumps(identity))
 
 
 def run_checked(command: list[str], log_path: pathlib.Path) -> subprocess.CompletedProcess:
@@ -769,7 +837,7 @@ def main() -> None:
         for planned_family in SEARCH_FAMILIES:
             planned_entries_by_family[planned_family] = validate_plan(
                 tactic_plan, space, model_path, planned_family, batches,
-                args.streams, config_path,
+                args.streams, config_path, device_properties=device_properties,
             )
 
     common_graph_policy = (
@@ -820,6 +888,10 @@ def main() -> None:
             }
             if fat_manifest_argument is not None else None
         ),
+        # A config/model/space match is insufficient when runtime dispatch or
+        # generators changed. Completed rows are resumed only under this exact
+        # implementation identity.
+        "implementation_identity": implementation_identity(repo),
     }
 
     environment = collect_environment(
@@ -828,6 +900,7 @@ def main() -> None:
         args.fa4_python,
         device_properties,
     )
+    regime["reproducibility_identity"] = reproducibility_identity(environment)
 
     if output.exists():
         payload = json.loads(output.read_text())

@@ -219,8 +219,20 @@ def load_sm120_gemm_kernel(
 
 def render_bridge(
     artifact_stem: str, batch: int, candidate_id: str,
+    fat_symbol_token: str | None = None,
 ) -> str:
     prefix = artifact_stem
+    if fat_symbol_token is None:
+        exports = f'''extern "C" int sm120_search_qkv_batch() {{ return {batch}; }}
+extern "C" const char* sm120_search_qkv_id() {{ return "{candidate_id}"; }}
+extern "C" int sm120_search_qkv_packed() {{ return 1; }}
+
+extern "C" cudaError_t sm120_search_qkv_launch'''
+    else:
+        exports = (
+            'extern "C" cudaError_t sm120_search_qkv_fat_launch_'
+            f'{fat_symbol_token}'
+        )
     return f'''#include "{artifact_stem}.h"
 
 #include <cuda_fp16.h>
@@ -235,11 +247,7 @@ std::once_flag loadOnce;
 
 }} // namespace
 
-extern "C" int sm120_search_qkv_batch() {{ return {batch}; }}
-extern "C" const char* sm120_search_qkv_id() {{ return "{candidate_id}"; }}
-extern "C" int sm120_search_qkv_packed() {{ return 1; }}
-
-extern "C" cudaError_t sm120_search_qkv_launch(
+{exports}(
   const half* input, const half* weights, half* output, cudaStream_t stream
 ) {{
   std::call_once(loadOnce, []() {{ {prefix}_Kernel_Module_Load(&module); }});
@@ -259,6 +267,7 @@ def main() -> None:
     parser.add_argument("--artifact-stem", default="sm120_qkv_cute_active")
     parser.add_argument("--bridge-path", type=pathlib.Path, required=True)
     parser.add_argument("--candidate-id", default=CANDIDATE_ID)
+    parser.add_argument("--fat-symbol-token")
     parser.add_argument(
         "--cutlass-root", type=pathlib.Path,
         default=pathlib.Path(
@@ -280,6 +289,10 @@ def main() -> None:
         parser.error(f"only {CANDIDATE_ID} is supported")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.artifact_stem):
         parser.error("--artifact-stem must be a C identifier")
+    if args.fat_symbol_token and not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", args.fat_symbol_token
+    ):
+        parser.error("--fat-symbol-token must be a C identifier")
     if args.max_active_clusters is not None and args.max_active_clusters <= 0:
         parser.error("--max-active-clusters must be positive")
     device_properties = None
@@ -355,7 +368,10 @@ def main() -> None:
     bridge_path = args.bridge_path.resolve()
     if bridge_path.parent != output_dir:
         raise ValueError("bridge and AOT artifacts must share --output-dir")
-    bridge = render_bridge(args.artifact_stem, args.batch, args.candidate_id)
+    bridge = render_bridge(
+        args.artifact_stem, args.batch, args.candidate_id,
+        args.fat_symbol_token,
+    )
     bridge_path.write_text(bridge)
 
     artifact_base = output_dir / args.artifact_stem
@@ -370,6 +386,11 @@ def main() -> None:
             "output_channels": OUTPUT_CHANNELS,
         },
         "layout": "packed-token-qkv",
+        "fat_symbol_token": args.fat_symbol_token,
+        "launch_symbol": (
+            f"sm120_search_qkv_fat_launch_{args.fat_symbol_token}"
+            if args.fat_symbol_token else "sm120_search_qkv_launch"
+        ),
         "tile": list(TILE),
         "atom_layout": list(ATOM_LAYOUT),
         "max_active_clusters": max_active_clusters,
