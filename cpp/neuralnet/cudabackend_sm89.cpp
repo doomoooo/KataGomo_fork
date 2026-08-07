@@ -32,7 +32,8 @@ static PersistingL2Plan reservePersistingL2(
   int nnXLen,
   int nnYLen,
   bool useTrunk,
-  bool useInner
+  bool useInner,
+  float requestedHitRatio
 ) {
   int device = 0;
   int maxPersistingBytes = 0;
@@ -56,9 +57,10 @@ static PersistingL2Plan reservePersistingL2(
 
   size_t actualBytes = 0;
   CUDA_ERR("Sm89Model",cudaDeviceGetLimit(&actualBytes, cudaLimitPersistingL2CacheSize));
-  const float hitRatio = std::min(
+  const float availableHitRatio = std::min(
     1.0f, (float)((double)actualBytes / (double)(2 * windowsPerStream))
   );
+  const float hitRatio = std::min(requestedHitRatio, availableHitRatio);
   return PersistingL2Plan{
     useTrunk ? hitRatio : 0.0f,
     useInner ? hitRatio : 0.0f,
@@ -102,9 +104,17 @@ Options parseOptions(ConfigParser& cfg) {
   o.useFusedValueTerminal = getBoolOpt(cfg, "cudaUseFusedValueTerminalSm89", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
+  o.persistingL2HitRatio = cfg.contains("cudaPersistingL2HitRatioSm89") ?
+    cfg.getFloat("cudaPersistingL2HitRatioSm89",0.0f,1.0f) : 1.0f;
   o.useScaleBiasSiluVec8 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec8Sm89", false);
   o.useScaleBiasSiluVec4C384 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec4C384Sm89", false);
   o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", false);
+  o.dualFfnAotTactic = cfg.contains("cudaFusedFFNAotTacticSm89") ?
+    cfg.getString("cudaFusedFFNAotTacticSm89") : "disabled";
+  o.linear2AotTactic = cfg.contains("cudaLinear2AotTacticSm89") ?
+    cfg.getString("cudaLinear2AotTacticSm89") : "disabled";
+  o.serverThreads = cfg.contains("numNNServerThreadsPerModel") ?
+    cfg.getInt("numNNServerThreadsPerModel",1,1024) : 1;
   return o;
 }
 
@@ -145,7 +155,8 @@ Sm89Model::Sm89Model(
       (options.usePersistingL2Trunk || options.usePersistingL2Inner)
       ? reservePersistingL2(
           *desc, maxBatchSize, nnXLen, nnYLen,
-          options.usePersistingL2Trunk, options.usePersistingL2Inner
+          options.usePersistingL2Trunk, options.usePersistingL2Inner,
+          options.persistingL2HitRatio
         )
       : PersistingL2Plan{0.0f, 0.0f};
     forward = std::make_unique<Sm89Forward>(
@@ -170,6 +181,9 @@ Sm89Model::Sm89Model(
       options.useWideHeadProjection,
       options.useExactMaskElision,
       options.useFusedValueTerminal,
+      options.dualFfnAotTactic,
+      options.linear2AotTactic,
+      options.serverThreads,
       options.shareModelWeights
     );
     forwardActive = true;

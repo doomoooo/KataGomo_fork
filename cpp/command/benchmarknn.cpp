@@ -8,7 +8,12 @@
 #include "../command/commandline.h"
 #include "../main.h"
 
+#ifdef USE_CUDA_BACKEND
+#include "../neuralnet/cudaincludes.h"
+#endif
+
 #include <iomanip>
+#include <set>
 #include <sstream>
 
 using namespace std;
@@ -122,11 +127,8 @@ int MainCmds::benchmarknn(const vector<string>& args) {
     nnEval = Setup::initializeNNEvaluator(
       modelFile,modelFile,expectedSha256,cfg,logger,seedRand,expectedConcurrentEvals,
       boardSize,boardSize,maxBatchSize,defaultRequireExactNNLen,disableFP16,
-      Setup::SETUP_FOR_BENCHMARK
+      Setup::SETUP_FOR_BENCHMARKNN
     );
-    // The setup path spawns the normal evaluation server threads; benchmarknn uses its own
-    // per-server compute handles and streams so the timed loop is pure forward-only.
-    nnEval->killServerThreads();
 
     NNEvalBenchmarkResult result = nnEval->benchmarkPureForward(numWarmups,numIterations);
 
@@ -147,6 +149,59 @@ int MainCmds::benchmarknn(const vector<string>& args) {
         cout << g;
       }
       cout << "],";
+#ifdef USE_CUDA_BACKEND
+      cout << "\"cudaDevices\":[";
+      first = true;
+      set<int> emittedGpuIdxs;
+      for(int g : nnEval->getGpuIdxs()) {
+        if(g < 0)
+          g = 0;
+        if(!emittedGpuIdxs.insert(g).second)
+          continue;
+        cudaDeviceProp prop = {};
+        if(cudaGetDeviceProperties(&prop,g) != cudaSuccess)
+          continue;
+        int clockRateKhz = 0;
+        int memoryClockRateKhz = 0;
+        const bool hasClockRate =
+          cudaDeviceGetAttribute(&clockRateKhz,cudaDevAttrClockRate,g) == cudaSuccess;
+        const bool hasMemoryClockRate =
+          cudaDeviceGetAttribute(&memoryClockRateKhz,cudaDevAttrMemoryClockRate,g) == cudaSuccess;
+        if(!first)
+          cout << ",";
+        first = false;
+        cout << "{";
+        cout << "\"ordinal\":" << g << ",";
+        cout << "\"name\":\"" << jsonEscape(prop.name) << "\",";
+        cout << "\"computeCapabilityMajor\":" << prop.major << ",";
+        cout << "\"computeCapabilityMinor\":" << prop.minor << ",";
+        cout << "\"multiProcessorCount\":" << prop.multiProcessorCount << ",";
+        cout << "\"warpSize\":" << prop.warpSize << ",";
+        cout << "\"maxThreadsPerMultiProcessor\":" << prop.maxThreadsPerMultiProcessor << ",";
+        cout << "\"maxThreadsPerBlock\":" << prop.maxThreadsPerBlock << ",";
+        cout << "\"regsPerMultiprocessor\":" << prop.regsPerMultiprocessor << ",";
+        cout << "\"sharedMemPerMultiprocessor\":" << prop.sharedMemPerMultiprocessor << ",";
+        cout << "\"sharedMemPerBlockOptin\":" << prop.sharedMemPerBlockOptin << ",";
+        cout << "\"l2CacheSize\":" << prop.l2CacheSize << ",";
+        cout << "\"totalGlobalMem\":" << prop.totalGlobalMem << ",";
+        cout << "\"memoryBusWidth\":" << prop.memoryBusWidth << ",";
+        cout << "\"clockRateKhz\":";
+        if(hasClockRate)
+          cout << clockRateKhz;
+        else
+          cout << "null";
+        cout << ",\"memoryClockRateKhz\":";
+        if(hasMemoryClockRate)
+          cout << memoryClockRateKhz;
+        else
+          cout << "null";
+        cout << ",";
+        cout << "\"asyncEngineCount\":" << prop.asyncEngineCount << ",";
+        cout << "\"concurrentKernels\":" << (prop.concurrentKernels ? "true" : "false");
+        cout << "}";
+      }
+      cout << "],";
+#endif
       cout << "\"perServerMedianMs\":[";
       for(int i = 0; i < result.numServerThreads; i++) {
         if(i > 0)

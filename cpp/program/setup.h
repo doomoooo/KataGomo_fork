@@ -16,6 +16,7 @@ namespace Setup {
   enum setup_for_t {
     SETUP_FOR_GTP,
     SETUP_FOR_BENCHMARK,
+    SETUP_FOR_BENCHMARKNN,
     SETUP_FOR_MATCH,
     SETUP_FOR_ANALYSIS,
     SETUP_FOR_OTHER,

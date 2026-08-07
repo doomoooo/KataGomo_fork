@@ -9,7 +9,7 @@ namespace Sm89Backend {
 
 #ifdef KATAGO_ENABLE_SM89_QKV_ROPE_GEMM
 
-// Fixed B13/19x19 FP16 QKV projection. The default path rotates Q and K in the
+// Fixed-channel/19x19 FP16 QKV projection. The default path rotates Q and K in the
 // CUTLASS epilogue; the split test path writes plain QKV for standalone RoPE.
 class Sm89QKVRoPEGemmB13 {
  public:

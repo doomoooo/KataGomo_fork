@@ -8,9 +8,9 @@
 namespace Sm89Backend {
 
 #ifdef KATAGO_ENABLE_SM89_FLASH_ATTN
-size_t sm89FlashAttentionLseBytesB13D32();
+size_t sm89FlashAttentionLseBytesD32(int batchSize);
 
-bool sm89FlashAttentionB13D32(
+bool sm89FlashAttentionD32(
   const half* q,
   const half* k,
   const half* v,
@@ -23,6 +23,7 @@ bool sm89FlashAttentionB13D32(
   int qHeadDim,
   int vHeadDim,
   bool useBoth16Accum,
+  int numSms,
   cudaStream_t stream
 );
 #endif

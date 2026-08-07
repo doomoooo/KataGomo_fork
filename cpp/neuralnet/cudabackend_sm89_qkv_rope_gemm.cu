@@ -2,7 +2,7 @@
  * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Fixed B13/19x19 CUTLASS batched QKV GEMM with learnable RoPE in the output iterator.
+ * Fixed-channel/19x19 CUTLASS batched QKV GEMM with learnable RoPE in the output iterator.
  * CUTLASS commit: 7127592069c2fe01b041e174ba4345ef9b279671
  **************************************************************************************************/
 
@@ -20,9 +20,7 @@
 namespace Sm89Backend {
 namespace {
 
-constexpr int B = 13;
 constexpr int S = 361;
-constexpr int Tokens = B * S;
 constexpr int Channels = 384;
 constexpr int Heads = 12;
 constexpr int HeadDim = 32;
@@ -100,17 +98,19 @@ class RoPEOutputTileIterator : public BaseIterator {
 
   struct Params : public Base::Params {
     const float* freqs;
+    int totalRows;
 
     CUTLASS_HOST_DEVICE
-    Params() : Base::Params(), freqs(nullptr) {}
+    Params() : Base::Params(), freqs(nullptr), totalRows(0) {}
 
     CUTLASS_HOST_DEVICE
     explicit Params(Layout const& layout)
-      : Base::Params(layout), freqs(nullptr) {}
+      : Base::Params(layout), freqs(nullptr), totalRows(0) {}
   };
 
  private:
   const float* freqs;
+  int totalRows;
 
  public:
   CUTLASS_DEVICE
@@ -122,7 +122,7 @@ class RoPEOutputTileIterator : public BaseIterator {
     TensorCoord threadblockOffset = TensorCoord(),
     int const* indices = nullptr
   ) : Base(params, pointer, extent, threadIdx, threadblockOffset, indices),
-      freqs(params.freqs) {}
+      freqs(params.freqs), totalRows(params.totalRows) {}
 
   CUTLASS_DEVICE
   void store_with_byte_offset(Fragment const& fragment, int64_t byteOffset) const {
@@ -148,7 +148,7 @@ class RoPEOutputTileIterator : public BaseIterator {
             CUTLASS_PRAGMA_UNROLL
             for(int column = 0; column < ThreadMap::Iterations::kColumn; column++) {
               int outputColumn = startColumn + column * ThreadMap::Delta::kColumn;
-              if(outputRow < Tokens && outputColumn < Channels) {
+              if(outputRow < totalRows && outputColumn < Channels) {
                 AccessType& access = accesses[
                   fragmentRow * ThreadMap::Iterations::kColumn + column];
                 int xy = outputRow % S;
@@ -203,6 +203,8 @@ using RopeKernel = cutlass::gemm::kernel::GemmBatched<Mma, RopeEpilogue, Swizzle
 } // namespace
 
 struct Sm89QKVRoPEGemmB13::Impl {
+  const half* weights;
+  const float* freqs;
   typename RopeKernel::Params params;
   typename PlainFp32Kernel::Params plainFp32Params;
   typename PlainHalfKernel::Params plainHalfParams;
@@ -210,63 +212,9 @@ struct Sm89QKVRoPEGemmB13::Impl {
   int plainVariant;
   bool initialized;
 
-  Impl(const half* weights, const float* freqs, bool splitRoPE_, int plainVariant_)
-    : splitRoPE(splitRoPE_), plainVariant(plainVariant_), initialized(true) {
-    cutlass::gemm::GemmCoord problem(Tokens, Channels, Channels);
-    cutlass::gemm::GemmCoord gridShape = Swizzle::get_tiled_shape(
-      problem,
-      {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
-      GemmBatch);
-    Layout matrixLayout(Channels);
-    typename Mma::IteratorA::TensorRef nullInput(nullptr, matrixLayout);
-    typename Mma::IteratorB::TensorRef weightRef(
-      reinterpret_cast<Element*>(const_cast<half*>(weights)), matrixLayout);
-    typename RopeIterator::TensorRef nullOutput(nullptr, matrixLayout);
-    params = typename RopeKernel::Params(
-      problem,
-      gridShape,
-      nullInput,
-      0,
-      weightRef,
-      (int64_t)Channels * Channels,
-      nullOutput,
-      (int64_t)Tokens * Channels,
-      nullOutput,
-      (int64_t)Tokens * Channels,
-      typename OutputOp::Params(1.0f, 0.0f),
-      GemmBatch);
-    params.params_D.freqs = freqs;
-
-    typename DefaultIterator::TensorRef plainFp32NullOutput(nullptr, matrixLayout);
-    plainFp32Params = typename PlainFp32Kernel::Params(
-      problem,
-      gridShape,
-      nullInput,
-      0,
-      weightRef,
-      (int64_t)Channels * Channels,
-      plainFp32NullOutput,
-      (int64_t)Tokens * Channels,
-      plainFp32NullOutput,
-      (int64_t)Tokens * Channels,
-      typename OutputOp::Params(1.0f, 0.0f),
-      GemmBatch);
-
-    typename PlainDefaultIterator::TensorRef plainHalfNullOutput(nullptr, matrixLayout);
-    plainHalfParams = typename PlainHalfKernel::Params(
-      problem,
-      gridShape,
-      nullInput,
-      0,
-      weightRef,
-      (int64_t)Channels * Channels,
-      plainHalfNullOutput,
-      (int64_t)Tokens * Channels,
-      plainHalfNullOutput,
-      (int64_t)Tokens * Channels,
-      typename PlainOutputOp::Params(Element(1.0f), Element(0.0f)),
-      GemmBatch);
-
+  Impl(const half* weights_, const float* freqs_, bool splitRoPE_, int plainVariant_)
+    : weights(weights_), freqs(freqs_), splitRoPE(splitRoPE_),
+      plainVariant(plainVariant_), initialized(true) {
     int smemSize = splitRoPE
       ? (plainVariant == 1
           ? int(sizeof(typename PlainHalfKernel::SharedStorage))
@@ -286,9 +234,69 @@ struct Sm89QKVRoPEGemmB13::Impl {
             smemSize) == cudaSuccess;
   }
 
-  bool apply(const half* input, half* output, cudaStream_t stream) {
+  void configure(int tokens) {
+    cutlass::gemm::GemmCoord problem(tokens, Channels, Channels);
+    cutlass::gemm::GemmCoord gridShape = Swizzle::get_tiled_shape(
+      problem,
+      {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
+      GemmBatch);
+    Layout matrixLayout(Channels);
+    typename Mma::IteratorA::TensorRef nullInput(nullptr, matrixLayout);
+    typename Mma::IteratorB::TensorRef weightRef(
+      reinterpret_cast<Element*>(const_cast<half*>(weights)), matrixLayout);
+    typename RopeIterator::TensorRef nullOutput(nullptr, matrixLayout);
+    params = typename RopeKernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      0,
+      weightRef,
+      (int64_t)Channels * Channels,
+      nullOutput,
+      (int64_t)tokens * Channels,
+      nullOutput,
+      (int64_t)tokens * Channels,
+      typename OutputOp::Params(1.0f, 0.0f),
+      GemmBatch);
+    params.params_D.freqs = freqs;
+    params.params_D.totalRows = tokens;
+
+    typename DefaultIterator::TensorRef plainFp32NullOutput(nullptr, matrixLayout);
+    plainFp32Params = typename PlainFp32Kernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      0,
+      weightRef,
+      (int64_t)Channels * Channels,
+      plainFp32NullOutput,
+      (int64_t)tokens * Channels,
+      plainFp32NullOutput,
+      (int64_t)tokens * Channels,
+      typename OutputOp::Params(1.0f, 0.0f),
+      GemmBatch);
+
+    typename PlainDefaultIterator::TensorRef plainHalfNullOutput(nullptr, matrixLayout);
+    plainHalfParams = typename PlainHalfKernel::Params(
+      problem,
+      gridShape,
+      nullInput,
+      0,
+      weightRef,
+      (int64_t)Channels * Channels,
+      plainHalfNullOutput,
+      (int64_t)tokens * Channels,
+      plainHalfNullOutput,
+      (int64_t)tokens * Channels,
+      typename PlainOutputOp::Params(Element(1.0f), Element(0.0f)),
+      GemmBatch);
+
+  }
+
+  bool apply(const half* input, half* output, int tokens, cudaStream_t stream) {
     if(!initialized)
       return false;
+    configure(tokens);
     if(splitRoPE) {
       if(plainVariant == 1) {
         plainHalfParams.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
@@ -341,11 +349,11 @@ bool Sm89QKVRoPEGemmB13::apply(
   int headDim,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != Channels ||
+  if(batchSize < 1 || seqLen != S || inChannels != Channels ||
      qkvChannels != Channels || numHeads != Heads || headDim != HeadDim ||
      input == nullptr || output == nullptr)
     return false;
-  return impl->apply(input, output, stream);
+  return impl->apply(input, output, batchSize * seqLen, stream);
 }
 
 } // namespace Sm89Backend

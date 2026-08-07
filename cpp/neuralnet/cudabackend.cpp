@@ -22,6 +22,7 @@
 #endif
 
 #include "../neuralnet/cudahelpers.h"
+#include "../neuralnet/cudnnquerymutex.h"
 #include "../neuralnet/cudautils.h"
 #include "../neuralnet/modelversion.h"
 #include "../neuralnet/nninterface.h"
@@ -691,16 +692,21 @@ struct ConvLayer {
         int requestedAlgoCount = CUDNN_CONVOLUTION_FWD_ALGO_COUNT;
         int returnedAlgoCount = -1;
         cudnnConvolutionFwdAlgoPerf_t results[2 * CUDNN_CONVOLUTION_FWD_ALGO_COUNT];
-        CUDNN_ERR(name.c_str(),cudnnGetConvolutionForwardAlgorithm_v7(
-          cudaHandles->cudnn,
-          inputDescriptor,
-          filterDescriptor,
-          convolutionDescriptor,
-          outputDescriptor,
-          requestedAlgoCount,
-          &returnedAlgoCount,
-          results
-        ));
+        {
+          std::lock_guard<std::mutex> lock(
+            CudaBackendInternal::cudnnConvolutionAlgorithmQueryMutex()
+          );
+          CUDNN_ERR(name.c_str(),cudnnGetConvolutionForwardAlgorithm_v7(
+            cudaHandles->cudnn,
+            inputDescriptor,
+            filterDescriptor,
+            convolutionDescriptor,
+            outputDescriptor,
+            requestedAlgoCount,
+            &returnedAlgoCount,
+            results
+          ));
+        }
         if(returnedAlgoCount <= 0)
           throw StringError("cudnnGetConvolutionForwardAlgorithm_v7 returned no algorithms?");
         (*convolutionAlgorithms)[batchSize] = results[0];

@@ -2,7 +2,7 @@
  * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Fixed-shape CUTLASS GEMMs for B13 residual projections and nested preConv.
+ * Fixed-channel/board CUTLASS GEMMs for residual projections and nested preConv.
  * CUTLASS commit: 7127592069c2fe01b041e174ba4345ef9b279671
  **************************************************************************************************/
 
@@ -20,9 +20,7 @@
 namespace Sm89Backend {
 namespace {
 
-constexpr int B = 13;
 constexpr int S = 361;
-constexpr int Tokens = B * S;
 constexpr int InChannels = 1152;
 constexpr int OutChannels = 384;
 constexpr int AttentionChannels = 384;
@@ -243,11 +241,12 @@ Gemm::Arguments makeArguments(
   const half* weights,
   const half* input,
   half* output,
-  int inChannels
+  int inChannels,
+  int tokens
 ) {
   using Layout = cutlass::layout::RowMajor;
   return {
-    {Tokens, OutChannels, inChannels},
+    {tokens, OutChannels, inChannels},
     {reinterpret_cast<const Element*>(input), Layout(inChannels)},
     {reinterpret_cast<const Element*>(weights), Layout(OutChannels)},
     {reinterpret_cast<const Element*>(output), Layout(OutChannels)},
@@ -267,8 +266,8 @@ struct Sm89Linear2GemmB13::Impl {
     : weights(weights_), op(), initialized(false)
   {}
 
-  bool applyAccumulate(const half* input, half* output, cudaStream_t stream) {
-    Gemm::Arguments args = makeArguments(weights, input, output, InChannels);
+  bool applyAccumulate(const half* input, half* output, int tokens, cudaStream_t stream) {
+    Gemm::Arguments args = makeArguments(weights, input, output, InChannels, tokens);
     cutlass::Status status;
     if(!initialized) {
       status = op.can_implement(args);
@@ -303,45 +302,21 @@ bool Sm89Linear2GemmB13::applyAccumulate(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != InChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != InChannels ||
      outChannels != OutChannels || input == nullptr || output == nullptr)
     return false;
-  return impl->applyAccumulate(input, output, stream);
+  return impl->applyAccumulate(input, output, batchSize * seqLen, stream);
 }
 
 struct Sm89Linear2BnGemmB13::Impl {
-  typename Linear2BnKernel::Params params;
+  const half* weights;
+  const half* bnScale;
+  const half* bnBias;
   bool initialized;
 
-  Impl(const half* weights, const half* bnScale, const half* bnBias)
-    : initialized(true)
+  Impl(const half* weights_, const half* bnScale_, const half* bnBias_)
+    : weights(weights_), bnScale(bnScale_), bnBias(bnBias_), initialized(true)
   {
-    cutlass::gemm::GemmCoord problem(Tokens, OutChannels, InChannels);
-    cutlass::gemm::GemmCoord gridShape = Linear2Swizzle::get_tiled_shape(
-      problem,
-      {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
-      1
-    );
-    using Layout = cutlass::layout::RowMajor;
-    Layout inputLayout(InChannels);
-    Layout outputLayout(OutChannels);
-    typename Linear2Mma::IteratorA::TensorRef nullInput(nullptr, inputLayout);
-    typename Linear2Mma::IteratorB::TensorRef weightRef(
-      reinterpret_cast<Element*>(const_cast<half*>(weights)), Layout(OutChannels)
-    );
-    typename Linear2BnIterator::TensorRef nullOutput(nullptr, outputLayout);
-    params = typename Linear2BnKernel::Params(
-      problem,
-      gridShape,
-      nullInput,
-      weightRef,
-      nullOutput,
-      nullOutput,
-      typename Epilogue::Params(1.0f, 1.0f)
-    );
-    params.params_D.scale = reinterpret_cast<const Element*>(bnScale);
-    params.params_D.bias = reinterpret_cast<const Element*>(bnBias);
-
     int smemSize = int(sizeof(typename Linear2BnKernel::SharedStorage));
     if(smemSize >= 48 * 1024)
       initialized = cudaFuncSetAttribute(
@@ -355,10 +330,36 @@ struct Sm89Linear2BnGemmB13::Impl {
     const half* input,
     half* residualOutput,
     half* activatedOutput,
+    int tokens,
     cudaStream_t stream
   ) {
     if(!initialized)
       return false;
+    cutlass::gemm::GemmCoord problem(tokens, OutChannels, InChannels);
+    cutlass::gemm::GemmCoord gridShape = Linear2Swizzle::get_tiled_shape(
+      problem,
+      {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
+      1
+    );
+    using Layout = cutlass::layout::RowMajor;
+    Layout inputLayout(InChannels);
+    Layout outputLayout(OutChannels);
+    typename Linear2Mma::IteratorA::TensorRef nullInput(nullptr, inputLayout);
+    typename Linear2Mma::IteratorB::TensorRef weightRef(
+      reinterpret_cast<Element*>(const_cast<half*>(weights)), Layout(OutChannels)
+    );
+    typename Linear2BnIterator::TensorRef nullOutput(nullptr, outputLayout);
+    typename Linear2BnKernel::Params params(
+      problem,
+      gridShape,
+      nullInput,
+      weightRef,
+      nullOutput,
+      nullOutput,
+      typename Epilogue::Params(1.0f, 1.0f)
+    );
+    params.params_D.scale = reinterpret_cast<const Element*>(bnScale);
+    params.params_D.bias = reinterpret_cast<const Element*>(bnBias);
     params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
     params.ref_C.reset(reinterpret_cast<Element*>(residualOutput));
     params.ref_D.reset(reinterpret_cast<Element*>(residualOutput));
@@ -390,11 +391,11 @@ bool Sm89Linear2BnGemmB13::applyAccumulateAndActivate(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != InChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != InChannels ||
      outChannels != OutChannels || input == nullptr || residualOutput == nullptr ||
      activatedOutput == nullptr)
     return false;
-  return impl->apply(input, residualOutput, activatedOutput, stream);
+  return impl->apply(input, residualOutput, activatedOutput, batchSize * seqLen, stream);
 }
 
 struct Sm89OutProjGemmB13::Impl {
@@ -406,8 +407,8 @@ struct Sm89OutProjGemmB13::Impl {
     : weights(weights_), op(), initialized(false)
   {}
 
-  bool applyAccumulate(const half* input, half* output, cudaStream_t stream) {
-    Gemm::Arguments args = makeArguments(weights, input, output, AttentionChannels);
+  bool applyAccumulate(const half* input, half* output, int tokens, cudaStream_t stream) {
+    Gemm::Arguments args = makeArguments(weights, input, output, AttentionChannels, tokens);
     cutlass::Status status;
     if(!initialized) {
       status = op.can_implement(args);
@@ -442,10 +443,10 @@ bool Sm89OutProjGemmB13::applyAccumulate(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != AttentionChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != AttentionChannels ||
      outChannels != OutChannels || input == nullptr || output == nullptr)
     return false;
-  return impl->applyAccumulate(input, output, stream);
+  return impl->applyAccumulate(input, output, batchSize * seqLen, stream);
 }
 
 struct Sm89PreConvGemmB13::Impl {
@@ -457,10 +458,10 @@ struct Sm89PreConvGemmB13::Impl {
     : weights(weights_), op(), initialized(false)
   {}
 
-  bool apply(const half* input, half* output, cudaStream_t stream) {
+  bool apply(const half* input, half* output, int tokens, cudaStream_t stream) {
     using Layout = cutlass::layout::RowMajor;
     PreConvGemm::Arguments args(
-      {Tokens, OutChannels, PreConvInChannels},
+      {tokens, OutChannels, PreConvInChannels},
       {reinterpret_cast<const Element*>(input), Layout(PreConvInChannels)},
       {reinterpret_cast<const Element*>(weights), Layout(OutChannels)},
       {reinterpret_cast<const Element*>(output), Layout(OutChannels)},
@@ -501,10 +502,10 @@ bool Sm89PreConvGemmB13::apply(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != PreConvInChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != PreConvInChannels ||
      outChannels != OutChannels || input == nullptr || output == nullptr)
     return false;
-  return impl->apply(input, output, stream);
+  return impl->apply(input, output, batchSize * seqLen, stream);
 }
 
 struct Sm89PostConvGemmB13::Impl {
@@ -516,10 +517,10 @@ struct Sm89PostConvGemmB13::Impl {
     : weights(weights_), op(), initialized(false)
   {}
 
-  bool applyAccumulate(const half* input, half* output, cudaStream_t stream) {
+  bool applyAccumulate(const half* input, half* output, int tokens, cudaStream_t stream) {
     using Layout = cutlass::layout::RowMajor;
     PostConvGemm::Arguments args(
-      {Tokens, PostConvOutChannels, PostConvInChannels},
+      {tokens, PostConvOutChannels, PostConvInChannels},
       {reinterpret_cast<const Element*>(input), Layout(PostConvInChannels)},
       {reinterpret_cast<const Element*>(weights), Layout(PostConvOutChannels)},
       {reinterpret_cast<const Element*>(output), Layout(PostConvOutChannels)},
@@ -560,20 +561,40 @@ bool Sm89PostConvGemmB13::applyAccumulate(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != PostConvInChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != PostConvInChannels ||
      outChannels != PostConvOutChannels || input == nullptr || output == nullptr)
     return false;
-  return impl->applyAccumulate(input, output, stream);
+  return impl->applyAccumulate(input, output, batchSize * seqLen, stream);
 }
 
 struct Sm89PostConvBnGemmB13::Impl {
-  typename PostConvBnKernel::Params params;
+  const half* weights;
+  const half* bnScale;
+  const half* bnBias;
   bool initialized;
 
-  Impl(const half* weights, const half* bnScale, const half* bnBias)
-    : initialized(true)
+  Impl(const half* weights_, const half* bnScale_, const half* bnBias_)
+    : weights(weights_), bnScale(bnScale_), bnBias(bnBias_), initialized(true)
   {
-    cutlass::gemm::GemmCoord problem(Tokens, PostConvOutChannels, PostConvInChannels);
+    int smemSize = int(sizeof(typename PostConvBnKernel::SharedStorage));
+    if(smemSize >= 48 * 1024)
+      initialized = cudaFuncSetAttribute(
+        cutlass::Kernel<PostConvBnKernel>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smemSize
+      ) == cudaSuccess;
+  }
+
+  bool apply(
+    const half* input,
+    half* residualOutput,
+    half* activatedOutput,
+    int tokens,
+    cudaStream_t stream
+  ) {
+    if(!initialized)
+      return false;
+    cutlass::gemm::GemmCoord problem(tokens, PostConvOutChannels, PostConvInChannels);
     cutlass::gemm::GemmCoord gridShape = PostConvSwizzle::get_tiled_shape(
       problem,
       {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
@@ -588,7 +609,7 @@ struct Sm89PostConvBnGemmB13::Impl {
       Layout(PostConvOutChannels)
     );
     typename PostConvBnIterator::TensorRef nullOutput(nullptr, outputLayout);
-    params = typename PostConvBnKernel::Params(
+    typename PostConvBnKernel::Params params(
       problem,
       gridShape,
       nullInput,
@@ -599,24 +620,6 @@ struct Sm89PostConvBnGemmB13::Impl {
     );
     params.params_D.scale = reinterpret_cast<const Element*>(bnScale);
     params.params_D.bias = reinterpret_cast<const Element*>(bnBias);
-
-    int smemSize = int(sizeof(typename PostConvBnKernel::SharedStorage));
-    if(smemSize >= 48 * 1024)
-      initialized = cudaFuncSetAttribute(
-        cutlass::Kernel<PostConvBnKernel>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smemSize
-      ) == cudaSuccess;
-  }
-
-  bool apply(
-    const half* input,
-    half* residualOutput,
-    half* activatedOutput,
-    cudaStream_t stream
-  ) {
-    if(!initialized)
-      return false;
     params.ref_A.reset(reinterpret_cast<Element*>(const_cast<half*>(input)));
     params.ref_C.reset(reinterpret_cast<Element*>(residualOutput));
     params.ref_D.reset(reinterpret_cast<Element*>(residualOutput));
@@ -648,11 +651,11 @@ bool Sm89PostConvBnGemmB13::applyAccumulateAndActivate(
   int outChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || inChannels != PostConvInChannels ||
+  if(batchSize < 1 || seqLen != S || inChannels != PostConvInChannels ||
      outChannels != PostConvOutChannels || input == nullptr ||
      residualOutput == nullptr || activatedOutput == nullptr)
     return false;
-  return impl->apply(input, residualOutput, activatedOutput, stream);
+  return impl->apply(input, residualOutput, activatedOutput, batchSize * seqLen, stream);
 }
 
 } // namespace Sm89Backend

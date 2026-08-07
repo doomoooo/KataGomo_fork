@@ -245,10 +245,13 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       + " useFP16 " + useFP16Mode.toString()
     );
 
+    const bool setupForAnyBenchmark =
+      setupFor == SETUP_FOR_BENCHMARK || setupFor == SETUP_FOR_BENCHMARKNN;
+
     int nnCacheSizePowerOfTwo =
       cfg.contains("nnCacheSizePowerOfTwo") ? cfg.getInt("nnCacheSizePowerOfTwo", -1, 48) :
       setupFor == SETUP_FOR_GTP ? 20 :
-      setupFor == SETUP_FOR_BENCHMARK ? 20 :
+      setupForAnyBenchmark ? 20 :
       setupFor == SETUP_FOR_DISTRIBUTED ? 19 :
       setupFor == SETUP_FOR_MATCH ? 21 :
       setupFor == SETUP_FOR_ANALYSIS ? 23 :
@@ -257,7 +260,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     int nnMutexPoolSizePowerOfTwo =
       cfg.contains("nnMutexPoolSizePowerOfTwo") ? cfg.getInt("nnMutexPoolSizePowerOfTwo", -1, 24) :
       setupFor == SETUP_FOR_GTP ? 16 :
-      setupFor == SETUP_FOR_BENCHMARK ? 16 :
+      setupForAnyBenchmark ? 16 :
       setupFor == SETUP_FOR_DISTRIBUTED ? 16 :
       setupFor == SETUP_FOR_MATCH ? 17 :
       setupFor == SETUP_FOR_ANALYSIS ? 17 :
@@ -265,7 +268,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
 
 #ifndef USE_EIGEN_BACKEND
     int nnMaxBatchSize;
-    if(setupFor == SETUP_FOR_BENCHMARK || setupFor == SETUP_FOR_DISTRIBUTED) {
+    if(setupForAnyBenchmark || setupFor == SETUP_FOR_DISTRIBUTED) {
       nnMaxBatchSize = defaultMaxBatchSize;
     }
     else if(defaultMaxBatchSize > 0) {
@@ -319,7 +322,11 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       cfg
     );
 
-    nnEval->spawnServerThreads();
+    // benchmarknn creates its own externally-owned streams and compute handles
+    // in benchmarkPureForward. Starting the normal evaluator threads here only
+    // to kill them immediately duplicates model-handle setup for every tactic.
+    if(setupFor != SETUP_FOR_BENCHMARKNN)
+      nnEval->spawnServerThreads();
 
     nnEvals.push_back(nnEval);
   }

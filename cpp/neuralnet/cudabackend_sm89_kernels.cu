@@ -2,14 +2,16 @@
 
 #include "../neuralnet/cudaerrorcheck.h"
 
-__global__ void sm89MaskZeroNHWCHalfKernel(half* __restrict__ buf, const half* __restrict__ mask, int xySize, int channels) {
+__global__ void sm89MaskZeroNHWCHalfKernel(
+  half* __restrict__ buf, const half* __restrict__ mask,
+  int totalElements, int xySize, int channels
+) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int total = xySize * channels;
-  if(idx >= total)
+  if(idx >= totalElements)
     return;
-  int c = idx % channels;
+  int elementsPerBatch = xySize * channels;
   int xy = (idx / channels) % xySize;
-  int b = idx / total;
+  int b = idx / elementsPerBatch;
   if(mask[(size_t)b * xySize + xy] == __float2half(0.0f))
     buf[idx] = __float2half(0.0f);
 }
@@ -18,7 +20,9 @@ void sm89MaskZeroNHWC(half* buf, const half* mask, int batchSize, int xySize, in
   int total = batchSize * xySize * channels;
   int block = 256;
   int grid = (total + block - 1) / block;
-  sm89MaskZeroNHWCHalfKernel<<<grid, block, 0, stream>>>(buf, mask, xySize, channels);
+  sm89MaskZeroNHWCHalfKernel<<<grid, block, 0, stream>>>(
+    buf, mask, total, xySize, channels
+  );
   CUDA_ERR("sm89MaskZeroNHWC",cudaPeekAtLastError());
 }
 
@@ -32,14 +36,14 @@ __forceinline__ __device__ half sm89SiluHalf(half h) {
   return __float2half(a / (1.0f + expf(-a)));
 }
 
-__global__ void sm89ScaleBiasSiluNHWCHalfVec8B13Kernel(
+__global__ void sm89ScaleBiasSiluNHWCHalfVec8Kernel(
   const half* __restrict__ in,
   half* __restrict__ out,
   const half* __restrict__ scale,
-  const half* __restrict__ bias
+  const half* __restrict__ bias,
+  int totalVecs
 ) {
   constexpr int cVecs = 768 / 8;
-  constexpr int totalVecs = 13 * 19 * 19 * cVecs;
   int vecIdx = blockIdx.x * blockDim.x + threadIdx.x;
   if(vecIdx >= totalVecs)
     return;
@@ -60,19 +64,19 @@ __global__ void sm89ScaleBiasSiluNHWCHalfVec8B13Kernel(
   reinterpret_cast<uint4*>(out)[vecIdx] = y.packed;
 }
 
-bool sm89ScaleBiasSiluNHWCHalfVec8B13(
+bool sm89ScaleBiasSiluNHWCHalfVec8(
   const half* in, half* out, const half* scale, const half* bias,
   int nSize, int xySize, int cSize, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19 || cSize != 768)
+  if(nSize < 1 || xySize != 19 * 19 || cSize != 768)
     return false;
   constexpr int blockSize = 256;
-  constexpr int totalVecs = 13 * 19 * 19 * (768 / 8);
-  constexpr int gridSize = (totalVecs + blockSize - 1) / blockSize;
-  sm89ScaleBiasSiluNHWCHalfVec8B13Kernel<<<gridSize,blockSize,0,stream>>>(
-    in, out, scale, bias
+  const int totalVecs = nSize * xySize * (768 / 8);
+  const int gridSize = (totalVecs + blockSize - 1) / blockSize;
+  sm89ScaleBiasSiluNHWCHalfVec8Kernel<<<gridSize,blockSize,0,stream>>>(
+    in, out, scale, bias, totalVecs
   );
-  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec8B13",cudaPeekAtLastError());
+  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec8",cudaPeekAtLastError());
   return true;
 }
 
@@ -81,14 +85,14 @@ union __align__(8) Sm89Half4 {
   half values[4];
 };
 
-__global__ void sm89ScaleBiasSiluNHWCHalfVec4C384B13Kernel(
+__global__ void sm89ScaleBiasSiluNHWCHalfVec4C384Kernel(
   const half* __restrict__ in,
   half* __restrict__ out,
   const half* __restrict__ scale,
-  const half* __restrict__ bias
+  const half* __restrict__ bias,
+  int totalVecs
 ) {
   constexpr int cVecs = 384 / 4;
-  constexpr int totalVecs = 13 * 19 * 19 * cVecs;
   int vecIdx = blockIdx.x * blockDim.x + threadIdx.x;
   if(vecIdx >= totalVecs)
     return;
@@ -109,24 +113,24 @@ __global__ void sm89ScaleBiasSiluNHWCHalfVec4C384B13Kernel(
   reinterpret_cast<uint2*>(out)[vecIdx] = y.packed;
 }
 
-bool sm89ScaleBiasSiluNHWCHalfVec4C384B13(
+bool sm89ScaleBiasSiluNHWCHalfVec4C384(
   const half* in, half* out, const half* scale, const half* bias,
   int nSize, int xySize, int cSize, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19 || cSize != 384)
+  if(nSize < 1 || xySize != 19 * 19 || cSize != 384)
     return false;
   constexpr int blockSize = 256;
-  constexpr int totalVecs = 13 * 19 * 19 * (384 / 4);
-  constexpr int gridSize = (totalVecs + blockSize - 1) / blockSize;
-  sm89ScaleBiasSiluNHWCHalfVec4C384B13Kernel<<<gridSize,blockSize,0,stream>>>(
-    in, out, scale, bias
+  const int totalVecs = nSize * xySize * (384 / 4);
+  const int gridSize = (totalVecs + blockSize - 1) / blockSize;
+  sm89ScaleBiasSiluNHWCHalfVec4C384Kernel<<<gridSize,blockSize,0,stream>>>(
+    in, out, scale, bias, totalVecs
   );
-  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec4C384B13",cudaPeekAtLastError());
+  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec4C384",cudaPeekAtLastError());
   return true;
 }
 
 template<int xyPerBlock>
-__global__ void sm89InitialGlobalMatMulAddB13Kernel(
+__global__ void sm89InitialGlobalMatMulAddKernel(
   const half* __restrict__ inputGlobal,
   const half* __restrict__ weights,
   half* __restrict__ spatial
@@ -156,36 +160,37 @@ __global__ void sm89InitialGlobalMatMulAddB13Kernel(
   }
 }
 
-bool sm89InitialGlobalMatMulAddB13(
+bool sm89InitialGlobalMatMulAdd(
   const half* inputGlobal, const half* weights, half* spatial,
   int nSize, int xySize, int inChannels, int outChannels, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19 || inChannels != 19 || outChannels != 768)
+  if(nSize < 1 || xySize != 19 * 19 || inChannels != 19 || outChannels != 768)
     return false;
   constexpr int xyPerBlock = 8;
   constexpr int blockSize = 256;
   dim3 grid(outChannels / blockSize, (xySize + xyPerBlock - 1) / xyPerBlock, nSize);
-  sm89InitialGlobalMatMulAddB13Kernel<xyPerBlock><<<grid,blockSize,0,stream>>>(
+  sm89InitialGlobalMatMulAddKernel<xyPerBlock><<<grid,blockSize,0,stream>>>(
     inputGlobal, weights, spatial
   );
-  CUDA_ERR("sm89InitialGlobalMatMulAddB13",cudaPeekAtLastError());
+  CUDA_ERR("sm89InitialGlobalMatMulAdd",cudaPeekAtLastError());
   return true;
 }
 
 template<int inputRowStride, int inputChannelOffset>
-__global__ void sm89FusedPolicyP1B13Kernel(
+__global__ void sm89FusedPolicyP1Kernel(
   const half* __restrict__ in,
   float* __restrict__ out,
   const float* __restrict__ globalBias,
   const float* __restrict__ scale,
-  const float* __restrict__ bias
+  const float* __restrict__ bias,
+  int nSize
 ) {
   constexpr int xySize = 19 * 19;
   constexpr int channels = 96;
   int c = threadIdx.x;
   int xy = blockIdx.x * blockDim.y + threadIdx.y;
   int n = blockIdx.y;
-  if(c >= channels || xy >= xySize || n >= 13)
+  if(c >= channels || xy >= xySize || n >= nSize)
     return;
 
   size_t row = (size_t)n * xySize + xy;
@@ -197,39 +202,40 @@ __global__ void sm89FusedPolicyP1B13Kernel(
   out[outputIdx] = value / (1.0f + expf(-value));
 }
 
-bool sm89FusedPolicyP1B13(
+bool sm89FusedPolicyP1(
   const half* in, float* out, const float* globalBias,
   const float* scale, const float* bias,
   int nSize, int xySize, int cSize,
   int inputRowStride, int inputChannelOffset, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19 || cSize != 96)
+  if(nSize < 1 || xySize != 19 * 19 || cSize != 96)
     return false;
   dim3 block(96, 5);
   dim3 grid((xySize + block.y - 1) / block.y, nSize);
   if(inputRowStride == 96 && inputChannelOffset == 0)
-    sm89FusedPolicyP1B13Kernel<96,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias);
+    sm89FusedPolicyP1Kernel<96,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias,nSize);
   else if(inputRowStride == 384 && inputChannelOffset == 0)
-    sm89FusedPolicyP1B13Kernel<384,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias);
+    sm89FusedPolicyP1Kernel<384,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias,nSize);
   else
     return false;
-  CUDA_ERR("sm89FusedPolicyP1B13",cudaPeekAtLastError());
+  CUDA_ERR("sm89FusedPolicyP1",cudaPeekAtLastError());
   return true;
 }
 
 template<int channels, int inputChannelOffset>
-__global__ void sm89HeadBNSiluStridedB13Kernel(
+__global__ void sm89HeadBNSiluStridedKernel(
   const half* __restrict__ in,
   half* __restrict__ out,
   const half* __restrict__ scale,
-  const half* __restrict__ bias
+  const half* __restrict__ bias,
+  int nSize
 ) {
   constexpr int xySize = 19 * 19;
   constexpr int inputRowStride = 384;
   int c = threadIdx.x;
   int xy = blockIdx.x * blockDim.y + threadIdx.y;
   int n = blockIdx.y;
-  if(c >= channels || xy >= xySize || n >= 13)
+  if(c >= channels || xy >= xySize || n >= nSize)
     return;
 
   size_t row = (size_t)n * xySize + xy;
@@ -237,42 +243,43 @@ __global__ void sm89HeadBNSiluStridedB13Kernel(
   out[row * channels + c] = sm89SiluHalf(affine);
 }
 
-bool sm89HeadBNSiluStridedB13(
+bool sm89HeadBNSiluStrided(
   const half* in, half* out, const half* scale, const half* bias,
   int nSize, int xySize, int cSize,
   int inputRowStride, int inputChannelOffset, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19 || inputRowStride != 384)
+  if(nSize < 1 || xySize != 19 * 19 || inputRowStride != 384)
     return false;
   if(cSize == 96 && inputChannelOffset == 96) {
     dim3 block(96, 5);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNSiluStridedB13Kernel<96,96><<<grid,block,0,stream>>>(in,out,scale,bias);
+    sm89HeadBNSiluStridedKernel<96,96><<<grid,block,0,stream>>>(in,out,scale,bias,nSize);
   }
   else if(cSize == 192 && inputChannelOffset == 192) {
     dim3 block(192, 2);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNSiluStridedB13Kernel<192,192><<<grid,block,0,stream>>>(in,out,scale,bias);
+    sm89HeadBNSiluStridedKernel<192,192><<<grid,block,0,stream>>>(in,out,scale,bias,nSize);
   }
   else
     return false;
-  CUDA_ERR("sm89HeadBNSiluStridedB13",cudaPeekAtLastError());
+  CUDA_ERR("sm89HeadBNSiluStrided",cudaPeekAtLastError());
   return true;
 }
 
 template<int channels, int rowsPerBlock, bool writeHalf, int inputRowStride, int inputChannelOffset>
-__global__ void sm89HeadBNHalfToFloatB13Kernel(
+__global__ void sm89HeadBNHalfToFloatKernel(
   const half* __restrict__ in,
   half* __restrict__ halfOut,
   float* __restrict__ floatOut,
   const half* __restrict__ scale,
-  const half* __restrict__ bias
+  const half* __restrict__ bias,
+  int nSize
 ) {
   constexpr int xySize = 19 * 19;
   int c = threadIdx.x;
   int xy = blockIdx.x * rowsPerBlock + threadIdx.y;
   int n = blockIdx.y;
-  if(c >= channels || xy >= xySize || n >= 13)
+  if(c >= channels || xy >= xySize || n >= nSize)
     return;
 
   size_t row = (size_t)n * xySize + xy;
@@ -286,58 +293,58 @@ __global__ void sm89HeadBNHalfToFloatB13Kernel(
   floatOut[outIdx] = __half2float(activated);
 }
 
-bool sm89HeadBNHalfToFloatB13(
+bool sm89HeadBNHalfToFloat(
   const half* in, half* halfOut, float* floatOut,
   const half* scale, const half* bias,
   int nSize, int xySize, int cSize,
   int inputRowStride, int inputChannelOffset, cudaStream_t stream
 ) {
-  if(nSize != 13 || xySize != 19 * 19)
+  if(nSize < 1 || xySize != 19 * 19)
     return false;
   if(cSize == 96 && halfOut == nullptr && inputRowStride == 96 && inputChannelOffset == 0) {
     dim3 block(96, 5);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNHalfToFloatB13Kernel<96,5,false,96,0><<<grid,block,0,stream>>>(
-      in, nullptr, floatOut, scale, bias
+    sm89HeadBNHalfToFloatKernel<96,5,false,96,0><<<grid,block,0,stream>>>(
+      in, nullptr, floatOut, scale, bias, nSize
     );
   }
   else if(cSize == 96 && halfOut == nullptr && inputRowStride == 384 && inputChannelOffset == 96) {
     dim3 block(96, 5);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNHalfToFloatB13Kernel<96,5,false,384,96><<<grid,block,0,stream>>>(
-      in, nullptr, floatOut, scale, bias
+    sm89HeadBNHalfToFloatKernel<96,5,false,384,96><<<grid,block,0,stream>>>(
+      in, nullptr, floatOut, scale, bias, nSize
     );
   }
   else if(cSize == 192 && halfOut != nullptr && inputRowStride == 192 && inputChannelOffset == 0) {
     dim3 block(192, 2);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNHalfToFloatB13Kernel<192,2,true,192,0><<<grid,block,0,stream>>>(
-      in, halfOut, floatOut, scale, bias
+    sm89HeadBNHalfToFloatKernel<192,2,true,192,0><<<grid,block,0,stream>>>(
+      in, halfOut, floatOut, scale, bias, nSize
     );
   }
   else if(cSize == 192 && halfOut != nullptr && inputRowStride == 384 && inputChannelOffset == 192) {
     dim3 block(192, 2);
     dim3 grid((xySize + block.y - 1) / block.y, nSize);
-    sm89HeadBNHalfToFloatB13Kernel<192,2,true,384,192><<<grid,block,0,stream>>>(
-      in, halfOut, floatOut, scale, bias
+    sm89HeadBNHalfToFloatKernel<192,2,true,384,192><<<grid,block,0,stream>>>(
+      in, halfOut, floatOut, scale, bias, nSize
     );
   }
   else
     return false;
-  CUDA_ERR("sm89HeadBNHalfToFloatB13",cudaPeekAtLastError());
+  CUDA_ERR("sm89HeadBNHalfToFloat",cudaPeekAtLastError());
   return true;
 }
 
-__global__ void sm89SplitValueTerminalB13Kernel(
+__global__ void sm89SplitValueTerminalKernel(
   const float* __restrict__ combined,
   const float* __restrict__ bias,
   float* __restrict__ value,
-  float* __restrict__ scoreValue
+  float* __restrict__ scoreValue,
+  int total
 ) {
   constexpr int valueChannels = 3;
   constexpr int scoreValueChannels = 6;
   constexpr int combinedChannels = valueChannels + scoreValueChannels;
-  constexpr int total = 13 * combinedChannels;
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if(idx >= total)
     return;
@@ -351,18 +358,21 @@ __global__ void sm89SplitValueTerminalB13Kernel(
     scoreValue[n * scoreValueChannels + c - valueChannels] = result;
 }
 
-bool sm89SplitValueTerminalB13(
+bool sm89SplitValueTerminal(
   const float* combined, const float* bias,
   float* value, float* scoreValue,
   int batchSize, int valueChannels, int scoreValueChannels,
   cudaStream_t stream
 ) {
-  if(batchSize != 13 || valueChannels != 3 || scoreValueChannels != 6)
+  if(batchSize < 1 || valueChannels != 3 || scoreValueChannels != 6)
     return false;
-  sm89SplitValueTerminalB13Kernel<<<1,128,0,stream>>>(
-    combined, bias, value, scoreValue
+  constexpr int blockSize = 128;
+  const int total = batchSize * (valueChannels + scoreValueChannels);
+  const int gridSize = (total + blockSize - 1) / blockSize;
+  sm89SplitValueTerminalKernel<<<gridSize,blockSize,0,stream>>>(
+    combined, bias, value, scoreValue, total
   );
-  CUDA_ERR("sm89SplitValueTerminalB13",cudaPeekAtLastError());
+  CUDA_ERR("sm89SplitValueTerminal",cudaPeekAtLastError());
   return true;
 }
 

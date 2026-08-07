@@ -1,5 +1,5 @@
 /******************************************************************************
- * Fixed-shape launcher derived from Dao-AILab/flash-attention, BSD-3-Clause.
+ * Fixed-board launcher derived from Dao-AILab/flash-attention, BSD-3-Clause.
  * Upstream commit: 5835c733e7e9c07606b045255768e8a7e9e851bd
  * CUTLASS submodule: 7127592069c2fe01b041e174ba4345ef9b279671
  ******************************************************************************/
@@ -13,7 +13,6 @@
 namespace Sm89Backend {
 namespace {
 
-constexpr int B = 13;
 constexpr int S = 361;
 constexpr int H = 12;
 constexpr int D = 32;
@@ -23,7 +22,9 @@ Flash_fwd_params makeParams(
   const half* k,
   const half* v,
   half* output,
-  float* lse
+  float* lse,
+  int batchSize,
+  int numSms
 ) {
   Flash_fwd_params p{};
   p.q_ptr = const_cast<half*>(q);
@@ -48,8 +49,8 @@ Flash_fwd_params makeParams(
   p.o_head_stride = D;
   p.v_dim_stride = 1;
 
-  p.b = B;
-  p.b_k = B;
+  p.b = batchSize;
+  p.b_k = batchSize;
   p.h = H;
   p.h_k = H;
   p.seqlen_q = S;
@@ -60,8 +61,8 @@ Flash_fwd_params makeParams(
   p.dv = D;
   p.d_rounded = D;
   p.dv_rounded = D;
-  p.total_q = B * S;
-  p.total_k = B * S;
+  p.total_q = batchSize * S;
+  p.total_k = batchSize * S;
 
   p.scale_softmax = 1.0f / std::sqrt((float)D);
   p.p_dropout = 1.0f;
@@ -72,17 +73,17 @@ Flash_fwd_params makeParams(
   p.num_splits = 1;
   p.pack_gqa = false;
   p.arch = 89;
-  p.num_sm = 128;
+  p.num_sm = numSms;
   return p;
 }
 
 } // namespace
 
-size_t sm89FlashAttentionLseBytesB13D32() {
-  return (size_t)B * H * S * sizeof(float);
+size_t sm89FlashAttentionLseBytesD32(int batchSize) {
+  return (size_t)batchSize * H * S * sizeof(float);
 }
 
-bool sm89FlashAttentionB13D32(
+bool sm89FlashAttentionD32(
   const half* q,
   const half* k,
   const half* v,
@@ -95,14 +96,15 @@ bool sm89FlashAttentionB13D32(
   int qHeadDim,
   int vHeadDim,
   bool useBoth16Accum,
+  int numSms,
   cudaStream_t stream
 ) {
-  if(batchSize != B || seqLen != S || numHeads != H || numKVHeads != H ||
+  if(batchSize < 1 || seqLen != S || numHeads != H || numKVHeads != H ||
      qHeadDim != D || vHeadDim != D || q == nullptr || k == nullptr ||
-     v == nullptr || output == nullptr || lse == nullptr)
+     v == nullptr || output == nullptr || lse == nullptr || numSms <= 0)
     return false;
 
-  Flash_fwd_params p = makeParams(q, k, v, output, lse);
+  Flash_fwd_params p = makeParams(q, k, v, output, lse, batchSize, numSms);
   if(useBoth16Accum) {
     run_flash_fwd<
       86, D, D, 1,

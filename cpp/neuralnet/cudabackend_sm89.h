@@ -15,7 +15,7 @@
 // cudahelpers.cu, cudautils.cpp, ...) only contain a thin dispatch: ComputeHandle builds an
 // Sm89Model on SM89 and routes apply() through it. cudabackend.cpp remains the official fallback.
 //
-// Rebuild roadmap (from /workspace/cuda-optimization-history.md and SM120 scaffold):
+// Rebuild roadmap (from /workspace/cuda-optimization-history.md):
 //   0. scaffold: Sm89Model delegates to the official model (bit-identical)  [current state]
 //   1. wide QKV / wide FFN projections, fused residual epilogues
 //   2. GEMM / attention AOT with higher-occupancy SM89 kernels
@@ -89,9 +89,13 @@ struct Options {
   bool useFusedValueTerminal = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
+  float persistingL2HitRatio = 1.0f;
   bool useScaleBiasSiluVec8 = false;
   bool useScaleBiasSiluVec4C384 = false;
   bool shareModelWeights = false;
+  std::string dualFfnAotTactic = "disabled";
+  std::string linear2AotTactic = "disabled";
+  int serverThreads = 1;
 };
 
 bool isSm89Arch(int majorComputeCapability, int minorComputeCapability);

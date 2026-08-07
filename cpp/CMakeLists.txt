@@ -50,8 +50,14 @@ set(USE_TCMALLOC 0 CACHE BOOL "Use TCMalloc")
 set(NO_GIT_REVISION 0 CACHE BOOL "Disable embedding the git revision into the compiled exe")
 set(USE_AVX2 0 CACHE BOOL "Compile with AVX2")
 set(USE_BIGGER_BOARDS_EXPENSIVE 0 CACHE BOOL "Allow boards up to size 50. Compiling with this will use more memory and slow down KataGo, even when playing on boards of size 19.")
-set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Pinned Dao-AILab/flash-attention checkout for the optional SM89 B13 AOT kernel")
-set(SM89_DUAL_GEMM_SWIZZLE 2 CACHE STRING "Threadblock swizzle for the optional SM89 B13 dual GEMM kernel")
+set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Pinned Dao-AILab/flash-attention checkout for the optional SM89 AOT kernel")
+set(SM89_DUAL_GEMM_SWIZZLE 2 CACHE STRING "Threadblock swizzle for the optional SM89 dual GEMM kernel")
+set(SM89_TACTIC_TILELANG_ROOT "" CACHE PATH "TileLang package root for generated SM89 tactic sources")
+set(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 dual-FFN fat registry")
+set(SM89_SEARCH_DUAL_FFN_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 dual-FFN sources")
+set(SM89_SEARCH_LINEAR2_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 linear2 fat registry")
+set(SM89_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 linear2 sources")
+set(SM89_CUDA_ARCHITECTURES "" CACHE STRING "Optional CUDA architecture list for an SM89-only search build")
 
 set(USE_CACHE_TENSORRT_PLAN 0 CACHE BOOL "Use TENSORRT plan cache. May use a lot of disk space. Only applies when USE_BACKEND is TENSORRT.")
 mark_as_advanced(USE_CACHE_TENSORRT_PLAN)
@@ -152,6 +158,43 @@ if(USE_BACKEND STREQUAL "CUDA")
     set(KATAGO_ENABLE_SM89_POSTCONV_GEMM TRUE)
     set(KATAGO_ENABLE_SM89_QKV_ROPE_GEMM TRUE)
   endif()
+  if(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
+     SM89_SEARCH_LINEAR2_FAT_REGISTRY OR SM89_SEARCH_LINEAR2_FAT_SOURCES)
+    if(NOT SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR NOT SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
+       NOT SM89_SEARCH_LINEAR2_FAT_REGISTRY OR NOT SM89_SEARCH_LINEAR2_FAT_SOURCES OR
+       NOT SM89_TACTIC_TILELANG_ROOT)
+      message(FATAL_ERROR
+        "SM89 tactic search requires TileLang root plus both dual-FFN and linear2 registry/source sets")
+    endif()
+    if(NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/src/tl_templates/cuda/debug.h" OR
+       NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/3rdparty/cutlass/include/cutlass/cutlass.h")
+      message(FATAL_ERROR "SM89_TACTIC_TILELANG_ROOT is not a complete TileLang package")
+    endif()
+    foreach(KATAGO_SM89_TACTIC_SOURCE IN LISTS
+      SM89_SEARCH_DUAL_FFN_FAT_SOURCES SM89_SEARCH_LINEAR2_FAT_SOURCES)
+      if(NOT EXISTS "${KATAGO_SM89_TACTIC_SOURCE}")
+        message(FATAL_ERROR "Generated SM89 tactic source does not exist: ${KATAGO_SM89_TACTIC_SOURCE}")
+      endif()
+    endforeach()
+    add_library(katago_sm89_tactic_search OBJECT
+      neuralnet/cudabackend_sm89_tactic_kernels.cpp
+      "${SM89_SEARCH_DUAL_FFN_FAT_REGISTRY}"
+      ${SM89_SEARCH_DUAL_FFN_FAT_SOURCES}
+      "${SM89_SEARCH_LINEAR2_FAT_REGISTRY}"
+      ${SM89_SEARCH_LINEAR2_FAT_SOURCES}
+    )
+    set_target_properties(katago_sm89_tactic_search PROPERTIES
+      CUDA_ARCHITECTURES 89 CUDA_STANDARD 17)
+    target_include_directories(katago_sm89_tactic_search PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet")
+    target_include_directories(katago_sm89_tactic_search SYSTEM PRIVATE
+      "${SM89_TACTIC_TILELANG_ROOT}/src"
+      "${SM89_TACTIC_TILELANG_ROOT}/3rdparty/cutlass/include")
+    target_compile_options(katago_sm89_tactic_search PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math;--expt-relaxed-constexpr;--expt-extended-lambda;-lineinfo;-diag-suppress=20012;-diag-suppress=1444>)
+    list(APPEND NEURALNET_BACKEND_SOURCES $<TARGET_OBJECTS:katago_sm89_tactic_search>)
+    set(KATAGO_ENABLE_SM89_TACTIC_SEARCH TRUE)
+  endif()
   # The vendored header-only cudnn_frontend library trips GCC's -Wnull-dereference from its -O2
   # interprocedural analysis (no source location, so an in-file #pragma can't suppress it). It's
   # benign third-party code; silence it just for the one source that includes cudnn_frontend.h.
@@ -159,7 +202,9 @@ if(USE_BACKEND STREQUAL "CUDA")
     set_source_files_properties(neuralnet/cudabackend.cpp PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
   endif()
 # https://en.wikipedia.org/wiki/CUDA#GPUs_supported
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+  if(SM89_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES ${SM89_CUDA_ARCHITECTURES})
+  elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
     set(CMAKE_CUDA_ARCHITECTURES 75 80 86 87 88 89 90 100 110 103 120 121)
     set(CMAKE_CUDA_FLAGS "-Wno-deprecated-gpu-targets")
   elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
@@ -479,6 +524,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   endif()
   if(KATAGO_ENABLE_SM89_QKV_ROPE_GEMM)
     target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_QKV_ROPE_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_TACTIC_SEARCH)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_TACTIC_SEARCH)
   endif()
   target_compile_definitions(katago PRIVATE CUDA_TARGET_VERSION=${CMAKE_CUDA_COMPILER_VERSION})
   find_package(CUDAToolkit REQUIRED)

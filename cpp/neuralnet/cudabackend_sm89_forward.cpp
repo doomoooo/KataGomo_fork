@@ -9,9 +9,13 @@
 #include "../neuralnet/cudabackend_sm89_kernels.h"
 #include "../neuralnet/cudabackend_sm89_linear2_gemm.h"
 #include "../neuralnet/cudabackend_sm89_qkv_rope_gemm.h"
+#ifdef KATAGO_ENABLE_SM89_TACTIC_SEARCH
+#include "../neuralnet/cudabackend_sm89_tactic_kernels.h"
+#endif
 
 #include "../neuralnet/cudaerrorcheck.h"
 #include "../neuralnet/cudahelpers.h"
+#include "../neuralnet/cudnnquerymutex.h"
 #include "../neuralnet/cudautils.h"
 
 #include "../core/global.h"
@@ -20,7 +24,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -32,6 +35,28 @@ namespace Sm89Backend {
 
 // --------------------------------------------------------------------------------------
 // Context / scratch
+
+static Sm89DeviceCapabilities queryCurrentDeviceCapabilities() {
+  int device = 0;
+  cudaDeviceProp properties = {};
+  CUDA_ERR("Sm89Ctx",cudaGetDevice(&device));
+  CUDA_ERR("Sm89Ctx",cudaGetDeviceProperties(&properties, device));
+  if(properties.multiProcessorCount <= 0)
+    throw StringError("Sm89Ctx: CUDA reported no streaming multiprocessors");
+  return Sm89DeviceCapabilities{
+    device,
+    properties.major,
+    properties.minor,
+    properties.multiProcessorCount,
+    properties.warpSize,
+    properties.maxThreadsPerMultiProcessor,
+    properties.maxThreadsPerBlock,
+    properties.regsPerMultiprocessor,
+    properties.sharedMemPerMultiprocessor,
+    properties.sharedMemPerBlockOptin,
+    properties.l2CacheSize,
+  };
+}
 
 static void setPersistingL2Window(
   cudaStream_t stream,
@@ -59,8 +84,16 @@ static void clearPersistingL2Window(cudaStream_t stream) {
   ));
 }
 
-Sm89Ctx::Sm89Ctx(cudaStream_t stream_)
-  : cublas(NULL), cudnn(NULL), stream(stream_)
+Sm89Ctx::Sm89Ctx(
+  cudaStream_t stream_,
+  int serverThreads_,
+  const string& dualFfnAotTactic_,
+  const string& linear2AotTactic_
+)
+  : cublas(NULL), cudnn(NULL), stream(stream_),
+    deviceCaps(queryCurrentDeviceCapabilities()),
+    serverThreads(serverThreads_), dualFfnAotTactic(dualFfnAotTactic_),
+    linear2AotTactic(linear2AotTactic_)
 {
   if(stream == NULL)
     throw StringError("Sm89Ctx: external CUDA stream must not be null");
@@ -592,14 +625,14 @@ struct Sm89BatchNorm {
       else {
         bool handled = false;
         if(useScaleBiasSiluVec8 && maskBuf == NULL && activation == ACTIVATION_SILU) {
-          handled = sm89ScaleBiasSiluNHWCHalfVec8B13(
+          handled = sm89ScaleBiasSiluNHWCHalfVec8(
             (const half*)inputBuf, (half*)outputBuf,
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
             batchSize, nnXLen * nnYLen, numChannels, stream
           );
         }
         if(!handled && useScaleBiasSiluVec4C384 && maskBuf == NULL && activation == ACTIVATION_SILU) {
-          handled = sm89ScaleBiasSiluNHWCHalfVec4C384B13(
+          handled = sm89ScaleBiasSiluNHWCHalfVec4C384(
             (const half*)inputBuf, (half*)outputBuf,
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
             batchSize, nnXLen * nnYLen, numChannels, stream
@@ -684,6 +717,7 @@ struct Sm89Conv {
   std::shared_ptr<cudnn_frontend::graph::Tensor_attributes> frontendW;
   std::shared_ptr<cudnn_frontend::graph::Tensor_attributes> frontendY;
   int64_t frontendWorkspaceBytes;
+  int frontendBatchSize;
 #endif
 
   Sm89Conv() = delete;
@@ -718,7 +752,8 @@ struct Sm89Conv {
       frontendX(nullptr),
       frontendW(nullptr),
       frontendY(nullptr),
-      frontendWorkspaceBytes(0)
+      frontendWorkspaceBytes(0),
+      frontendBatchSize(0)
 #endif
   {
     int convYSize = desc->convYSize;
@@ -775,16 +810,21 @@ struct Sm89Conv {
         int requestedAlgoCount = CUDNN_CONVOLUTION_FWD_ALGO_COUNT;
         int returnedAlgoCount = -1;
         cudnnConvolutionFwdAlgoPerf_t results[2 * CUDNN_CONVOLUTION_FWD_ALGO_COUNT];
-        CUDNN_ERR(name.c_str(),cudnnGetConvolutionForwardAlgorithm_v7(
-          ctx->cudnn,
-          (*inputDescriptors)[batchSize],
-          filterDescriptor,
-          convolutionDescriptor,
-          (*outputDescriptors)[batchSize],
-          requestedAlgoCount,
-          &returnedAlgoCount,
-          results
-        ));
+        {
+          std::lock_guard<std::mutex> lock(
+            CudaBackendInternal::cudnnConvolutionAlgorithmQueryMutex()
+          );
+          CUDNN_ERR(name.c_str(),cudnnGetConvolutionForwardAlgorithm_v7(
+            ctx->cudnn,
+            (*inputDescriptors)[batchSize],
+            filterDescriptor,
+            convolutionDescriptor,
+            (*outputDescriptors)[batchSize],
+            requestedAlgoCount,
+            &returnedAlgoCount,
+            results
+          ));
+        }
         if(returnedAlgoCount <= 0)
           throw StringError(name + ": cudnn returned no conv algorithms");
         (*convolutionAlgorithms)[batchSize] = results[0];
@@ -813,7 +853,7 @@ struct Sm89Conv {
 #if CUDNN_VERSION >= 8903
     const int64_t maxFrontendWorkspaceBytes = 64 * 1024 * 1024;
     if(
-      useInitialConvFrontend_ && maxBatchSize == 13 && nnXLen == 19 && nnYLen == 19 &&
+      useInitialConvFrontend_ && maxBatchSize > 0 && nnXLen == 19 && nnYLen == 19 &&
       useFP16 && useNHWCIn && useNHWCOut && filterNHWC &&
       convXSize == 3 && convYSize == 3 && dilationX == 1 && dilationY == 1
     ) {
@@ -825,7 +865,7 @@ struct Sm89Conv {
           .set_compute_data_type(fe::DataType_t::FLOAT);
         frontendX = frontendGraph->tensor(fe::graph::Tensor_attributes()
           .set_name("initialConvX").set_uid(1)
-          .set_dim({13, inChannels, 19, 19})
+          .set_dim({maxBatchSize, inChannels, 19, 19})
           .set_stride({19 * 19 * inChannels, 1, 19 * inChannels, inChannels}));
         frontendW = frontendGraph->tensor(fe::graph::Tensor_attributes()
           .set_name("initialConvW").set_uid(2)
@@ -840,7 +880,7 @@ struct Sm89Conv {
             .set_dilation({1, 1})
         );
         frontendY->set_output(true).set_uid(3)
-          .set_dim({13, outChannels, 19, 19})
+          .set_dim({maxBatchSize, outChannels, 19, 19})
           .set_stride({19 * 19 * outChannels, 1, 19 * outChannels, outChannels});
       };
       auto finishGraph = [&]() -> bool {
@@ -881,8 +921,10 @@ struct Sm89Conv {
         built = status.is_good() && finishGraph();
       }
 
-      if(built)
+      if(built) {
         useInitialConvFrontend = true;
+        frontendBatchSize = maxBatchSize;
+      }
       else {
         frontendGraph.reset();
         frontendX.reset();
@@ -933,7 +975,7 @@ struct Sm89Conv {
     }
 #if CUDNN_VERSION >= 8903
     if(
-      useInitialConvFrontend && batchSize == 13 && !accumulate &&
+      useInitialConvFrontend && batchSize == frontendBatchSize && !accumulate &&
       frontendGraph != nullptr && workspaceBytes >= (size_t)frontendWorkspaceBytes
     ) {
       std::unordered_map<std::shared_ptr<cudnn_frontend::graph::Tensor_attributes>, void*> ptrs = {
@@ -1248,11 +1290,11 @@ struct Sm89AttentionBlock {
     bool usedSDPA = false;
 #ifdef KATAGO_ENABLE_SM89_FLASH_ATTN
     if(useFlashAttention && usingFP16 && maskBuf == NULL) {
-      SizedBuf<void*> lseBuf(&scratch->allocator, sm89FlashAttentionLseBytesB13D32());
-      usedSDPA = sm89FlashAttentionB13D32(
+      SizedBuf<void*> lseBuf(&scratch->allocator, sm89FlashAttentionLseBytesD32(batchSize));
+      usedSDPA = sm89FlashAttentionD32(
         (const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (half*)attnOutBuf.buf,
         (float*)lseBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim,
-        useFlashAttentionBoth16, ctx->stream
+        useFlashAttentionBoth16, ctx->deviceCaps.numSms, ctx->stream
       );
     }
 #endif
@@ -1449,8 +1491,35 @@ struct Sm89FFNBlock {
 
     SizedBuf<void*> ffnGateBuf(&scratch->allocator, (size_t)ffnChannels * 2 * matBatchSize * bytesPerElt);
     bool usedDualGemmSwiGLU = false;
+#ifdef KATAGO_ENABLE_SM89_TACTIC_SEARCH
+    if(ctx->dualFfnAotTactic != "disabled") {
+      bool requestedIdKnown = false;
+      const FusedFFNAotTactic* tactic = findSm89DualFfnTactic(
+        batchSize, ctx->serverThreads,
+        ctx->dualFfnAotTactic.c_str(), requestedIdKnown
+      );
+      if(tactic == nullptr && !requestedIdKnown)
+        throw StringError(
+          "Unknown SM89 dual-FFN tactic for this GPU/stream configuration: " +
+          ctx->dualFfnAotTactic
+        );
+      if(tactic != nullptr) {
+        if(!usingFP16 || !useFFNBatched || ffnWeightsBuf == nullptr ||
+           numChannels != 384 || ffnChannels != 1152 || seqLen != 361)
+          throw StringError("Selected SM89 dual-FFN tactic does not support this model shape");
+        CUDA_ERR(name.c_str(),tactic->launch(
+          (const half*)trunkScratchBuf,
+          (const half*)ffnWeightsBuf,
+          (const half*)ffnWeightsBuf + (size_t)ffnChannels * numChannels,
+          (half*)ffnGateBuf.buf,
+          ctx->stream
+        ));
+        usedDualGemmSwiGLU = true;
+      }
+    }
+#endif
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
-    if(dualGemmSwiGLU != nullptr && usingFP16) {
+    if(!usedDualGemmSwiGLU && dualGemmSwiGLU != nullptr && usingFP16) {
       usedDualGemmSwiGLU = dualGemmSwiGLU->apply(
         (const half*)trunkScratchBuf, (half*)ffnGateBuf.buf,
         batchSize, seqLen, numChannels, ffnChannels, ctx->stream
@@ -1488,8 +1557,31 @@ struct Sm89FFNBlock {
     }
 
     bool usedLinear2PostBN = false;
+#ifdef KATAGO_ENABLE_SM89_TACTIC_SEARCH
+    const ResidualGemmAotTactic* linear2AotTactic = nullptr;
+    if(ctx->linear2AotTactic != "disabled") {
+      bool requestedIdKnown = false;
+      linear2AotTactic = findSm89Linear2Tactic(
+        batchSize, ctx->serverThreads, ffnChannels,
+        ctx->linear2AotTactic.c_str(), requestedIdKnown
+      );
+      if(linear2AotTactic == nullptr && !requestedIdKnown)
+        throw StringError(
+          "Unknown SM89 linear2 tactic for this GPU/stream configuration: " +
+          ctx->linear2AotTactic
+        );
+      if(linear2AotTactic != nullptr &&
+         (!usingFP16 || !useFusedResidual || ffnChannels != 1152 ||
+          numChannels != 384 || seqLen != 361))
+        throw StringError("Selected SM89 linear2 tactic does not support this model shape");
+    }
+#endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-    if(linear2PostBnGemm != nullptr && usingFP16 && maskBuf == NULL) {
+    if(
+#ifdef KATAGO_ENABLE_SM89_TACTIC_SEARCH
+       linear2AotTactic == nullptr &&
+#endif
+       linear2PostBnGemm != nullptr && usingFP16 && maskBuf == NULL) {
       usedLinear2PostBN = linear2PostBnGemm->applyAccumulateAndActivate(
         (const half*)ffnBuf, (half*)trunkBuf, (half*)trunkScratchBuf,
         batchSize, seqLen, ffnChannels, numChannels, ctx->stream
@@ -1497,8 +1589,19 @@ struct Sm89FFNBlock {
     }
 #endif
     bool usedLinear2Gemm = usedLinear2PostBN;
+#ifdef KATAGO_ENABLE_SM89_TACTIC_SEARCH
+    if(!usedLinear2PostBN && linear2AotTactic != nullptr) {
+      CUDA_ERR(name.c_str(),linear2AotTactic->launch(
+        (const half*)ffnBuf,
+        (const half*)linear2.matBuf,
+        (half*)trunkBuf,
+        ctx->stream
+      ));
+      usedLinear2Gemm = true;
+    }
+#endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-    if(!usedLinear2PostBN && linear2Gemm != nullptr && usingFP16) {
+    if(!usedLinear2Gemm && linear2Gemm != nullptr && usingFP16) {
       usedLinear2Gemm = linear2Gemm->applyAccumulate(
         (const half*)ffnBuf, (half*)trunkBuf,
         batchSize, seqLen, ffnChannels, numChannels, ctx->stream
@@ -1896,7 +1999,7 @@ struct Sm89Trunk {
     initialConv.apply(ctx, batchSize, false, inputBuf, trunkScratch.buf, workspaceBuf, workspaceBytes);
     bool fusedInitialGlobal = false;
     if(useInitialGlobalMatMulAdd && usingFP16 && usingNHWC) {
-      fusedInitialGlobal = sm89InitialGlobalMatMulAddB13(
+      fusedInitialGlobal = sm89InitialGlobalMatMulAdd(
         (const half*)inputGlobalBuf, (const half*)initialMatMul.matBuf,
         (half*)trunkScratch.buf, batchSize, xySize,
         initialMatMul.inChannels, initialMatMul.outChannels, ctx->stream
@@ -2093,13 +2196,13 @@ struct Sm89PolicyHead {
       bool fusedHeadBN = false;
       if(useWideHead) {
         if(useHeadBNHalfToFloat)
-          fusedHeadBN = sm89HeadBNHalfToFloatB13(
+          fusedHeadBN = sm89HeadBNHalfToFloat(
             wideHeadBuf, nullptr, (float*)g1Float.buf,
             (const half*)g1BN.mergedScaleBuf, (const half*)g1BN.mergedBiasBuf,
             batchSize, xySize, g1Channels, 384, 96, ctx->stream
           );
         else {
-          fusedHeadBN = sm89HeadBNSiluStridedB13(
+          fusedHeadBN = sm89HeadBNSiluStrided(
             wideHeadBuf, (half*)g1Out2.buf,
             (const half*)g1BN.mergedScaleBuf, (const half*)g1BN.mergedBiasBuf,
             batchSize, xySize, g1Channels, 384, 96, ctx->stream
@@ -2113,7 +2216,7 @@ struct Sm89PolicyHead {
         testAssert(fusedHeadBN);
       }
       else if(usingNHWC && useHeadBNHalfToFloat && maskBuf == NULL) {
-        fusedHeadBN = sm89HeadBNHalfToFloatB13(
+        fusedHeadBN = sm89HeadBNHalfToFloat(
           (const half*)g1Out.buf, nullptr, (float*)g1Float.buf,
           (const half*)g1BN.mergedScaleBuf, (const half*)g1BN.mergedBiasBuf,
           batchSize, xySize, g1Channels, g1Channels, 0, ctx->stream
@@ -2131,7 +2234,7 @@ struct Sm89PolicyHead {
 
     bool fusedP1 = false;
     if(usingFP16 && usingNHWC && useFusedPolicyP1 && maskFloatBuf == NULL) {
-      fusedP1 = sm89FusedPolicyP1B13(
+      fusedP1 = sm89FusedPolicyP1(
         useWideHead ? wideHeadBuf : (const half*)p1Out.buf,
         (float*)p1Out2.buf, (const float*)g1Bias.buf,
         (const float*)p1BN.mergedScaleBuf, (const float*)p1BN.mergedBiasBuf,
@@ -2238,7 +2341,7 @@ struct Sm89FusedValueTerminal {
     Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize,
     const float* input, float* value, float* scoreValue
   ) const {
-    if(!active || batchSize != 13)
+    if(!active || batchSize < 1)
       return false;
     const int combinedChannels = valueChannels + scoreValueChannels;
     SizedBuf<void*> combined(
@@ -2253,7 +2356,7 @@ struct Sm89FusedValueTerminal {
       input, inChannels,
       &beta, (float*)combined.buf, combinedChannels
     ));
-    return sm89SplitValueTerminalB13(
+    return sm89SplitValueTerminal(
       (const float*)combined.buf, (const float*)biasBuf,
       value, scoreValue,
       batchSize, valueChannels, scoreValueChannels, ctx->stream
@@ -2350,13 +2453,13 @@ struct Sm89ValueHead {
       bool fusedHeadBN = false;
       if(useWideHead) {
         if(useHeadBNHalfToFloat)
-          fusedHeadBN = sm89HeadBNHalfToFloatB13(
+          fusedHeadBN = sm89HeadBNHalfToFloat(
             wideHeadBuf, (half*)v1Out2.buf, (float*)workspaceBuf,
             (const half*)v1BN.mergedScaleBuf, (const half*)v1BN.mergedBiasBuf,
             batchSize, xySize, v1Channels, 384, 192, ctx->stream
           );
         else {
-          fusedHeadBN = sm89HeadBNSiluStridedB13(
+          fusedHeadBN = sm89HeadBNSiluStrided(
             wideHeadBuf, (half*)v1Out2.buf,
             (const half*)v1BN.mergedScaleBuf, (const half*)v1BN.mergedBiasBuf,
             batchSize, xySize, v1Channels, 384, 192, ctx->stream
@@ -2370,7 +2473,7 @@ struct Sm89ValueHead {
         testAssert(fusedHeadBN);
       }
       else if(usingNHWC && useHeadBNHalfToFloat && maskBuf == NULL) {
-        fusedHeadBN = sm89HeadBNHalfToFloatB13(
+        fusedHeadBN = sm89HeadBNHalfToFloat(
           (const half*)v1Out.buf, (half*)v1Out2.buf, (float*)workspaceBuf,
           (const half*)v1BN.mergedScaleBuf, (const half*)v1BN.mergedBiasBuf,
           batchSize, xySize, v1Channels, v1Channels, 0, ctx->stream
@@ -2506,6 +2609,9 @@ struct Sm89Forward::Impl {
     bool useWideHeadProjection_,
     bool useExactMaskElision_,
     bool useFusedValueTerminal_,
+    const string& dualFfnAotTactic_,
+    const string& linear2AotTactic_,
+    int serverThreads_,
     bool shareModelWeights_
   )
     : maxBatchSize(maxBatchSize_),
@@ -2549,7 +2655,7 @@ struct Sm89Forward::Impl {
       useExactMaskElision(useExactMaskElision_),
       useFusedValueTerminal(useFusedValueTerminal_),
       shareModelWeights(shareModelWeights_),
-      ctx(stream),
+      ctx(stream, serverThreads_, dualFfnAotTactic_, linear2AotTactic_),
       scratch(
         useFP16, useExactMaskElision_, maxBatchSize_, nnXLen_ * nnYLen_
       ),
@@ -2734,6 +2840,9 @@ Sm89Forward::Sm89Forward(
   bool useWideHeadProjection,
   bool useExactMaskElision,
   bool useFusedValueTerminal,
+  const string& dualFfnAotTactic,
+  const string& linear2AotTactic,
+  int serverThreads,
   bool shareModelWeights
 )
   : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC,
@@ -2753,6 +2862,9 @@ Sm89Forward::Sm89Forward(
       useFusedPolicyP1, useHeadBNHalfToFloat, useWideHeadProjection,
       useExactMaskElision,
       useFusedValueTerminal,
+      dualFfnAotTactic,
+      linear2AotTactic,
+      serverThreads,
       shareModelWeights))
 {}
 

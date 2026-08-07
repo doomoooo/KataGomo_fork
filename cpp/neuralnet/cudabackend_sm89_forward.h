@@ -21,12 +21,37 @@
 
 namespace Sm89Backend {
 
+// Numeric device capabilities queried from the CUDA runtime. Performance
+// policy must not depend on marketing names such as "RTX 4090".
+struct Sm89DeviceCapabilities {
+  int deviceOrdinal;
+  int computeCapabilityMajor;
+  int computeCapabilityMinor;
+  int numSms;
+  int warpSize;
+  int maxThreadsPerSm;
+  int maxThreadsPerBlock;
+  int registersPerSm;
+  size_t sharedMemoryPerSm;
+  size_t sharedMemoryPerBlockOptin;
+  int l2CacheBytes;
+};
+
 struct Sm89Ctx {
   cublasHandle_t cublas;
   cudnnHandle_t cudnn;
   cudaStream_t stream;
+  Sm89DeviceCapabilities deviceCaps;
+  int serverThreads;
+  std::string dualFfnAotTactic;
+  std::string linear2AotTactic;
 
-  explicit Sm89Ctx(cudaStream_t stream);
+  Sm89Ctx(
+    cudaStream_t stream,
+    int serverThreads,
+    const std::string& dualFfnAotTactic,
+    const std::string& linear2AotTactic
+  );
   ~Sm89Ctx();
   Sm89Ctx(const Sm89Ctx&) = delete;
   Sm89Ctx& operator=(const Sm89Ctx&) = delete;
@@ -93,6 +118,9 @@ class Sm89Forward {
     bool useWideHeadProjection,
     bool useExactMaskElision,
     bool useFusedValueTerminal,
+    const std::string& dualFfnAotTactic,
+    const std::string& linear2AotTactic,
+    int serverThreads,
     bool shareModelWeights
   );
   ~Sm89Forward();
