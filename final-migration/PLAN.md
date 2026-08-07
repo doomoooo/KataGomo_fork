@@ -43,13 +43,16 @@ a release qualification whenever a new distribution is cut, because the
 development path intentionally resolves then-current upstream sources and
 NVIDIA packages.
 
-## Phase 2: plan scanner (frozen)
+## Phase 2: unified plan scanner (in progress)
 
-Do not implement this phase until the owning develop session explicitly freezes
-the 4090 scanner scripts and publishes the freeze tuple listed in
-`FREEZE-GATES.md`. SM120 observations may be inventoried but are not an API.
+The user froze both owning implementations on 2026-08-07. Their working-tree
+snapshots are preserved by the refs in `FREEZE-GATES.md`; migration may fix
+bugs but must not edit the source optimization worktrees.
 
-After unfreeze, normalize the scanner output into a versioned plan schema with:
+This phase ships one offline source-based tar for SM89 and SM120. It detects the
+selected GPU through CUDA, builds the corresponding fat search binary once,
+scans exact B4-B32 by default, performs the long whole-graph gate, and emits a
+versioned plan containing:
 
 - device identity and compatibility constraints;
 - batch/shape domain;
@@ -57,6 +60,11 @@ After unfreeze, normalize the scanner output into a versioned plan schema with:
 - artifact hashes and source revisions;
 - workspace and launch requirements;
 - validation metrics and explicit fallback policy.
+
+Both workflows share CPython, CUDA/cuDNN, CUTLASS/FlashAttention, source locks,
+packaging, detection and launch policy. Architecture-specific candidate
+generation and measurement remain separate where combining them would alter
+the frozen search semantics.
 
 ## Phase 3: plan-driven CUDA backend
 

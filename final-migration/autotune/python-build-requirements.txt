@@ -1,0 +1,11 @@
+pip==26.2.1
+setuptools==83.0.0
+setuptools-scm==9.2.2
+wheel==0.47.0
+cmake==3.31.10
+ninja==1.13.0
+nanobind==2.10.2
+scikit-build-core==1.0.3
+cython==3.2.9
+patchelf==0.17.2.4
+packaging==26.3

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Small per-GPU lock bundled with the offline autotune SDK. The caller passes
+# an nvidia-smi ordinal as smi:N after resolving CUDA_VISIBLE_DEVICES by PCI ID.
+
+set -Eeuo pipefail
+
+usage() {
+  printf 'Usage: %s with --gpu smi:N [--timeout SECONDS] -- COMMAND...\n' "$0"
+}
+
+[[ "${1:-}" == with ]] || { usage >&2; exit 2; }
+shift
+gpu=""
+timeout=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --gpu) gpu="${2:-}"; shift 2 ;;
+    --timeout) timeout="${2:-}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[[ "${gpu}" == smi:* && "${gpu#smi:}" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+[[ "${timeout}" =~ ^[0-9]+$ && $# -gt 0 ]] || { usage >&2; exit 2; }
+gpu="${gpu#smi:}"
+
+lock_base="${GPU_LOCK_BASE:-/tmp/katago-autotune-gpu.lock}"
+mkdir -p -- "$(dirname -- "${lock_base}")"
+lock_file="${lock_base}.${gpu}"
+exec 9>"${lock_file}"
+if (( timeout > 0 )); then
+  flock -w "${timeout}" 9 || { printf 'GPU %s lock busy: %s\n' "${gpu}" "${lock_file}" >&2; exit 1; }
+else
+  flock 9
+fi
+
+owner="${lock_file}.owner"
+cleanup() { find "$(dirname -- "${owner}")" -maxdepth 1 -type f -name "$(basename -- "${owner}")" -delete; }
+trap cleanup EXIT
+printf 'pid=%s time=%s command=%q\n' "$$" "$(date -Is)" "$*" > "${owner}"
+printf 'GPU %s lock acquired: %s\n' "${gpu}" "${lock_file}"
+
+start="$(date +%s)"
+while :; do
+  uuid="$(nvidia-smi -i "${gpu}" --query-gpu=uuid --format=csv,noheader | tr -d ' \r')"
+  pids="$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader 2>/dev/null \
+    | tr -d ' \r' | awk -F, -v uuid="${uuid}" '$1 == uuid {print $2}')"
+  [[ -z "${pids}" ]] && break
+  if (( timeout > 0 && $(date +%s) - start >= timeout )); then
+    printf 'GPU %s still has compute processes: %s\n' "${gpu}" "${pids}" >&2
+    exit 1
+  fi
+  printf 'GPU %s waiting for compute processes to exit: %s\n' "${gpu}" "${pids}" >&2
+  sleep 2
+done
+
+"$@"

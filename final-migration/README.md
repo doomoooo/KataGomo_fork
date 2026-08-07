@@ -12,7 +12,8 @@ record used by the migration.
   `/workspace/katago-final-migration`.
 - Phase 1 (environment): implemented and locally validated; see
   `inventory/environment-validation.md`.
-- Phase 2 (plan scanner): blocked by the explicit 4090 scanner freeze gate.
+- Phase 2 (plan scanner): both SM89 and SM120 snapshots are frozen and merged;
+  the unified offline autotune SDK is under `autotune/`.
 - Active optimization worktrees are read-only inputs. Do not edit, merge, clean,
   or build in them from this migration.
 
@@ -80,5 +81,6 @@ virtual-environment data stay in ignored directories at the repository root.
 - `FREEZE-GATES.md`: hard gates protecting active optimization sessions.
 - `inventory/`: observations and asset relationships, never presumed frozen.
 - `environment/`: reproducible bootstrap, locks, audits, and build verification.
+- `autotune/`: unified source-based SM89/SM120 B4-B32 release and plan entry point.
 - `archive/`: archive contract and optional local dependency cache.
 - `records/`: generated reports from setup/audit/build runs.

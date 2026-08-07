@@ -38,7 +38,8 @@ diff --git a/hopper/softmax.h b/hopper/softmax.h
 index 8fcdb6b..8d46c42 100644
 --- a/hopper/softmax.h
 +++ b/hopper/softmax.h
-@@ -159,8 +159,11 @@ struct Softmax {
+@@ -157,10 +157,13 @@
+     __forceinline__ __device__ void rescale_o(Tensor1 &acc_o, TensorT const &scores_scale) {
          // Reshape acc_o from (MMA=4, MMA_M, MMA_K) to (nrow=(2, MMA_M), ncol=(2, MMA_K))
          Tensor acc_o_rowcol = make_tensor(acc_o.data(), flash::convert_layout_acc_rowcol(acc_o.layout()));
 +        using ElementOAccum = typename decltype(acc_o_rowcol)::value_type;  // KATAGO_FLASH_BOTH16_ACCUM
@@ -51,6 +52,7 @@ index 8fcdb6b..8d46c42 100644
 +                acc_o_rowcol(mi, ni) = ElementOAccum(float(acc_o_rowcol(mi, ni)) * scores_scale(mi));
 +            }
          }
+     };
 diff --git a/hopper/tile_size.h b/hopper/tile_size.h
 index 8353542..d2a0098 100644
 --- a/hopper/tile_size.h

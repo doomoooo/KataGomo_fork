@@ -53,7 +53,8 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASH_ATTENTION_ARCH", "sm_120")
 os.environ.setdefault("CUTE_DSL_ARCH", "sm_120")
-os.environ.setdefault("CUTE_DSL_PTXAS_PATH", "/usr/local/cuda/bin/ptxas")
+cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or "/usr/local/cuda"
+os.environ.setdefault("CUTE_DSL_PTXAS_PATH", os.path.join(cuda_home, "bin", "ptxas"))
 os.environ.setdefault("CUTE_DSL_KEEP_PTX", "1")
 os.environ.setdefault("CUTE_DSL_KEEP_CUBIN", "1")
 os.environ.setdefault("CUTE_DSL_DUMP_DIR", OUT_DIR)
