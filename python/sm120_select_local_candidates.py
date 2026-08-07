@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import pathlib
 
@@ -19,11 +20,14 @@ def utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def resource_signature(metadata: dict) -> dict:
-    candidate = metadata["candidate"]
+def resource_signature(metadata: dict, candidate: dict) -> dict:
     launch = metadata.get("launch", {})
     return {
-        "tile": [candidate.get(key) for key in ("m", "n", "k")],
+        "tile": (
+            [candidate.get(key) for key in ("m", "n", "k")]
+            if any(key in candidate for key in ("m", "n", "k"))
+            else metadata.get("tile")
+        ),
         "stages": candidate.get("stages"),
         "threads": candidate.get("threads", 128),
         "min_blocks": candidate.get("min_blocks"),
@@ -48,24 +52,34 @@ def load_manifest(path: pathlib.Path) -> list[dict]:
         metadata = json.loads(metadata_path.read_text())
         if metadata.get("batch") != entry["batch"]:
             raise ValueError(f"batch mismatch in {metadata_path}")
-        if metadata.get("candidate", {}).get("id") != entry["candidate_id"]:
+        candidate = metadata.get("candidate", entry.get("candidate", {}))
+        if candidate.get("id", metadata.get("candidate_id")) != entry["candidate_id"]:
             raise ValueError(f"candidate mismatch in {metadata_path}")
-        if "s1_us_median" not in metadata:
+        measurement = metadata.get("local_measurement", metadata)
+        if "s1_us_median" not in measurement:
             raise ValueError(f"missing local CUDA-event timing in {metadata_path}")
-        if "correctness_against_torch" not in metadata:
+        correctness = measurement.get(
+            "correctness_against_torch",
+            measurement.get("correctness_against_cublas"),
+        )
+        if correctness is None:
             raise ValueError(f"missing correctness result in {metadata_path}")
         rows.append({
             "family": manifest["family"],
             "batch": entry["batch"],
             "candidate_id": entry["candidate_id"],
-            "s1_us_median": metadata["s1_us_median"],
-            "s1_us_samples": metadata.get("s1_us_samples", []),
-            "correctness": metadata["correctness_against_torch"],
-            "resource_signature": resource_signature(metadata),
+            "s1_us_median": measurement["s1_us_median"],
+            "s1_us_samples": measurement.get("s1_us_samples", []),
+            "correctness": correctness,
+            "resource_signature": resource_signature(metadata, candidate),
             "metadata": str(metadata_path.resolve()),
             "source": entry["source"],
         })
     return rows
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def select_group(
@@ -103,12 +117,41 @@ def select_group(
     }
 
 
+def select_complement(rows: list[dict], excluded_ids: set[str]) -> dict:
+    """Retain every exact candidate not present in an earlier selection."""
+    ranked = sorted(rows, key=lambda row: row["s1_us_median"])
+    retained = [row for row in ranked if row["candidate_id"] not in excluded_ids]
+    best = retained[0]["s1_us_median"] if retained else None
+    retained_ids = {row["candidate_id"] for row in retained}
+    return {
+        "winner": retained[0]["candidate_id"] if retained else None,
+        "winner_s1_us": best,
+        "retained": [row["candidate_id"] for row in retained],
+        "ranking": [
+            {
+                **row,
+                "relative_to_best_percent": (
+                    (row["s1_us_median"] / best - 1.0) * 100.0
+                    if best is not None else None
+                ),
+                "retained": row["candidate_id"] in retained_ids,
+            }
+            for row in ranked
+        ],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifests", nargs="+")
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument("--near-best-fraction", type=float, default=0.05)
     parser.add_argument("--max-retained", type=int, default=4)
+    parser.add_argument(
+        "--complement-of",
+        default="",
+        help="retain every candidate not retained by this earlier selection JSON",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.top_k < 1 or args.max_retained < args.top_k:
@@ -120,18 +163,37 @@ def main() -> None:
     paths = [pathlib.Path(value).resolve() for value in args.manifests]
     for path in paths:
         rows.extend(load_manifest(path))
+    excluded_by_group: dict[tuple[str, int], set[str]] = {}
+    complement_path = None
+    if args.complement_of:
+        complement_path = pathlib.Path(args.complement_of).resolve()
+        complement_payload = json.loads(complement_path.read_text())
+        if complement_payload.get("schema") != 1:
+            raise ValueError(f"unsupported selection JSON: {complement_path}")
+        for group in complement_payload.get("groups", []):
+            key = (group["family"], int(group["batch"]))
+            if key in excluded_by_group:
+                raise ValueError(f"duplicate excluded group: {key}")
+            excluded_by_group[key] = set(group.get("retained", []))
     groups: dict[tuple[str, int], list[dict]] = {}
     for row in rows:
         groups.setdefault((row["family"], row["batch"]), []).append(row)
     output_groups = []
     for (family, batch), group in sorted(groups.items()):
+        key = (family, batch)
+        if complement_path is not None:
+            if key not in excluded_by_group:
+                raise ValueError(f"excluded selection has no group for {family}/B{batch}")
+            selection = select_complement(group, excluded_by_group[key])
+        else:
+            selection = select_group(
+                group, args.top_k, args.near_best_fraction,
+                args.max_retained,
+            )
         output_groups.append({
             "family": family,
             "batch": batch,
-            **select_group(
-                group, args.top_k, args.near_best_fraction,
-                args.max_retained,
-            ),
+            **selection,
         })
 
     payload = {
@@ -150,6 +212,12 @@ def main() -> None:
         "source_manifests": [str(path) for path in paths],
         "groups": output_groups,
     }
+    if complement_path is not None:
+        payload["selection_kind"] = "s1_complement"
+        payload["complement_of"] = {
+            "path": str(complement_path),
+            "sha256": sha256_file(complement_path),
+        }
     output = pathlib.Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")

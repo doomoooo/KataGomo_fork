@@ -319,6 +319,14 @@ def append_wrapper(
         descriptors = f'''\nextern "C" int sm120_search_{family}_batch() {{ return {batch}; }}
 extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
 '''
+        if family == "qkv":
+            # The common SM120 registry queries this ABI bit even for the
+            # planar single-slot candidate.  CuTe supplies the same symbol in
+            # its bridge; omitting it here only shows up at final link time.
+            descriptors += (
+                "extern \"C\" int sm120_search_qkv_packed() "
+                f"{{ return {1 if candidate_value.get('output') == 'packed' else 0}; }}\n"
+            )
     launch_name = (
         f"sm120_search_{family}_launch"
         if symbol_token is None

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate the exact-B1..B32 packed-QKV CuTe AOT search candidate.
 
-This generator intentionally does not allocate or query a GPU. It supplies
-static CUDA DLPack descriptors backed by inert host-side metadata so CuTe can
-specialize the kernel types and emit an SM120 object. The generated object is
-newly compiled from the pinned CUTLASS source; no historical object is copied.
+This generator does not allocate or compute on a GPU. It supplies static CUDA
+DLPack descriptors backed by inert host-side metadata so CuTe can specialize
+the kernel types and emit an SM120 object. When no explicit scheduler value is
+provided, the target device's SM count is queried through the CUDA runtime and
+baked into this compile-time AOT object. The generated object is newly
+compiled from the pinned CUTLASS source; no historical object is copied.
 """
 
 from __future__ import annotations
@@ -31,6 +33,11 @@ import cutlass.pipeline as pipeline
 from cuda.bindings import driver as cuda
 from cutlass.cute.runtime import from_dlpack
 
+try:
+    from sm120_device import query_cuda_device
+except ModuleNotFoundError:  # imported as ``python.sm120_generate_cute_qkv_aot``
+    from python.sm120_device import query_cuda_device
+
 
 CANDIDATE_ID = "qkv-m128-n128-k64-s2-cute-atom4x2-packed"
 CUTLASS_COMMIT = "e05f953a5b3d38adc240df2ff928e0421c2abba3"
@@ -55,6 +62,16 @@ def git_output(root: pathlib.Path, *args: str) -> str:
         ["git", "-C", str(root), *args], check=True, text=True,
         capture_output=True,
     ).stdout.strip()
+
+
+def package_version(*names: str) -> str | None:
+    """Return the first installed distribution name used by this toolchain."""
+    for name in names:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return None
 
 
 class _DLDevice(ctypes.Structure):
@@ -103,6 +120,7 @@ class StaticCudaTensorSpec:
 
     def __init__(
         self, shape: tuple[int, ...], strides: tuple[int, ...], address: int,
+        device_id: int = 0,
     ) -> None:
         if len(shape) != len(strides):
             raise ValueError("shape/stride rank mismatch")
@@ -111,7 +129,7 @@ class StaticCudaTensorSpec:
         # DLPack: kDLCUDA=2, kDLFloat=2. The inert pointer is only a type token;
         # generated code is never invoked by this Python process.
         tensor = _DLTensor(
-            ctypes.c_void_p(address), _DLDevice(2, 0), len(shape),
+            ctypes.c_void_p(address), _DLDevice(2, device_id), len(shape),
             _DLDataType(2, 16, 1), self._shape, self._strides, 0,
         )
         self._managed = _DLManagedTensor(tensor, None, _DL_DELETER())
@@ -123,7 +141,7 @@ class StaticCudaTensorSpec:
         )
 
     def __dlpack_device__(self) -> tuple[int, int]:
-        return (2, 0)
+        return (2, self._managed.dl_tensor.device.device_id)
 
 
 class FixedAtomLayoutGemm:
@@ -154,8 +172,9 @@ class FixedAtomLayoutGemm:
 
 def make_tensor(
     shape: tuple[int, ...], strides: tuple[int, ...], address: int,
+    device_id: int,
 ) -> cute.Tensor:
-    spec = StaticCudaTensorSpec(shape, strides, address)
+    spec = StaticCudaTensorSpec(shape, strides, address, device_id)
     _STATIC_SPEC_KEEPALIVE.append(spec)
     return from_dlpack(
         spec,
@@ -242,9 +261,18 @@ def main() -> None:
     parser.add_argument("--candidate-id", default=CANDIDATE_ID)
     parser.add_argument(
         "--cutlass-root", type=pathlib.Path,
-        default=pathlib.Path("/workspace/third_party/cutlass"),
+        default=pathlib.Path(
+            os.environ.get("CUTLASS_ROOT", "/workspace/third_party/cutlass")
+        ),
     )
-    parser.add_argument("--max-active-clusters", type=int, default=170)
+    parser.add_argument(
+        "--device", type=int, default=None,
+        help=(
+            "target CUDA runtime ordinal used to query the default SM count; "
+            "required when --max-active-clusters is omitted"
+        ),
+    )
+    parser.add_argument("--max-active-clusters", type=int, default=None)
     args = parser.parse_args()
     if not 1 <= args.batch <= 32:
         parser.error("--batch must be in B1..B32")
@@ -252,8 +280,19 @@ def main() -> None:
         parser.error(f"only {CANDIDATE_ID} is supported")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.artifact_stem):
         parser.error("--artifact-stem must be a C identifier")
-    if args.max_active_clusters <= 0:
+    if args.max_active_clusters is not None and args.max_active_clusters <= 0:
         parser.error("--max-active-clusters must be positive")
+    device_properties = None
+    if args.device is not None:
+        device_properties = query_cuda_device(args.device)
+    if args.max_active_clusters is None and device_properties is None:
+        parser.error("--device is required when --max-active-clusters is omitted")
+    if args.max_active_clusters is None:
+        max_active_clusters = int(device_properties["multiprocessor_count"])
+        max_active_clusters_source = "cudaDevAttrMultiProcessorCount"
+    else:
+        max_active_clusters = args.max_active_clusters
+        max_active_clusters_source = "explicit_candidate"
 
     cutlass_root = args.cutlass_root.resolve()
     actual_commit = git_output(cutlass_root, "rev-parse", "HEAD")
@@ -279,26 +318,25 @@ def main() -> None:
     )
 
     rows = args.batch * SEQUENCE
+    device_id = args.device if args.device is not None else 0
     a = make_tensor(
         (rows, INPUT_CHANNELS, 1),
         (INPUT_CHANNELS, 1, rows * INPUT_CHANNELS),
-        0x10000,
+        0x10000, device_id,
     )
     # Weight storage is [K,N] row-major; GEMM's logical B is [N,K,1].
     b = make_tensor(
         (OUTPUT_CHANNELS, INPUT_CHANNELS, 1),
         (1, OUTPUT_CHANNELS, OUTPUT_CHANNELS * INPUT_CHANNELS),
-        0x20000,
+        0x20000, device_id,
     )
     # This row-major [token,1152] result is packed [token,3,384].
     c = make_tensor(
         (rows, OUTPUT_CHANNELS, 1),
         (OUTPUT_CHANNELS, 1, rows * OUTPUT_CHANNELS),
-        0x30000,
+        0x30000, device_id,
     )
     gemm = FixedAtomLayoutGemm.make(Sm120GemmKernel)
-    max_active_clusters = args.max_active_clusters
-
     @cute.jit
     def launch(
         a_arg: cute.Tensor,
@@ -335,6 +373,8 @@ def main() -> None:
         "tile": list(TILE),
         "atom_layout": list(ATOM_LAYOUT),
         "max_active_clusters": max_active_clusters,
+        "max_active_clusters_source": max_active_clusters_source,
+        "device_properties": device_properties,
         "gpu_used_for_generation": False,
         "provenance": {
             "generator_sha256": sha256_file(pathlib.Path(__file__).resolve()),
@@ -349,7 +389,8 @@ def main() -> None:
                 "nvidia-cutlass-dsl-libs-cu12"
             ),
             "dsl_cuda_version": str(cutlass.CUDA_VERSION),
-            "cuda_python": importlib.metadata.version("cuda-python"),
+            "cuda_python": package_version("cuda-python", "cuda-bindings"),
+            "cuda_bindings": package_version("cuda-bindings"),
             "cuda_toolkit_path": os.environ.get("CUDA_TOOLKIT_PATH", ""),
             "nvcc_version": subprocess.run(
                 ["nvcc", "--version"], check=True, text=True,

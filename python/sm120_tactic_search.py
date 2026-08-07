@@ -224,7 +224,6 @@ def candidate_space(batch: int, gpu_class: str = "rtx5090d") -> dict:
             "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
             m=128, n=128, k=64, stages=2, threads=288,
             implementation="cute", copy_atom="4x2", output="packed",
-            max_active_clusters=84 if gpu_class == "rtx5080" else 170,
         ),
         candidate("qkv-m64-n128-k32-s3-tilelang-planar", m=64, n=128, k=32, stages=3, threads=128, min_blocks=3, implementation="tilelang", output="planar"),
         candidate("qkv-fallback-three-gemm", implementation="fallback"),
@@ -261,7 +260,7 @@ def candidate_space(batch: int, gpu_class: str = "rtx5090d") -> dict:
                 },
             ))
     fa4 = []
-    for tile_n in (64, 128):
+    for tile_n in (64, 96, 128):
         fa4.append(candidate(
             f"fa4-b{batch}-s361-h12-d32-tm128-tn{tile_n}-s1-both16",
             batch=batch,
@@ -355,6 +354,13 @@ def write_space(args: argparse.Namespace) -> None:
         ),
         "forbidden_proxy_gates": ["homogeneous local S2", "mixed local S2"],
         "batch_policy": "only explicitly requested batches; no implicit anchors",
+        "device_properties_policy": {
+            "max_active_clusters": (
+                "query cudaDevAttrMultiProcessorCount for the target CUDA "
+                "ordinal when materializing CuTe AOT; explicit values are "
+                "reserved for wave-search candidates"
+            ),
+        },
         "batches": [candidate_space(batch, args.gpu_class) for batch in batches],
     }
     extras = load_extra_candidates(args.extra_candidates)

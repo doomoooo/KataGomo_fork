@@ -156,7 +156,11 @@ if(USE_BACKEND STREQUAL "CUDA")
     set_source_files_properties(neuralnet/cudabackend.cpp PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
   endif()
 # https://en.wikipedia.org/wiki/CUDA#GPUs_supported
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+  set(KATAGO_CUDA_ARCHITECTURES "" CACHE STRING
+    "Override the CUDA architectures emitted for a target build")
+  if(KATAGO_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES ${KATAGO_CUDA_ARCHITECTURES})
+  elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
     set(CMAKE_CUDA_ARCHITECTURES 75 80 86 87 88 89 90 100 110 103 120 121)
     set(CMAKE_CUDA_FLAGS "-Wno-deprecated-gpu-targets")
   elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)

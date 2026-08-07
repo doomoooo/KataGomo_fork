@@ -20,6 +20,8 @@ from sm120_fat_scan import (  # noqa: E402
     select_tilelang_requests,
     symbol_token,
 )
+from sm120_generate_tilelang_aot import append_wrapper  # noqa: E402
+from sm120_run_tactic_search import load_fat_bundle  # noqa: E402
 
 
 def test_space() -> dict:
@@ -96,6 +98,17 @@ __global__ void kernel() { debug_print_msg("x"); }
             registry.index("ffnTactics", registry.index("findFusedFFNAotTactic")),
         )
 
+    def test_planar_qkv_single_slot_exports_packed_abi_bit(self) -> None:
+        source = append_wrapper(
+            "extern __global__ void wide_qkv_kernel() {}\n",
+            "qkv",
+            {"id": "qkv-planar", "m": 128, "n": 128, "k": 64, "stages": 2,
+             "output": "planar"},
+            16, 65536,
+        )
+        self.assertIn("sm120_search_qkv_packed()", source)
+        self.assertIn("{ return 0; }", source)
+
     def test_cpu_only_preparer_materializes_b1_through_b32(self) -> None:
         fake_generator = r'''#!/usr/bin/env python3
 import argparse, hashlib, json, pathlib
@@ -157,6 +170,11 @@ metadata = {
                 {item["batch"] for item in manifest["entries"]}, set(range(1, 33))
             )
             self.assertEqual(len(manifest["sources"]), 32)
+            loaded = load_fat_bundle(
+                output_dir / "manifest.json", "ffn", space_path,
+                test_space(), {(1, "tile-a")},
+            )
+            self.assertEqual(len(loaded["entries"]), 32)
             (output_dir / "manifest.json").unlink()
             subprocess.run(
                 [

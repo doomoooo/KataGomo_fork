@@ -52,6 +52,25 @@ class SelectLocalCandidatesTest(unittest.TestCase):
         )
         self.assertEqual(result["retained"], ["a", "b"])
 
+    def test_complement_retains_every_pruned_candidate(self):
+        result = MODULE.select_complement(
+            [
+                row("a", 10.0, [128, 64, 32], 32768),
+                row("b", 10.1, [64, 64, 32], 24576),
+                row("c", 11.0, [128, 64, 64], 49152),
+            ],
+            {"a"},
+        )
+        self.assertEqual(result["retained"], ["b", "c"])
+        self.assertEqual(result["winner"], "b")
+
+    def test_empty_complement_is_a_valid_group(self):
+        result = MODULE.select_complement(
+            [row("a", 10.0, [128, 64, 32], 32768)], {"a"}
+        )
+        self.assertEqual(result["retained"], [])
+        self.assertIsNone(result["winner"])
+
 
 if __name__ == "__main__":
     unittest.main()
