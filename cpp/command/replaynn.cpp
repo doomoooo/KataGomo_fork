@@ -17,6 +17,24 @@
 
 using namespace std;
 
+namespace {
+class ScopedComputeStream {
+ public:
+  explicit ScopedComputeStream(int gpuIdx)
+    : stream(NeuralNet::createComputeStream(gpuIdx))
+  {}
+  ~ScopedComputeStream() {
+    if(stream != NULL)
+      NeuralNet::freeComputeStream(stream);
+  }
+  void* get() const { return stream; }
+  ScopedComputeStream(const ScopedComputeStream&) = delete;
+  ScopedComputeStream& operator=(const ScopedComputeStream&) = delete;
+ private:
+  void* stream;
+};
+}
+
 static string jsonEscape(const string& s) {
   ostringstream out;
   for(char c : s) {
@@ -237,10 +255,11 @@ int MainCmds::replaynn(const vector<string>& args) {
     for(int threadIdx = 0; threadIdx < numThreads; threadIdx++) {
       threads.emplace_back([&, threadIdx]() {
         try {
+          ScopedComputeStream computeStream(nnEval->getGpuIdxByServerThread(threadIdx));
           ComputeHandle* handle = NeuralNet::createComputeHandle(
             nnEval->getComputeContext(), nnEval->getLoadedModel(), &logger,
             maxBatchSize, nnEval->getRequireExactNNLen(), nnEval->getInputsUseNHWC(),
-            nnEval->getGpuIdxByServerThread(threadIdx), threadIdx
+            nnEval->getGpuIdxByServerThread(threadIdx), threadIdx, computeStream.get()
           );
           InputBuffers* inputBuffers = NeuralNet::createInputBuffers(
             nnEval->getLoadedModel(), maxBatchSize, posLen, posLen

@@ -2404,6 +2404,15 @@ struct ComputeHandle {
   }
 };
 
+void* NeuralNet::createComputeStream(int gpuIdxForThisThread) {
+  (void)gpuIdxForThisThread;
+  return NULL;
+}
+
+void NeuralNet::freeComputeStream(void* computeStream) {
+  (void)computeStream;
+}
+
 ComputeHandle* NeuralNet::createComputeHandle(
   ComputeContext* context,
   const LoadedModel* loadedModel,
@@ -2412,7 +2421,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  void* computeStream
 ) {
   if(logger != NULL) {
     logger->write("Eigen (CPU) backend thread " + Global::intToString(serverThreadIdx) + ": Model version " + Global::intToString(loadedModel->modelDesc.modelVersion));
@@ -2421,6 +2431,7 @@ ComputeHandle* NeuralNet::createComputeHandle(
 
   (void)requireExactNNLen; //We don't bother with mask optimizations if we know exact sizes right now.
   (void)gpuIdxForThisThread; //Doesn't matter
+  (void)computeStream;
 
   if(!inputsUseNHWC)
     throw StringError("Eigen backend: inputsUseNHWC = false unsupported");

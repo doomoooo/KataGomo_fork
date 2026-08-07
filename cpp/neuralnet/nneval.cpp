@@ -11,6 +11,24 @@
 
 using namespace std;
 
+namespace {
+class ScopedComputeStream {
+ public:
+  explicit ScopedComputeStream(int gpuIdx)
+    : stream(NeuralNet::createComputeStream(gpuIdx))
+  {}
+  ~ScopedComputeStream() {
+    if(stream != NULL)
+      NeuralNet::freeComputeStream(stream);
+  }
+  void* get() const { return stream; }
+  ScopedComputeStream(const ScopedComputeStream&) = delete;
+  ScopedComputeStream& operator=(const ScopedComputeStream&) = delete;
+ private:
+  void* stream;
+};
+}
+
 //-------------------------------------------------------------------------------------
 
 NNResultBuf::NNResultBuf()
@@ -88,6 +106,9 @@ NNEvaluator::NNEvaluator(
    randSeed(rSeed),
    debugSkipNeuralNet(skipNeuralNet),
    disableWarmup(disableWarmup_),
+   warmupOnlyMaxBatchSize(
+     cfg.contains("cudaWarmupOnlyMaxBatchSize") ? cfg.getBool("cudaWarmupOnlyMaxBatchSize") : false
+   ),
    computeContext(NULL),
    loadedModel(NULL),
    nnCacheTable(NULL),
@@ -488,9 +509,10 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(
   for(int threadIdx = 0; threadIdx < numServerThreads; threadIdx++) {
     threads.emplace_back([&, threadIdx]() {
       try {
-        // Mirror NNEvaluator::serve: one compute handle + input buffers per configured NN server
-        // thread, each with its own per-thread default CUDA stream.
+        // Mirror NNEvaluator::serve: one externally owned compute stream and one compute handle per
+        // configured NN server thread.
         NNServerBuf serverBuf(*this, loadedModel);
+        ScopedComputeStream computeStream(gpuIdxByServerThread[threadIdx]);
         ComputeHandle* handle = NULL;
         try {
           handle = NeuralNet::createComputeHandle(
@@ -501,7 +523,8 @@ NNEvalBenchmarkResult NNEvaluator::benchmarkPureForward(
             requireExactNNLen,
             inputsUseNHWC,
             gpuIdxByServerThread[threadIdx],
-            threadIdx
+            threadIdx,
+            computeStream.get()
           );
           maybeWarmupComputeHandle(handle, threadIdx);
 
@@ -688,9 +711,12 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
     return;
 
   if(logger != NULL) {
+    string batchRange = warmupOnlyMaxBatchSize ?
+      Global::intToString(maxBatchSize) :
+      "1.." + Global::intToString(maxBatchSize);
     logger->write(
       "Cuda backend thread " + Global::intToString(serverThreadIdx) +
-      ": warming up transformer graphs for batch sizes 1.." + Global::intToString(maxBatchSize)
+      ": warming up transformer graphs for batch sizes " + batchRange
     );
   }
 
@@ -728,7 +754,8 @@ void NNEvaluator::maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverT
     resultBufs.push_back(buf);
   }
 
-  for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
+  int firstBatchSize = warmupOnlyMaxBatchSize ? maxBatchSize : 1;
+  for(int batchSize = firstBatchSize; batchSize <= maxBatchSize; batchSize++) {
     std::vector<NNOutput*> outputs;
     outputs.reserve(batchSize);
     for(int row = 0; row < batchSize; row++) {
@@ -757,6 +784,7 @@ void NNEvaluator::serve(
   int64_t numRowsHandledThisThread = 0;
 
   ComputeHandle* gpuHandle = NULL;
+  ScopedComputeStream computeStream(gpuIdxForThisThread);
   if(loadedModel != NULL) {
     gpuHandle = NeuralNet::createComputeHandle(
       computeContext,
@@ -766,7 +794,8 @@ void NNEvaluator::serve(
       requireExactNNLen,
       inputsUseNHWC,
       gpuIdxForThisThread,
-      serverThreadIdx
+      serverThreadIdx,
+      computeStream.get()
     );
 
     // Warm up lazily-compiled backend graphs before reporting this thread as started.

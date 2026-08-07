@@ -3762,6 +3762,15 @@ struct ComputeHandle {
   ComputeHandle& operator=(const ComputeHandle&) = delete;
 };
 
+void* NeuralNet::createComputeStream(int gpuIdxForThisThread) {
+  (void)gpuIdxForThisThread;
+  return NULL;
+}
+
+void NeuralNet::freeComputeStream(void* computeStream) {
+  (void)computeStream;
+}
+
 ComputeHandle* NeuralNet::createComputeHandle(
   ComputeContext* context,
   const LoadedModel* loadedModel,
@@ -3770,8 +3779,10 @@ ComputeHandle* NeuralNet::createComputeHandle(
   bool requireExactNNLen,
   bool inputsUseNHWC,
   int gpuIdxForThisThread,
-  int serverThreadIdx
+  int serverThreadIdx,
+  void* computeStream
 ) {
+  (void)computeStream;
   auto deviceStr = [&]() {
     if(gpuIdxForThisThread < 0)
       return string("");

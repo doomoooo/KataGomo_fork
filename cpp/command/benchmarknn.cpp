@@ -139,11 +139,8 @@ int MainCmds::benchmarknn(const vector<string>& args) {
     nnEval = Setup::initializeNNEvaluator(
       modelFile,modelFile,expectedSha256,cfg,logger,seedRand,expectedConcurrentEvals,
       boardSize,boardSize,maxBatchSize,defaultRequireExactNNLen,disableFP16,
-      Setup::SETUP_FOR_BENCHMARK
+      Setup::SETUP_FOR_BENCHMARKNN
     );
-    // The setup path spawns the normal evaluation server threads; benchmarknn uses its own
-    // per-server compute handles and streams so the timed loop is pure forward-only.
-    nnEval->killServerThreads();
 
     NNEvalBenchmarkResult result = nnEval->benchmarkPureForward(
       numWarmups,numIterations,phaseOffsetMicros

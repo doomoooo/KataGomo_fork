@@ -50,6 +50,14 @@ set(USE_TCMALLOC 0 CACHE BOOL "Use TCMalloc")
 set(NO_GIT_REVISION 0 CACHE BOOL "Disable embedding the git revision into the compiled exe")
 set(USE_AVX2 0 CACHE BOOL "Compile with AVX2")
 set(USE_BIGGER_BOARDS_EXPENSIVE 0 CACHE BOOL "Allow boards up to size 50. Compiling with this will use more memory and slow down KataGo, even when playing on boards of size 19.")
+set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Pinned Dao-AILab/flash-attention checkout for the optional SM89 AOT kernel")
+set(SM89_DUAL_GEMM_SWIZZLE 2 CACHE STRING "Threadblock swizzle for the optional SM89 dual GEMM kernel")
+set(SM89_TACTIC_TILELANG_ROOT "" CACHE PATH "TileLang package root for generated SM89 tactic sources")
+set(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 dual-FFN fat registry")
+set(SM89_SEARCH_DUAL_FFN_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 dual-FFN sources")
+set(SM89_SEARCH_LINEAR2_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 linear2 fat registry")
+set(SM89_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 linear2 sources")
+set(SM89_CUDA_ARCHITECTURES "" CACHE STRING "Optional CUDA architecture list for an SM89-only search build")
 
 set(USE_CACHE_TENSORRT_PLAN 0 CACHE BOOL "Use TENSORRT plan cache. May use a lot of disk space. Only applies when USE_BACKEND is TENSORRT.")
 mark_as_advanced(USE_CACHE_TENSORRT_PLAN)
@@ -61,11 +69,6 @@ if(USE_BACKEND STREQUAL "CUDA")
   message(STATUS "-DUSE_BACKEND=CUDA, using CUDA backend.")
 
   enable_language(CUDA)
-  # nvcc implicitly includes cuda_runtime.h before any user header, so defining this
-  # macro inside cudaincludes.h is too late for .cu files. It must be a command-line
-  # definition to make <<<>>> launches use each thread's per-thread default stream.
-  add_compile_definitions(CUDA_API_PER_THREAD_DEFAULT_STREAM)
-
   set(CUDA_STANDARD 11)
   set(SM120_SEARCH_FFN_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_ffn_stub.cu"
@@ -111,6 +114,9 @@ if(USE_BACKEND STREQUAL "CUDA")
     CACHE FILEPATH "Generated exact-batch FA4 fat-scan registry, or its empty stub")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
+    neuralnet/cudabackend_sm89.cpp
+    neuralnet/cudabackend_sm89_forward.cpp
+    neuralnet/cudabackend_sm89_kernels.cu
     neuralnet/cudabackend_sm120.cpp
     neuralnet/cudabackend_sm120_kernels.cu
     neuralnet/cudabackend_sm120_aot_registry.cu
@@ -170,6 +176,122 @@ if(USE_BACKEND STREQUAL "CUDA")
     PROPERTIES
       INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet"
   )
+  if(SM89_FLASH_ATTN_ROOT)
+    if(NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/hopper/flash_fwd_launch_template.h" OR
+       NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/include/cutlass/cutlass.h" OR
+       NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/examples/45_dual_gemm/device/dual_gemm.h" OR
+       NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/LICENSE")
+      message(FATAL_ERROR "SM89_FLASH_ATTN_ROOT does not contain the pinned flash-attention hopper and CUTLASS sources")
+    endif()
+    set(KATAGO_FLASH_ATTN_COMMIT "5835c733e7e9c07606b045255768e8a7e9e851bd")
+    set(KATAGO_FLASH_CUTLASS_COMMIT "7127592069c2fe01b041e174ba4345ef9b279671")
+    execute_process(
+      COMMAND git -C "${SM89_FLASH_ATTN_ROOT}" rev-parse HEAD
+      RESULT_VARIABLE KATAGO_FLASH_GIT_RESULT
+      OUTPUT_VARIABLE KATAGO_FLASH_GIT_HEAD
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    execute_process(
+      COMMAND git -C "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass" rev-parse HEAD
+      RESULT_VARIABLE KATAGO_FLASH_CUTLASS_GIT_RESULT
+      OUTPUT_VARIABLE KATAGO_FLASH_CUTLASS_GIT_HEAD
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT KATAGO_FLASH_GIT_RESULT EQUAL 0 OR
+       NOT KATAGO_FLASH_GIT_HEAD STREQUAL KATAGO_FLASH_ATTN_COMMIT OR
+       NOT KATAGO_FLASH_CUTLASS_GIT_RESULT EQUAL 0 OR
+       NOT KATAGO_FLASH_CUTLASS_GIT_HEAD STREQUAL KATAGO_FLASH_CUTLASS_COMMIT)
+      message(FATAL_ERROR
+        "SM89 FlashAttention requires upstream ${KATAGO_FLASH_ATTN_COMMIT} with CUTLASS ${KATAGO_FLASH_CUTLASS_COMMIT}")
+    endif()
+    file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/tile_size.h" KATAGO_FLASH_TILE_SIZE_SOURCE)
+    file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/flash_fwd_launch_template.h" KATAGO_FLASH_FWD_LAUNCH_SOURCE)
+    file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/mainloop_fwd_sm80.hpp" KATAGO_FLASH_SM80_MAINLOOP_SOURCE)
+    file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/softmax.h" KATAGO_FLASH_SOFTMAX_SOURCE)
+    if(NOT KATAGO_FLASH_TILE_SIZE_SOURCE MATCHES "KATAGO_FLASH_BLOCK_N" OR
+       NOT KATAGO_FLASH_FWD_LAUNCH_SOURCE MATCHES "KATAGO_FLASH_BOTH16_ACCUM" OR
+       NOT KATAGO_FLASH_SM80_MAINLOOP_SOURCE MATCHES "KATAGO_FLASH_BOTH16_ACCUM" OR
+       NOT KATAGO_FLASH_SOFTMAX_SOURCE MATCHES "KATAGO_FLASH_BOTH16_ACCUM")
+      message(FATAL_ERROR
+        "Apply cpp/neuralnet/flash-attention-sm89.patch to SM89_FLASH_ATTN_ROOT before configuring")
+    endif()
+    add_library(katago_sm89_flash OBJECT
+      neuralnet/cudabackend_sm89_flash.cu
+      neuralnet/cudabackend_sm89_dual_gemm.cu
+      neuralnet/cudabackend_sm89_linear2_gemm.cu
+      neuralnet/cudabackend_sm89_qkv_rope_gemm.cu
+    )
+    set_target_properties(katago_sm89_flash PROPERTIES CUDA_ARCHITECTURES 89 CUDA_STANDARD 17)
+    target_include_directories(katago_sm89_flash SYSTEM PRIVATE
+      "${SM89_FLASH_ATTN_ROOT}/hopper"
+      "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/include"
+      "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/examples/45_dual_gemm"
+    )
+    target_compile_definitions(katago_sm89_flash PRIVATE
+      KATAGO_ENABLE_SM89_FLASH_ATTN
+      KATAGO_ENABLE_SM89_DUAL_GEMM
+      KATAGO_ENABLE_SM89_LINEAR2_GEMM
+      KATAGO_ENABLE_SM89_OUTPROJ_GEMM
+      KATAGO_ENABLE_SM89_PRECONV_GEMM
+      KATAGO_ENABLE_SM89_POSTCONV_GEMM
+      KATAGO_ENABLE_SM89_QKV_ROPE_GEMM
+      KATAGO_FLASH_COMPILED_D=32
+      KATAGO_FLASH_BLOCK_M=64
+      KATAGO_FLASH_BLOCK_N=96
+      KATAGO_FLASH_NUM_WARPS=4
+      KATAGO_FLASH_PACK_GQA=0
+      KATAGO_DUAL_GEMM_SWIZZLE=${SM89_DUAL_GEMM_SWIZZLE}
+      NDEBUG
+    )
+    target_compile_options(katago_sm89_flash PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math;--expt-relaxed-constexpr;--expt-extended-lambda;-lineinfo;-diag-suppress=20013>
+    )
+    list(APPEND NEURALNET_BACKEND_SOURCES $<TARGET_OBJECTS:katago_sm89_flash>)
+    set(KATAGO_ENABLE_SM89_FLASH_ATTN TRUE)
+    set(KATAGO_ENABLE_SM89_DUAL_GEMM TRUE)
+    set(KATAGO_ENABLE_SM89_LINEAR2_GEMM TRUE)
+    set(KATAGO_ENABLE_SM89_OUTPROJ_GEMM TRUE)
+    set(KATAGO_ENABLE_SM89_PRECONV_GEMM TRUE)
+    set(KATAGO_ENABLE_SM89_POSTCONV_GEMM TRUE)
+    set(KATAGO_ENABLE_SM89_QKV_ROPE_GEMM TRUE)
+  endif()
+  if(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
+     SM89_SEARCH_LINEAR2_FAT_REGISTRY OR SM89_SEARCH_LINEAR2_FAT_SOURCES)
+    if(NOT SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR NOT SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
+       NOT SM89_SEARCH_LINEAR2_FAT_REGISTRY OR NOT SM89_SEARCH_LINEAR2_FAT_SOURCES OR
+       NOT SM89_TACTIC_TILELANG_ROOT)
+      message(FATAL_ERROR
+        "SM89 tactic search requires TileLang root plus both dual-FFN and linear2 registry/source sets")
+    endif()
+    if(NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/src/tl_templates/cuda/debug.h" OR
+       NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/3rdparty/cutlass/include/cutlass/cutlass.h")
+      message(FATAL_ERROR "SM89_TACTIC_TILELANG_ROOT is not a complete TileLang package")
+    endif()
+    foreach(KATAGO_SM89_TACTIC_SOURCE IN LISTS
+      SM89_SEARCH_DUAL_FFN_FAT_SOURCES SM89_SEARCH_LINEAR2_FAT_SOURCES)
+      if(NOT EXISTS "${KATAGO_SM89_TACTIC_SOURCE}")
+        message(FATAL_ERROR "Generated SM89 tactic source does not exist: ${KATAGO_SM89_TACTIC_SOURCE}")
+      endif()
+    endforeach()
+    add_library(katago_sm89_tactic_search OBJECT
+      neuralnet/cudabackend_sm89_tactic_kernels.cpp
+      "${SM89_SEARCH_DUAL_FFN_FAT_REGISTRY}"
+      ${SM89_SEARCH_DUAL_FFN_FAT_SOURCES}
+      "${SM89_SEARCH_LINEAR2_FAT_REGISTRY}"
+      ${SM89_SEARCH_LINEAR2_FAT_SOURCES}
+    )
+    set_target_properties(katago_sm89_tactic_search PROPERTIES
+      CUDA_ARCHITECTURES 89 CUDA_STANDARD 17)
+    target_include_directories(katago_sm89_tactic_search PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet")
+    target_include_directories(katago_sm89_tactic_search SYSTEM PRIVATE
+      "${SM89_TACTIC_TILELANG_ROOT}/src"
+      "${SM89_TACTIC_TILELANG_ROOT}/3rdparty/cutlass/include")
+    target_compile_options(katago_sm89_tactic_search PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math;--expt-relaxed-constexpr;--expt-extended-lambda;-lineinfo;-diag-suppress=20012;-diag-suppress=1444>)
+    list(APPEND NEURALNET_BACKEND_SOURCES $<TARGET_OBJECTS:katago_sm89_tactic_search>)
+    set(KATAGO_ENABLE_SM89_TACTIC_SEARCH TRUE)
+  endif()
   # The vendored header-only cudnn_frontend library trips GCC's -Wnull-dereference from its -O2
   # interprocedural analysis (no source location, so an in-file #pragma can't suppress it). It's
   # benign third-party code; silence it just for the one source that includes cudnn_frontend.h.
@@ -179,6 +301,11 @@ if(USE_BACKEND STREQUAL "CUDA")
 # https://en.wikipedia.org/wiki/CUDA#GPUs_supported
   set(KATAGO_CUDA_ARCHITECTURES "" CACHE STRING
     "Override the CUDA architectures emitted for a target build")
+  if(SM89_CUDA_ARCHITECTURES AND NOT KATAGO_CUDA_ARCHITECTURES)
+    message(DEPRECATION
+      "SM89_CUDA_ARCHITECTURES is deprecated; use KATAGO_CUDA_ARCHITECTURES")
+    set(KATAGO_CUDA_ARCHITECTURES "${SM89_CUDA_ARCHITECTURES}")
+  endif()
   if(KATAGO_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES ${KATAGO_CUDA_ARCHITECTURES})
   elseif(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
@@ -481,6 +608,30 @@ add_executable(katago
 
 if(USE_BACKEND STREQUAL "CUDA")
   target_compile_definitions(katago PRIVATE USE_CUDA_BACKEND)
+  if(KATAGO_ENABLE_SM89_FLASH_ATTN)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_FLASH_ATTN)
+  endif()
+  if(KATAGO_ENABLE_SM89_DUAL_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_DUAL_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_LINEAR2_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_LINEAR2_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_OUTPROJ_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_OUTPROJ_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_PRECONV_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_PRECONV_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_POSTCONV_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_POSTCONV_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_QKV_ROPE_GEMM)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_QKV_ROPE_GEMM)
+  endif()
+  if(KATAGO_ENABLE_SM89_TACTIC_SEARCH)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_TACTIC_SEARCH)
+  endif()
   target_compile_definitions(katago PRIVATE CUDA_TARGET_VERSION=${CMAKE_CUDA_COMPILER_VERSION})
   find_package(CUDAToolkit REQUIRED)
   find_path(CUDNN_INCLUDE_DIR cudnn.h HINTS ${CUDNN_ROOT_DIR} ${CUDAToolkit_INCLUDE_DIRS} PATH_SUFFIXES include)
