@@ -50,3 +50,33 @@ APT on a target. The concrete file count, size, checksum, local empty-prefix
 test, and Ubuntu 22.04 remote test are regenerated when the final tar is cut;
 the current artifact is recorded outside Git at
 `.final-migration-env/state/latest-distribution`.
+
+## Non-invasive tar qualification
+
+Artifact cut from commit `0c9d6237658f6ffd20de92645d3ef60bc799c357`:
+
+- tar: `.final-migration-env/distributions/20260807T205459Z.tar`;
+- size: 4,942,848,000 bytes;
+- SHA-256: `7720e91da425e839d62b3ac560fd01b4656c8b4f374399584de6f6cb382b4801`;
+- extracted payload: 127 regular files, 4,942,719,639 bytes, including 28
+  recorded native runtime libraries.
+
+Local qualification extracted it into a new empty prefix, verified both
+external artifact hashes and all internal hashes/symlinks, resolved CUDA 13,
+cuDNN 9, C++ and glibc through the private loader, ran `katago version`, then
+restored/imported the complete cp312 wheel archive without network access.
+The dpkg package-list hash was identical before and after deployment.
+
+Remote qualification used `wangyize@10.101.3.156`, Ubuntu 22.04 amd64, glibc
+2.35, an RTX 5080 and NVIDIA driver 595.84. The build-host executable requires
+newer glibc symbols, so this specifically exercised the bundled glibc 2.39
+loader rather than the host loader. Installation completed below only:
+
+`/data/wangyize/katago-tar-validation-20260807T205459Z/runtime`
+
+`katago version` passed from an unrelated working directory. The target dpkg
+hash remained
+`21cb9dcace4b9f02271626ef218c17bb183c6e86f432f1603f1771ad63e9d991`
+before and after. The optional Python installer correctly rejected the host's
+cp310 ABI before creating an environment; the standalone CUDA backend remained
+usable. No APT command, sudo elevation, or system-directory write occurred.
