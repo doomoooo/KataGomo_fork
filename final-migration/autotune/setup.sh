@@ -77,6 +77,8 @@ extract_once "${SCRIPT_DIR}/payload/assets.tar.gz" "${PREFIX}/state/assets.extra
 export CUDA_HOME="${PREFIX}/cuda"
 export CUDA_PATH="${CUDA_HOME}"
 export CUDNN_ROOT="${PREFIX}/cudnn"
+export CC="$(command -v gcc)"
+export CXX="$(command -v g++)"
 export PATH="${PREFIX}/venv/bin:${PREFIX}/python/bin:${CUDA_HOME}/bin:${PATH}"
 export LD_LIBRARY_PATH="${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib:${LD_LIBRARY_PATH:-}"
 export CMAKE_PREFIX_PATH="${PREFIX}/native:${CMAKE_PREFIX_PATH:-}"
@@ -188,6 +190,8 @@ printf '%s\n' \
   "export CUDA_HOME='${CUDA_HOME}'" \
   "export CUDA_PATH='${CUDA_HOME}'" \
   "export CUDNN_ROOT='${CUDNN_ROOT}'" \
+  "export CC='${CC}'" \
+  "export CXX='${CXX}'" \
   "export PATH='${PREFIX}/venv/bin:${CUDA_HOME}/bin:\${PATH}'" \
   "export LD_LIBRARY_PATH='${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib:\${LD_LIBRARY_PATH:-}'" \
   "export CMAKE_PREFIX_PATH='${PREFIX}/native:\${CMAKE_PREFIX_PATH:-}'" \
