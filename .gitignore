@@ -85,6 +85,14 @@ for_release/
 tests/results/matchsgfs/
 tests/results/matchsgfs2/
 
+# Final migration: keep compact control files in Git and large/runtime data out.
+.final-migration-env/
+final-migration/records/*
+!final-migration/records/README.md
+final-migration/archive/apt/*.deb
+final-migration/archive/wheels/*
+final-migration/archive/git/*.bundle
+
 # For Metal Backend
 cpp/.ninja_deps
 cpp/.ninja_log

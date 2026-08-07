@@ -1,0 +1,15 @@
+# Binary/bootstrap packages only. Development setup asks the configured mirror
+# for current releases and captures the complete resolved environment in the
+# compiled distribution. Source-capable optimizer components are cloned and
+# locally built by build-third-party.sh.
+cuda-python
+einops
+numpy
+onnx
+onnx2torch
+packaging
+pillow
+psutil
+PyYAML
+torch
+torch-c-dlpack-ext
