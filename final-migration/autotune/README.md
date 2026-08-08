@@ -32,6 +32,12 @@ carried because neither project exposes a practical equivalent source-only
 Python payload for this workflow.  CUDA and cuDNN are NVIDIA binary
 toolchains, not Python source dependencies.
 
+Build parallelism defaults to the lower of `nproc` and a memory-aware limit
+(75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler
+process). This avoids fixed `-j4`/`-j8` values while protecting hosts where
+Triton translation units make `-j$(nproc)` exceed RAM. `--jobs N` remains an
+explicit override.
+
 `run-autotune.sh` queries the selected device through the CUDA Runtime.  CC
 8.9 dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow.
 The default domain is exact B4-B32 with two inference streams.  Discovery is
@@ -39,6 +45,11 @@ short; a final plan is only marked scan-bypass-ready after the 1000-iteration,
 two-repeat long gate.  Absence of a retained FP32 golden leaves numerical
 `production_ready` false rather than manufacturing a new reference from the
 candidate under test.
+
+The accepted historical SM120 tanh-half2 FFN is preserved as hash-addressed
+B1-B32 device sources. The current/latest TileLang source build is used for new
+optimization candidates, while historical materialization verifies and wraps
+the frozen source instead of asking a newer compiler to reproduce old bytes.
 
 The release includes its own per-GPU lock wrapper. CUDA ordinal to physical
 `nvidia-smi` ordinal mapping is done by PCI identity before the lock is taken,

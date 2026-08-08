@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the historical exact-batch SM120 tanh-half2 FFN source.
+"""Materialize the historical exact-batch SM120 tanh-half2 FFN source.
 
-This is deliberately a source-only generator.  It imports the frozen historical
-TileLang schedule, emits a CUDA translation unit for B1..B32, and never imports
-PyTorch or selects a CUDA device.  Acceptance remains natural whole-graph S2.
+Runtime generation verifies immutable B1..B32 device sources captured from the
+historical compiler and adds the requested active-slot or fat-bundle wrapper.
+It never relies on current TileLang codegen and never selects a CUDA device.
+Acceptance remains natural whole-graph S2.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 ROOT = Path(__file__).resolve().parent
 UPSTREAM = ROOT / "upstream"
 MANIFEST_PATH = ROOT / "manifest.json"
+FROZEN_DEVICE_ROOT = ROOT / "frozen_device"
+FROZEN_DEVICE_MANIFEST_PATH = FROZEN_DEVICE_ROOT / "manifest.json"
 sys.path.insert(0, str(ROOT.parent))
 
 from sm120_fat_scan import (  # noqa: E402
@@ -280,6 +283,41 @@ def validate_historical_device_source(
     }
 
 
+def load_frozen_device_source(
+    batch: int, manifest: dict[str, Any]
+) -> tuple[str, str, dict[str, Any]]:
+    frozen = json.loads(FROZEN_DEVICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    if frozen.get("schema") != 1 or frozen.get("candidateId") != CANDIDATE_ID:
+        raise RuntimeError("unsupported historical frozen-device manifest")
+    entries = {
+        int(item["batch"]): item for item in frozen.get("batches", [])
+    }
+    if sorted(entries) != list(range(1, 33)):
+        raise RuntimeError("historical frozen-device manifest must cover B1..B32")
+    item = entries[batch]
+    source_path = FROZEN_DEVICE_ROOT / item["path"]
+    source = source_path.read_text(encoding="utf-8")
+    source_hash = sha256_bytes(source.encode("utf-8"))
+    if source_hash != item["sha256"]:
+        raise RuntimeError(
+            f"frozen B{batch} source hash drift: expected {item['sha256']}, "
+            f"got {source_hash}"
+        )
+    kernel_name = f"katago_ffn_tilelang_sm120_b{batch}_s361_kernel"
+    if item.get("kernelName") != kernel_name:
+        raise RuntimeError(f"frozen B{batch} kernel name drift")
+    evidence = validate_historical_device_source(
+        source, batch=batch, kernel_name=kernel_name, manifest=manifest
+    )
+    recorded = item.get("deviceEvidence", {})
+    if any(recorded.get(key) != value for key, value in evidence.items()):
+        raise RuntimeError(f"frozen B{batch} device evidence drift")
+    evidence["frozenDeviceManifestSha256"] = sha256_path(
+        FROZEN_DEVICE_MANIFEST_PATH
+    )
+    return source, kernel_name, evidence
+
+
 def generate_device_source(
     kernels: Any, batch: int, manifest: dict[str, Any]
 ) -> tuple[str, str, dict[str, Any]]:
@@ -498,7 +536,6 @@ def metadata_for(
 
 def emit_one(
     *,
-    kernels: Any,
     batch: int,
     output_dir: Path,
     source_path: Path | None,
@@ -516,8 +553,8 @@ def emit_one(
         )
     if space is not None:
         validate_space(space, batch, candidate_id)
-    device_source, kernel_name, device_evidence = generate_device_source(
-        kernels, batch, manifest
+    device_source, kernel_name, device_evidence = load_frozen_device_source(
+        batch, manifest
     )
     source = append_search_wrapper(
         device_source, batch=batch, kernel_name=kernel_name,
@@ -574,7 +611,6 @@ def main() -> None:
         raise ValueError("--fat-symbol-token requires one exact --batch")
     manifest = load_manifest()
     dependency_evidence = verify_dependencies(manifest)
-    kernels = load_historical_kernels()
     batches = range(1, 33) if args.all_batches else (args.batch,)
     generated = []
     for batch in batches:
@@ -585,7 +621,6 @@ def main() -> None:
         )
         generated.append(
             emit_one(
-                kernels=kernels,
                 batch=batch,
                 output_dir=output_dir,
                 source_path=args.source_path,

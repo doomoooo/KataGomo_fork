@@ -31,6 +31,11 @@ except ModuleNotFoundError:
     from python.sm120_fat_scan import launch_symbol, symbol_token, write_registry
     from python.sm120_run_tactic_search import parse_int_set
 
+try:
+    from build_parallelism import conservative_build_jobs
+except ModuleNotFoundError:
+    from python.build_parallelism import conservative_build_jobs
+
 
 FAT_FAMILIES = ("ffn", "qkv", "linear2", "fa4")
 TILELANG_FAMILIES = ("ffn", "qkv", "linear2")
@@ -423,7 +428,7 @@ def main() -> None:
     parser.add_argument("--device", type=int, required=True)
     parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     parser.add_argument("--build-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
+    parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
     parser.add_argument(
         "--cmake-arg", action="append", default=[],
         help=(

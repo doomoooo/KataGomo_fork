@@ -13,6 +13,12 @@ import subprocess
 import sys
 from typing import Any
 
+try:
+    from build_parallelism import conservative_build_jobs
+except ModuleNotFoundError:  # running from the source tree instead of a release tar
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "python"))
+    from build_parallelism import conservative_build_jobs
+
 
 def run(command: list[str], *, cwd: pathlib.Path, env: dict[str, str]) -> None:
     print("[autotune] +", shlex.join(command), flush=True)
@@ -294,7 +300,7 @@ def main() -> int:
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--batches", default="4-32")
     parser.add_argument("--streams", type=int, default=2)
-    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
+    parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
     parser.add_argument("--phase", choices=("detect", "prepare", "discovery", "gate", "all"), default="all")
     parser.add_argument("--discovery-iterations", type=int, default=100)
     parser.add_argument("--gate-iterations", type=int, default=1000)

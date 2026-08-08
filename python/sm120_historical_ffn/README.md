@@ -8,30 +8,33 @@ generator because the two epilogues are not interchangeable:
 - historical candidate: FP16 MMA plus packed-half2 `h2tanh_approx` sigmoid;
 - current generic candidate: scalar/exponential SiLU.
 
-`generate.py` fails if the generated CUDA contains `expf`, loses the half2 tanh
-intrinsic, or fails to reproduce the frozen B19 device source byte for byte.  It
-also hashes all installed TileLang package files before generation.  CUDA device
-visibility is cleared before TileLang is imported; this path performs codegen
-only and never selects or runs a GPU.  In particular, it recovers the historical
-PrimFunc and calls TileLang's device-source lowering directly, bypassing the
-historical Cython runtime adapter whose initialization probes a CUDA device.
+`frozen_device/` contains hash-addressed B1..B32 device sources emitted by the
+historical compiler. `generate.py` verifies the complete manifest, arithmetic
+markers, and the original B19 golden hash before adding the requested wrapper.
+It therefore remains byte-stable when the main optimization environment moves
+to a newer TileLang source revision. CUDA device visibility is cleared and this
+path never selects or runs a GPU.
 
 ## Generate
 
-Use the code-generation environment that contains the frozen TileLang 0.1.13
-package tree:
+Ordinary use materializes the checked-in frozen device source and does not need
+the historical compiler environment:
 
 ```bash
-/workspace/venv/bin/python \
+python \
   /workspace/katago/python/sm120_historical_ffn/generate.py \
   --all-batches \
   --space /workspace/results/rebuild/cross-batch-search/space-5090d-b1-32-s2.json \
   --output-dir /workspace/results/rebuild/cross-batch-search/historical-ffn-b1-b32
 
-/workspace/venv/bin/python \
+python \
   /workspace/katago/python/sm120_historical_ffn/verify.py \
   --artifact-root /workspace/results/rebuild/cross-batch-search/historical-ffn-b1-b32
 ```
+
+`freeze_device_sources.py` is a maintainer-only provenance tool. Run it only in
+the recorded historical TileLang environment; B19 must reproduce the manifest
+golden before it can update the frozen set.
 
 For one active search slot, pass `--batch B --output-dir DIR` and optionally
 `--source-path PATH`.  The latter is intended for the CMake active-slot source

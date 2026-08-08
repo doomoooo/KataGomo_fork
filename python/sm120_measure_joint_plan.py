@@ -26,6 +26,11 @@ import subprocess
 import sys
 
 try:
+    from build_parallelism import conservative_build_jobs
+except ModuleNotFoundError:  # imported as python.sm120_measure_joint_plan
+    from python.build_parallelism import conservative_build_jobs
+
+try:
     from sm120_benchmark_metrics import benchmark_throughput, summarize_throughput
     from sm120_run_tactic_search import (
         collect_environment,
@@ -417,7 +422,7 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=30)
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
+    parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
     parser.add_argument("--runner", default="")
     parser.add_argument("--generator-python", default="")
     parser.add_argument("--fa4-python", default="")

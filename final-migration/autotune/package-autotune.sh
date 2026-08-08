@@ -61,7 +61,7 @@ mkdir -p -- "${bundle}/payload/wheels" "${bundle}/patches" "${bundle}/metadata" 
 
 cp -- "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/run-autotune.sh" \
   "${SCRIPT_DIR}/autotune.py" "${SCRIPT_DIR}/detect_gpu.py" \
-  "${SCRIPT_DIR}/gpu-lock" "${bundle}/"
+  "${SCRIPT_DIR}/gpu-lock" "${REPO_ROOT}/python/build_parallelism.py" "${bundle}/"
 cp -- "${SCRIPT_DIR}/README.md" "${SCRIPT_DIR}/SPEC.md" "${SCRIPT_DIR}/source-lock.tsv" \
   "${bundle}/metadata/"
 cp -- "${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch" \

@@ -35,9 +35,10 @@ Configuration variables:
   `KATAGO_NSIGHT_SYSTEMS_PACKAGE`, `KATAGO_NSIGHT_COMPUTE_PACKAGE`, and
   `KATAGO_DRIVER_PACKAGE`: explicit compatibility overrides. Defaults resolve
   current packages from the NVIDIA repository.
-- `KATAGO_BUILD_JOBS`: parallel compile count; default is capped at eight and
-  approximately one job per 4 GiB RAM because Triton C++ translation units are
-  memory-heavy.
+- `KATAGO_BUILD_JOBS`: explicit parallel compile override. By default the
+  scripts take the lower of `nproc` and a memory-aware limit: 75% of current
+  `MemAvailable`/cgroup headroom divided by 2 GiB per job. This leaves room for
+  memory-heavy Triton C++ translation units without hard-coding `-j4`/`-j8`.
 - `KATAGO_SMOKE_ARCHS`: space-separated CUDA smoke architectures; default
   detected architectures, falling back to `89 120`.
 - `KATAGO_KEEP_SOURCE_BUILD_TREES=1`: retain ignored compiler intermediates;

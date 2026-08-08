@@ -30,6 +30,12 @@ The package manifest binds every carried payload by SHA-256.  Source builds
 produce a second manifest containing source archive, patch, wheel and installed
 module hashes.  No ambient Python package is accepted.
 
+Default source-build concurrency is `min(nproc, memory_limit)`, where the
+memory limit reserves 25% of current Linux/cgroup headroom and budgets 2 GiB
+per compiler process. Explicit `--jobs` is authoritative. Historical SM120
+FFN device sources are separately frozen and hash-verified, so upgrading the
+main TileLang source revision cannot silently rewrite an accepted candidate.
+
 ## 2. Architecture selection and scan
 
 Device selection is by CUDA ordinal after `CUDA_VISIBLE_DEVICES` remapping.

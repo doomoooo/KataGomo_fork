@@ -42,6 +42,11 @@ try:
 except ModuleNotFoundError:  # imported as ``python.sm120_run_tactic_search``
     from python.sm120_device import query_cuda_device
 
+try:
+    from build_parallelism import conservative_build_jobs
+except ModuleNotFoundError:  # imported as ``python.sm120_run_tactic_search``
+    from python.build_parallelism import conservative_build_jobs
+
 
 SLOT_FAMILIES = ("ffn", "qkv", "linear2")
 SEARCH_FAMILIES = SLOT_FAMILIES + ("fa4", "l2")
@@ -725,7 +730,7 @@ def main() -> None:
         default="/workspace/third_party/cutlass",
         help="clean pinned CUTLASS source used by the packed-QKV generator",
     )
-    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
+    parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
     parser.add_argument("--cmake-arg", action="append", default=[])
     parser.add_argument(
         "--sm120-only",

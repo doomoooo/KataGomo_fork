@@ -25,6 +25,29 @@ log() { printf '[autotune-setup] %s\n' "$*"; }
 die() { printf '[autotune-setup] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required host command missing: $1"; }
 
+default_build_jobs() {
+  local cpu_jobs available_bytes cgroup_max cgroup_current cgroup_available memory_jobs
+  cpu_jobs="$(nproc)"
+  available_bytes="$(awk '$1 == "MemAvailable:" { print $2 * 1024; exit }' /proc/meminfo)"
+  cgroup_max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
+  cgroup_current="$(cat /sys/fs/cgroup/memory.current 2>/dev/null || true)"
+  if [[ "${cgroup_max}" =~ ^[0-9]+$ && "${cgroup_current}" =~ ^[0-9]+$ ]]; then
+    cgroup_available=$((cgroup_max - cgroup_current))
+    (( cgroup_available < 0 )) && cgroup_available=0
+    if [[ -z "${available_bytes}" ]] || (( cgroup_available < available_bytes )); then
+      available_bytes="${cgroup_available}"
+    fi
+  fi
+  if [[ "${available_bytes}" =~ ^[0-9]+$ ]]; then
+    # Keep 25% of currently available memory in reserve and allow 2 GiB for
+    # each heavy C++/CUDA compiler process. Triton exceeds 1 GiB per cc1plus.
+    memory_jobs=$((available_bytes * 3 / 4 / (2 * 1024 * 1024 * 1024)))
+    (( memory_jobs < 1 )) && memory_jobs=1
+    (( memory_jobs < cpu_jobs )) && cpu_jobs="${memory_jobs}"
+  fi
+  printf '%s\n' "${cpu_jobs}"
+}
+
 for command_name in bash tar sha256sum readlink find uname getconf gcc g++ flock; do need "${command_name}"; done
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] \
   || die "the release supports Linux x86-64 only"
@@ -43,12 +66,13 @@ log "verifying all carried payloads"
 (( verify_only == 0 )) || exit 0
 
 if [[ -z "${JOBS}" ]]; then
-  JOBS="$(nproc)"
+  JOBS="$(default_build_jobs)"
 fi
 [[ "${JOBS}" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be positive"
 
 mkdir -p -- "${PREFIX}" "${PREFIX}/state" "${PREFIX}/logs"
 exec > >(tee -a "${PREFIX}/logs/setup.log") 2>&1
+log "using ${JOBS} parallel build jobs (nproc=$(nproc); default is memory-aware)"
 
 extract_once() {
   local archive="$1" marker="$2"
