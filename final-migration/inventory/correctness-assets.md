@@ -1,19 +1,26 @@
 # Correctness assets
 
-Captured read-only on 2026-08-07. These are persistent external assets; do not
-copy them into this worktree.
+Captured read-only on 2026-08-07. The input corpus remains persistent, but the
+historical `.krnn` files were deliberately removed during the later workspace
+cleanup. The golden row below records its former immutable identity; it is not
+an assertion that the file is still available.
 
 ## Canonical offline FP32 pair
 
 | Role | Persistent path | Size | SHA-256 |
 | --- | --- | ---: | --- |
 | 8,192 prepared 19x19 inputs | `/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.npz` | 151 MiB | `0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5` |
-| full-FP32 raw output golden | `/workspace/trainingdata/accuracy/replay-fixed-fp32-full19.krnn` | 425 MiB | `4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3` |
+| full-FP32 raw output golden (removed after comparison) | `/workspace/trainingdata/accuracy/replay-fixed-fp32-full19.krnn` | 425 MiB | `4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3` |
 
 The baseline report identifies the golden as CUDA full-FP32 from revision
 `847e78a44d402df200eabbbe0506776a45607c29-dirty-cuda`. It must remain an
 external immutable reference: a candidate backend must never regenerate its
 own expected result.
+
+Availability was rechecked on 2026-08-08 under `/workspace`, `/data`, both
+validation hosts' persistent data roots, and `/mnt/CacheSSD`; no retained copy
+was found. Consequently scan plans must retain `production_ready=false` until
+a byte-identical file with the recorded SHA-256 is supplied again.
 
 ## Existing GTP-shaped guard
 
