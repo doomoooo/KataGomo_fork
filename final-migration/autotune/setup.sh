@@ -44,10 +44,6 @@ log "verifying all carried payloads"
 
 if [[ -z "${JOBS}" ]]; then
   JOBS="$(nproc)"
-  (( JOBS > 8 )) && JOBS=8
-  memory_jobs=$(($(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 4194304))
-  (( memory_jobs < 1 )) && memory_jobs=1
-  (( JOBS > memory_jobs )) && JOBS="${memory_jobs}"
 fi
 [[ "${JOBS}" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be positive"
 

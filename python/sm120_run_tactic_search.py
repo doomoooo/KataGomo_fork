@@ -725,7 +725,7 @@ def main() -> None:
         default="/workspace/third_party/cutlass",
         help="clean pinned CUTLASS source used by the packed-QKV generator",
     )
-    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
     parser.add_argument("--cmake-arg", action="append", default=[])
     parser.add_argument(
         "--sm120-only",

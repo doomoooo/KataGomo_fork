@@ -22,6 +22,7 @@ import copy
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import shlex
 import sys
@@ -666,7 +667,7 @@ def main() -> None:
             "this fraction (default: 0.001)"
         ),
     )
-    parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
     parser.add_argument("--runner", default="")
     parser.add_argument("--generator-python", default="")
     parser.add_argument("--fa4-python", default="")

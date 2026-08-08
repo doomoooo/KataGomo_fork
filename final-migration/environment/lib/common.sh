@@ -11,19 +11,7 @@ KATAGO_LOCAL_ARCHIVE="${KATAGO_LOCAL_ARCHIVE:-${MIGRATION_ROOT}/archive}"
 KATAGO_THIRD_PARTY_ROOT="${KATAGO_THIRD_PARTY_ROOT:-${KATAGO_ENV_ROOT}/third_party}"
 KATAGO_FINAL_VENV="${KATAGO_FINAL_VENV:-${KATAGO_ENV_ROOT}/venv}"
 KATAGO_PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-detected_jobs="$(nproc)"
-if (( detected_jobs > 8 )); then
-  detected_jobs=8
-fi
-memory_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || printf 0)"
-memory_jobs=$((memory_kib / 4194304))
-if (( memory_jobs < 1 )); then
-  memory_jobs=1
-fi
-if (( detected_jobs > memory_jobs )); then
-  detected_jobs="${memory_jobs}"
-fi
-KATAGO_BUILD_JOBS="${KATAGO_BUILD_JOBS:-${detected_jobs}}"
+KATAGO_BUILD_JOBS="${KATAGO_BUILD_JOBS:-$(nproc)}"
 KATAGO_RECORD_ROOT="${KATAGO_RECORD_ROOT:-${MIGRATION_ROOT}/records}"
 
 export KATAGO_ENV_ROOT KATAGO_LOCAL_ARCHIVE KATAGO_THIRD_PARTY_ROOT

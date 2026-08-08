@@ -294,7 +294,7 @@ def main() -> int:
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--batches", default="4-32")
     parser.add_argument("--streams", type=int, default=2)
-    parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8))
+    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
     parser.add_argument("--phase", choices=("detect", "prepare", "discovery", "gate", "all"), default="all")
     parser.add_argument("--discovery-iterations", type=int, default=100)
     parser.add_argument("--gate-iterations", type=int, default=1000)

@@ -18,6 +18,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import shlex
 import shutil
@@ -416,7 +417,7 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=30)
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
     parser.add_argument("--runner", default="")
     parser.add_argument("--generator-python", default="")
     parser.add_argument("--fa4-python", default="")

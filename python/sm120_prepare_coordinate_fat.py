@@ -423,7 +423,7 @@ def main() -> None:
     parser.add_argument("--device", type=int, required=True)
     parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     parser.add_argument("--build-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)))
     parser.add_argument(
         "--cmake-arg", action="append", default=[],
         help=(
