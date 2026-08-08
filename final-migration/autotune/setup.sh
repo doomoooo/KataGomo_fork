@@ -224,9 +224,9 @@ printf '%s\n' \
   "export CUDNN_ROOT='${CUDNN_ROOT}'" \
   "export CC='${CC}'" \
   "export CXX='${CXX}'" \
-  "export PATH='${PREFIX}/venv/bin:${CUDA_HOME}/bin:\${PATH}'" \
-  "export LD_LIBRARY_PATH='${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib:\${LD_LIBRARY_PATH:-}'" \
-  "export CMAKE_PREFIX_PATH='${PREFIX}/native:\${CMAKE_PREFIX_PATH:-}'" \
+  "export PATH='${PREFIX}/venv/bin:${CUDA_HOME}/bin':\"\${PATH}\"" \
+  "export LD_LIBRARY_PATH='${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib':\"\${LD_LIBRARY_PATH:-}\"" \
+  "export CMAKE_PREFIX_PATH='${PREFIX}/native':\"\${CMAKE_PREFIX_PATH:-}\"" \
   "export XDG_CACHE_HOME='${PREFIX}/cache'" \
   "export TRITON_HOME='${PREFIX}/cache/triton'" \
   "export TRITON_CACHE_DIR='${PREFIX}/cache/triton-runtime'" \

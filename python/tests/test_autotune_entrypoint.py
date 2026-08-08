@@ -18,6 +18,13 @@ SPEC.loader.exec_module(AUTOTUNE)
 
 
 class AutotuneEntrypointTests(unittest.TestCase):
+    def test_generated_activate_expands_ambient_paths(self) -> None:
+        setup = (AUTOTUNE_PATH.parent / "setup.sh").read_text()
+        self.assertIn("':\\\"\\${PATH}\\\"", setup)
+        self.assertIn("':\\\"\\${LD_LIBRARY_PATH:-}\\\"", setup)
+        self.assertIn("':\\\"\\${CMAKE_PREFIX_PATH:-}\\\"", setup)
+        self.assertNotIn("bin:\\${PATH}'", setup)
+
     def test_parse_batch_set(self) -> None:
         self.assertEqual(AUTOTUNE.parse_batch_set("4-6,8,6"), [4, 5, 6, 8])
         with self.assertRaises(ValueError):
