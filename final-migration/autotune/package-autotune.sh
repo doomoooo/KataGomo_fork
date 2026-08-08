@@ -25,7 +25,7 @@ SEED_WHEELS="${AUTOTUNE_SEED_WHEELS:-${DEFAULT_SEED_WHEELS}}"
 log() { printf '[autotune-package] %s\n' "$*"; }
 die() { printf '[autotune-package] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command missing: $1"; }
-for command_name in curl git gzip python3 sha256sum tar; do need "${command_name}"; done
+for command_name in curl find git gzip python3 sha256sum tar; do need "${command_name}"; done
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
   || die "package only from a clean committed final-migration tree"
@@ -124,10 +124,11 @@ log "packing the CUDA 12.8 build toolkit"
 tar --create --gzip --file "${bundle}/payload/cuda-12.8.tar.gz" \
   --directory "${CUDA_ROOT}" \
   --exclude='./nsight*' --exclude='./extras' --exclude='./gds' --exclude='./samples' \
-  --transform='s#^\.$#cuda#;s#^\./#cuda/#' .
+  --transform='flags=r;s#^\.$#cuda#;s#^\./#cuda/#' .
 log "packing cuDNN 9.25 CUDA 12"
 tar --create --gzip --file "${bundle}/payload/cudnn-9.25-cuda12.tar.gz" \
-  --directory "${CUDNN_ROOT}" --transform='s#^\.$#cudnn#;s#^\./#cudnn/#' .
+  --directory "${CUDNN_ROOT}" \
+  --transform='flags=r;s#^\.$#cudnn#;s#^\./#cudnn/#' .
 
 toolchain_stage="${stage}/toolchain-stage/toolchains"
 mkdir -p -- "${toolchain_stage}/triton-llvm" "${toolchain_stage}/triton-json"

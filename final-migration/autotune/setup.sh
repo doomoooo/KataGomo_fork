@@ -25,7 +25,7 @@ log() { printf '[autotune-setup] %s\n' "$*"; }
 die() { printf '[autotune-setup] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required host command missing: $1"; }
 
-for command_name in bash tar sha256sum readlink uname getconf gcc g++ flock; do need "${command_name}"; done
+for command_name in bash tar sha256sum readlink find uname getconf gcc g++ flock; do need "${command_name}"; done
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] \
   || die "the release supports Linux x86-64 only"
 glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
@@ -73,6 +73,18 @@ extract_once "${SCRIPT_DIR}/payload/sources.tar.gz" "${PREFIX}/state/sources.ext
 extract_once "${SCRIPT_DIR}/payload/toolchains.tar.gz" "${PREFIX}/state/toolchains.extracted"
 extract_once "${SCRIPT_DIR}/payload/repo.tar.gz" "${PREFIX}/state/repo.extracted"
 extract_once "${SCRIPT_DIR}/payload/assets.tar.gz" "${PREFIX}/state/assets.extracted"
+
+for tree in "${PREFIX}/cuda" "${PREFIX}/cudnn"; do
+  broken_link="$(find "${tree}" -xtype l -print -quit)"
+  [[ -z "${broken_link}" ]] || die "carried toolchain contains a broken symlink: ${broken_link}"
+done
+for library in \
+  "${PREFIX}/cuda/targets/x86_64-linux/lib/libcublas.so" \
+  "${PREFIX}/cuda/targets/x86_64-linux/lib/libcublasLt.so" \
+  "${PREFIX}/cuda/lib64/libcudart.so" \
+  "${PREFIX}/cudnn/lib/libcudnn.so"; do
+  [[ -r "${library}" ]] || die "carried CUDA library is missing: ${library}"
+done
 
 export CUDA_HOME="${PREFIX}/cuda"
 export CUDA_PATH="${CUDA_HOME}"
