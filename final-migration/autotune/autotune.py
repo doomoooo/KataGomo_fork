@@ -64,6 +64,39 @@ def ensure_file(path: pathlib.Path, label: str) -> None:
         raise RuntimeError(f"{label} is missing: {path}")
 
 
+def parse_batch_set(value: str) -> list[int]:
+    batches: set[int] = set()
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "-" in item:
+            first, last = (int(part) for part in item.split("-", 1))
+            if last < first:
+                raise ValueError(f"invalid descending batch range: {item}")
+            batches.update(range(first, last + 1))
+        else:
+            batches.add(int(item))
+    result = sorted(batches)
+    if not result or result[0] < 1:
+        raise ValueError("batch set must contain positive integers")
+    return result
+
+
+def complete_manifest_for_batches(path: pathlib.Path, batches: str) -> bool:
+    """Reject an interrupted or differently scoped fat-bundle checkpoint."""
+    if not path.is_file():
+        return False
+    try:
+        payload = load_json(path)
+    except (OSError, ValueError, TypeError):
+        return False
+    return (
+        payload.get("complete") is True
+        and sorted(payload.get("batches", [])) == parse_batch_set(batches)
+    )
+
+
 def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
     space = out / "space.json"
@@ -84,14 +117,18 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
              "--space", str(space), "--phase", "full", "--output", str(generation)], cwd=repo, env=env)
 
     for family, target in (("dual_ffn", dual), ("linear2", linear)):
-        manifest = target / "manifest.json"
-        if manifest.exists() and not args.force:
-            continue
-        run([str(python), "python/portable_prepare_tilelang_fat_scan.py",
-             "--space", str(space), "--family", family, "--batches", args.batches,
-             "--device", str(args.device), "--output-dir", str(target),
-             "--python", str(python), "--nvcc", str(paths["prefix"] / "cuda/bin/nvcc"),
-             "--compile-objects", "--reuse-existing"], cwd=repo, env=env)
+        command = [str(python), "python/portable_prepare_tilelang_fat_scan.py",
+                   "--space", str(space), "--family", family,
+                   "--batches", args.batches, "--device", str(args.device),
+                   "--output-dir", str(target), "--python", str(python),
+                   "--nvcc", str(paths["prefix"] / "cuda/bin/nvcc"),
+                   "--compile-objects"]
+        if not args.force:
+            command.append("--reuse-existing")
+        # The generator writes an intentionally incomplete manifest after every
+        # candidate. Always enter it so a killed run resumes and closes the
+        # exact requested domain instead of mistaking a checkpoint for success.
+        run(command, cwd=repo, env=env)
 
     dual_manifest = load_json(dual / "manifest.json")
     linear_manifest = load_json(linear / "manifest.json")
@@ -164,15 +201,16 @@ def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env:
         target = out / "fat" / family
         manifest = target / "manifest.json"
         manifests[family] = manifest
-        if manifest.exists() and not args.force:
-            continue
-        run([str(python), "python/sm120_prepare_tilelang_fat_scan.py",
-             "--space", str(space), "--family", family, "--batches", args.batches,
-             "--device", str(args.device), "--output-dir", str(target),
-             "--python", str(python), "--reuse-existing"], cwd=repo, env=env)
+        command = [str(python), "python/sm120_prepare_tilelang_fat_scan.py",
+                   "--space", str(space), "--family", family,
+                   "--batches", args.batches, "--device", str(args.device),
+                   "--output-dir", str(target), "--python", str(python)]
+        if not args.force:
+            command.append("--reuse-existing")
+        run(command, cwd=repo, env=env)
     coordinate = out / "coordinate-fat"
     manifest = coordinate / "manifest.json"
-    if not manifest.exists() or args.force:
+    if not complete_manifest_for_batches(manifest, args.batches) or args.force:
         command = [str(python), "python/sm120_prepare_coordinate_fat.py",
                    "--repo", str(repo), "--space", str(space), "--batches", args.batches,
                    "--device", str(args.device), "--output-dir", str(coordinate),
