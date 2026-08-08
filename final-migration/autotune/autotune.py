@@ -97,6 +97,26 @@ def complete_manifest_for_batches(path: pathlib.Path, batches: str) -> bool:
     )
 
 
+def tilelang_root_from_manifests(*manifests: dict[str, Any]) -> pathlib.Path:
+    roots: set[pathlib.Path] = set()
+    for manifest in manifests:
+        if manifest.get("complete") is not True:
+            raise RuntimeError("cannot configure from an incomplete TileLang manifest")
+        for entry in manifest.get("entries", []):
+            metadata_path = pathlib.Path(entry["metadata"])
+            metadata = load_json(metadata_path)
+            root = metadata.get("generation_environment", {}).get("tilelang_root")
+            if not root:
+                raise RuntimeError(f"TileLang root is missing from {metadata_path}")
+            roots.add(pathlib.Path(root).resolve())
+    if len(roots) != 1:
+        raise RuntimeError(f"fat manifests disagree on TileLang root: {sorted(map(str, roots))}")
+    root = roots.pop()
+    for relative in ("src/tl_templates/cuda/debug.h", "3rdparty/cutlass/include/cutlass/cutlass.h"):
+        ensure_file(root / relative, "TileLang build input")
+    return root
+
+
 def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
     space = out / "space.json"
@@ -132,11 +152,13 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
 
     dual_manifest = load_json(dual / "manifest.json")
     linear_manifest = load_json(linear / "manifest.json")
+    tilelang_root = tilelang_root_from_manifests(dual_manifest, linear_manifest)
     configure = [
         "cmake", "-S", str(repo / "cpp"), "-B", str(build), "-G", "Ninja",
         "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
         "-DKATAGO_CUDA_ARCHITECTURES=89",
         f"-DSM89_FLASH_ATTN_ROOT={paths['prefix'] / 'sources/flash-attention'}",
+        f"-DSM89_TACTIC_TILELANG_ROOT={tilelang_root}",
         f"-DSM89_SEARCH_DUAL_FFN_FAT_REGISTRY={dual_manifest['registry_source']}",
         f"-DSM89_SEARCH_DUAL_FFN_FAT_SOURCES={';'.join(dual_manifest['sources'])}",
         f"-DSM89_SEARCH_LINEAR2_FAT_REGISTRY={linear_manifest['registry_source']}",

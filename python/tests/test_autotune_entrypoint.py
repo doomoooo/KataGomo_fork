@@ -36,6 +36,23 @@ class AutotuneEntrypointTests(unittest.TestCase):
             path.write_text("not json")
             self.assertFalse(AUTOTUNE.complete_manifest_for_batches(path, "4-5"))
 
+    def test_tilelang_root_is_read_from_complete_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "tilelang"
+            (root / "src/tl_templates/cuda").mkdir(parents=True)
+            (root / "3rdparty/cutlass/include/cutlass").mkdir(parents=True)
+            (root / "src/tl_templates/cuda/debug.h").touch()
+            (root / "3rdparty/cutlass/include/cutlass/cutlass.h").touch()
+            metadata = pathlib.Path(directory) / "metadata.json"
+            metadata.write_text(json.dumps({
+                "generation_environment": {"tilelang_root": str(root)},
+            }))
+            manifest = {"complete": True, "entries": [{"metadata": str(metadata)}]}
+            self.assertEqual(AUTOTUNE.tilelang_root_from_manifests(manifest), root)
+
+            with self.assertRaises(RuntimeError):
+                AUTOTUNE.tilelang_root_from_manifests({**manifest, "complete": False})
+
 
 if __name__ == "__main__":
     unittest.main()
