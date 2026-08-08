@@ -58,6 +58,10 @@ set(SM89_SEARCH_DUAL_FFN_FAT_SOURCES "" CACHE STRING "Semicolon-separated genera
 set(SM89_SEARCH_LINEAR2_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 linear2 fat registry")
 set(SM89_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 linear2 sources")
 set(SM89_CUDA_ARCHITECTURES "" CACHE STRING "Optional CUDA architecture list for an SM89-only search build")
+set(KATAGO_TILELANG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/TileLang"
+  CACHE PATH "Pinned TileLang source root used by generated CUDA sources")
+set(KATAGO_CUTLASS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cutlass"
+  CACHE PATH "Pinned CUTLASS source root used by generated CUDA sources")
 
 set(USE_CACHE_TENSORRT_PLAN 0 CACHE BOOL "Use TENSORRT plan cache. May use a lot of disk space. Only applies when USE_BACKEND is TENSORRT.")
 mark_as_advanced(USE_CACHE_TENSORRT_PLAN)
@@ -67,6 +71,15 @@ mark_as_advanced(USE_CACHE_TENSORRT_PLAN)
 message(STATUS "Building 'katago' executable for GTP engine and other tools.")
 if(USE_BACKEND STREQUAL "CUDA")
   message(STATUS "-DUSE_BACKEND=CUDA, using CUDA backend.")
+
+  if(NOT EXISTS "${KATAGO_TILELANG_ROOT}/src/tl_templates/cuda/debug.h")
+    message(FATAL_ERROR
+      "KATAGO_TILELANG_ROOT does not contain TileLang CUDA headers: ${KATAGO_TILELANG_ROOT}")
+  endif()
+  if(NOT EXISTS "${KATAGO_CUTLASS_ROOT}/include/cutlass/cutlass.h")
+    message(FATAL_ERROR
+      "KATAGO_CUTLASS_ROOT does not contain CUTLASS headers: ${KATAGO_CUTLASS_ROOT}")
+  endif()
 
   enable_language(CUDA)
   set(CUDA_STANDARD 11)
@@ -167,7 +180,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     PROPERTIES
       CUDA_ARCHITECTURES "120"
       INCLUDE_DIRECTORIES
-      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/TileLang/src;${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cutlass/include"
+      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${KATAGO_TILELANG_ROOT}/src;${KATAGO_CUTLASS_ROOT}/include"
   )
   set_source_files_properties(
     ${SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES}

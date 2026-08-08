@@ -38,6 +38,8 @@ def common_cmake(prefix: pathlib.Path) -> list[str]:
         f"-DCUDNN_LIBRARY={prefix / 'cudnn/lib/libcudnn.so'}",
         f"-DZLIB_INCLUDE_DIR={prefix / 'native/include'}",
         f"-DZLIB_LIBRARY={prefix / 'native/lib/libz.so'}",
+        f"-DKATAGO_TILELANG_ROOT={prefix / 'sources/TileLang'}",
+        f"-DKATAGO_CUTLASS_ROOT={prefix / 'sources/cutlass'}",
         "-DNO_GIT_REVISION=1",
     ]
 
