@@ -14,9 +14,9 @@ It never assumes Ubuntu 24.04 and is qualified on Ubuntu 22.04 and 24.04.
 Common locked environment:
 
 - CPython 3.12.13 from python-build-standalone release 20260807;
-- CUDA toolkit 12.8 (new enough for SM120 and supported by both validation
-  drivers);
-- cuDNN 9.25.0 for CUDA 12;
+- CUDA toolkit 13.2, matching the frozen optimization toolchain and supported
+  by both validation drivers;
+- cuDNN 9.25.0 for CUDA 13;
 - FlashAttention `69e1bcbe`, with the SM89 C++ and minimal SM120 both16
   patches applied before its wheel is built;
 - CUTLASS submodule `71275920` for SM89 FlashAttention and the independently

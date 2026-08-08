@@ -67,8 +67,8 @@ extract_once() {
 }
 
 extract_once "${SCRIPT_DIR}/payload/python.tar.gz" "${PREFIX}/state/python.extracted"
-extract_once "${SCRIPT_DIR}/payload/cuda-12.8.tar.gz" "${PREFIX}/state/cuda.extracted"
-extract_once "${SCRIPT_DIR}/payload/cudnn-9.25-cuda12.tar.gz" "${PREFIX}/state/cudnn.extracted"
+extract_once "${SCRIPT_DIR}/payload/cuda-13.2.tar.gz" "${PREFIX}/state/cuda.extracted"
+extract_once "${SCRIPT_DIR}/payload/cudnn-9.25-cuda13.tar.gz" "${PREFIX}/state/cudnn.extracted"
 extract_once "${SCRIPT_DIR}/payload/sources.tar.gz" "${PREFIX}/state/sources.extracted"
 extract_once "${SCRIPT_DIR}/payload/toolchains.tar.gz" "${PREFIX}/state/toolchains.extracted"
 extract_once "${SCRIPT_DIR}/payload/repo.tar.gz" "${PREFIX}/state/repo.extracted"
@@ -161,7 +161,7 @@ export JSON_SYSPATH="${PREFIX}/toolchains/triton-json"
 export TRITON_BUILD_PROTON=OFF
 build_source_wheel triton "${PREFIX}/sources/triton" triton
 
-export CUDA_VERSION=12.8
+export CUDA_VERSION=13.2
 export USE_CUDA=1
 build_source_wheel tilelang "${PREFIX}/sources/TileLang" tilelang
 build_source_wheel quack_kernels "${PREFIX}/sources/quack" quack-kernels

@@ -5,7 +5,7 @@ It is separate from `environment/package-distribution.sh`, which packages an
 already-built inference runtime.
 
 The release artifact is one uncompressed outer `.tar`.  It carries a pinned
-Python runtime, CUDA 12.8 build toolkit, cuDNN 9.25 for CUDA 12, the complete
+Python runtime, CUDA 13.2 build toolkit, cuDNN 9.25 for CUDA 13, the complete
 KataGo source tree, materialized third-party source trees, build-prerequisite
 payloads, pinned binary wheels, the model, and integrity manifests.  The
 target does not clone GitHub repositories or resolve dependency versions.
@@ -18,7 +18,7 @@ After extracting the release in a writable persistent directory:
 ```
 
 The host baseline is Linux x86-64 with glibc 2.28 or newer, an NVIDIA driver
-compatible with CUDA 12.8, and the small OS bootstrap set checked by `setup.sh`
+compatible with CUDA 13.2, and the small OS bootstrap set checked by `setup.sh`
 (`bash`, GNU tar/coreutils, GCC/G++, and `flock`). Everything above that
 bootstrap is carried in the tar; setup performs no APT transaction, Git clone,
 or network access. This deliberately supports both validated Ubuntu 22.04 and

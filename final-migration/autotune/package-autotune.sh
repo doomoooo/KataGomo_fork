@@ -7,8 +7,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 ENV_ROOT="${KATAGO_ENV_ROOT:-${REPO_ROOT}/.final-migration-env}"
 SOURCE_ROOT="${AUTOTUNE_SOURCE_ROOT:-${ENV_ROOT}/third_party}"
 OUTPUT_ROOT="${AUTOTUNE_OUTPUT_ROOT:-${ENV_ROOT}/autotune-distributions}"
-CUDA_ROOT="${AUTOTUNE_CUDA_ROOT:-${ENV_ROOT}/toolchains/cuda-12.8}"
-CUDNN_ROOT="${AUTOTUNE_CUDNN_ROOT:-${ENV_ROOT}/toolchains/cudnn-9.25-cuda12}"
+CUDA_ROOT="${AUTOTUNE_CUDA_ROOT:-${ENV_ROOT}/toolchains/cuda-13.2}"
+CUDNN_ROOT="${AUTOTUNE_CUDNN_ROOT:-${ENV_ROOT}/toolchains/cudnn-9.25-cuda13}"
 LLVM_ROOT="${AUTOTUNE_TRITON_LLVM_ROOT:-${ENV_ROOT}/toolchains/triton-llvm}"
 JSON_ROOT="${AUTOTUNE_TRITON_JSON_ROOT:-${ENV_ROOT}/toolchains/triton-json}"
 FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-/workspace/third_party/flash-attention/csrc/cutlass}"
@@ -120,13 +120,13 @@ git -C "${REPO_ROOT}" archive --format=tar --prefix=repo/ HEAD \
   | gzip -9 > "${bundle}/payload/repo.tar.gz"
 cp -- "${PYTHON_ARCHIVE}" "${bundle}/payload/python.tar.gz"
 
-log "packing the CUDA 12.8 build toolkit"
-tar --create --gzip --file "${bundle}/payload/cuda-12.8.tar.gz" \
+log "packing the CUDA 13.2 build toolkit"
+tar --create --gzip --file "${bundle}/payload/cuda-13.2.tar.gz" \
   --directory "${CUDA_ROOT}" \
   --exclude='./nsight*' --exclude='./extras' --exclude='./gds' --exclude='./samples' \
   --transform='flags=r;s#^\.$#cuda#;s#^\./#cuda/#' .
-log "packing cuDNN 9.25 CUDA 12"
-tar --create --gzip --file "${bundle}/payload/cudnn-9.25-cuda12.tar.gz" \
+log "packing cuDNN 9.25 CUDA 13"
+tar --create --gzip --file "${bundle}/payload/cudnn-9.25-cuda13.tar.gz" \
   --directory "${CUDNN_ROOT}" \
   --transform='flags=r;s#^\.$#cudnn#;s#^\./#cudnn/#' .
 
@@ -171,7 +171,7 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
   printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"
   printf 'katago_commit=%s\n' "$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   printf 'python_version=3.12.13\npython_build_standalone_release=20260807\n'
-  printf 'cuda_toolkit=12.8\ncudnn_cuda12=9.25.0.15\n'
+  printf 'cuda_toolkit=13.2\ncudnn_cuda13=9.25.0.15\n'
   printf 'model_sha256=%s\n' "$(sha256sum "${MODEL}" | awk '{print $1}')"
   printf 'corpus_sha256=%s\n' "$(sha256sum "${CORPUS}" | awk '{print $1}')"
 } > "${bundle}/metadata/release.txt"
