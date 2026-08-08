@@ -35,12 +35,14 @@ from cutlass.cute.runtime import from_dlpack
 
 try:
     from sm120_device import query_cuda_device
+    from source_provenance import clean_source_revision
 except ModuleNotFoundError:  # imported as ``python.sm120_generate_cute_qkv_aot``
     from python.sm120_device import query_cuda_device
+    from python.source_provenance import clean_source_revision
 
 
 CANDIDATE_ID = "qkv-m128-n128-k64-s2-cute-atom4x2-packed"
-CUTLASS_COMMIT = "e05f953a5b3d38adc240df2ff928e0421c2abba3"
+CUTLASS_COMMIT = "dcf215af68a2d08d305076c152a06f201728cd53"
 DENSE_GEMM_SHA256 = "613052799aff35d5564d49c8bbb4bbac2e22bc58cb3e27499c4c9c3ee95c6e03"
 SEQUENCE = 361
 INPUT_CHANNELS = 384
@@ -55,13 +57,6 @@ def sha256_file(path: pathlib.Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def git_output(root: pathlib.Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(root), *args], check=True, text=True,
-        capture_output=True,
-    ).stdout.strip()
 
 
 def package_version(*names: str) -> str | None:
@@ -308,13 +303,11 @@ def main() -> None:
         max_active_clusters_source = "explicit_candidate"
 
     cutlass_root = args.cutlass_root.resolve()
-    actual_commit = git_output(cutlass_root, "rev-parse", "HEAD")
+    actual_commit, revision_source = clean_source_revision(cutlass_root)
     if actual_commit != CUTLASS_COMMIT:
         raise RuntimeError(
             f"CUTLASS commit mismatch: {actual_commit} != {CUTLASS_COMMIT}"
         )
-    if git_output(cutlass_root, "status", "--short"):
-        raise RuntimeError("CUTLASS source must be clean")
     dense_path = cutlass_root / (
         "examples/python/CuTeDSL/cute/blackwell_geforce/kernel/"
         "dense_gemm/dense_gemm.py"
@@ -400,6 +393,7 @@ def main() -> None:
         "provenance": {
             "generator_sha256": sha256_file(pathlib.Path(__file__).resolve()),
             "cutlass_commit": actual_commit,
+            "cutlass_revision_source": revision_source,
             "dense_gemm_sha256": dense_sha256,
             "patched_dense_gemm_sha256": sha256_file(patched_dense_path),
             "python": sys.version.split()[0],
