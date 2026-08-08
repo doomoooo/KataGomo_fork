@@ -429,6 +429,10 @@ class TacticPlanTests(unittest.TestCase):
                 [1], 2,
             )
             self.assertTrue(final["ready_for_scan_bypass"])
+            self.assertFalse(final["production_ready"])
+            self.assertEqual(
+                final["numerical_certification"]["status"], "missing"
+            )
             self.assertEqual(final["status"], "complete_long_stable")
             self.assertEqual(
                 final["joint_gate"]["1"]["stable_long_nn_evals_per_sec"],

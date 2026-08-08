@@ -1012,6 +1012,15 @@ def finalize_plan(
         "status": "complete_long_stable",
         "ready_for_joint_gate": True,
         "ready_for_scan_bypass": True,
+        # Scan bypass means that the whole-graph tactic search and long gate
+        # may be reused. It is deliberately weaker than production approval:
+        # the immutable 8192-row FP32 reference is a separate artifact and is
+        # not available in the migration bundle.
+        "production_ready": False,
+        "numerical_certification": {
+            "status": "missing",
+            "required_reference": "immutable 8192-row FP32 replay",
+        },
         "joint_gate": joint_gate,
         "joint_gate_missing": [],
         "joint_result_sources": sources,
