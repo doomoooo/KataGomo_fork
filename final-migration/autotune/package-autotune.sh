@@ -183,6 +183,9 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
 
 tarball="${OUTPUT_ROOT}/${bundle_name}.tar"
 tar --create --file "${tarball}" --directory "${stage}" "${bundle_name}"
-sha256sum "${tarball}" > "${tarball}.sha256"
+(
+  cd -- "${OUTPUT_ROOT}"
+  sha256sum "${bundle_name}.tar" > "${bundle_name}.tar.sha256"
+)
 log "release complete: ${tarball}"
 du -h "${tarball}"
