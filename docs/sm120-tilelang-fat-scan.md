@@ -65,7 +65,7 @@ python3 python/sm120_run_tactic_search.py \
   --repo . --build-dir build/ffn-s2 --active-source-dir build/ffn-s2/active \
   --config /abs/path/bench.cfg --model /abs/path/model.bin.gz --device 2 \
   --batches 4-32 --streams 2 --iterations 80 --warmup 15 --repeats 3 \
-  --runner 'gpu-lock with --gpu 2 --' \
+  --runner '' \
   --output results/ffn-s2.json
 ```
 
@@ -166,7 +166,7 @@ batch; v4/v5 artifacts predate the global N96 addition and must not be reused
 as complete coverage.
 
 ```sh
-gpu-lock with --gpu 2 -- python3 python/sm120_coordinate_search.py \
+python3 python/sm120_coordinate_search.py \
   --seed-plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32.json \
   --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --repo . --build-dir build-cuda-coordinate-5090d-sm120 \
@@ -263,7 +263,7 @@ python3 python/sm120_validate_tactic_plan.py \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
   --model /workspace/models/model.bin.gz --device 2 \
   --iterations 300 --warmup 50 --repeats 3 --order both \
-  --runner 'gpu-lock with --gpu 2 --' \
+  --runner '' \
   --output results/validation-b32-qkv-long.json
 ```
 
@@ -282,7 +282,7 @@ joint runner materializes the selected generated/historical FFN, planar or
 CuTe QKV, TileLang Linear2, FA4 AOT, and persisting-L2 choices together:
 
 ```sh
-gpu-lock with --gpu 2 -- python3 python/sm120_measure_joint_plan.py \
+python3 python/sm120_measure_joint_plan.py \
   --plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
   --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --repo . --build-dir build-cuda-joint-plan-5090d-sm120 \

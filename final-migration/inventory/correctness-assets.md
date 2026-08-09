@@ -70,7 +70,7 @@ The report records:
   120.92 seconds, 6,774.85 requests/s and 6,828.35 aligned nnEval/s, maximum
   verifier backlog 32.
 
-Those GPU runs used the joint GPU-lock wrapper. They prove the guard's prior
+Those GPU runs used the development-only external coordination wrapper. They prove the prior
 behavior, not the current official-master migration. The harness must later be
 ported without replacing the evaluator under test, and the same file hashes
 must be checked before a final correctness run.

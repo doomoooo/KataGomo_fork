@@ -51,7 +51,6 @@ set(NO_GIT_REVISION 0 CACHE BOOL "Disable embedding the git revision into the co
 set(USE_AVX2 0 CACHE BOOL "Compile with AVX2")
 set(USE_BIGGER_BOARDS_EXPENSIVE 0 CACHE BOOL "Allow boards up to size 50. Compiling with this will use more memory and slow down KataGo, even when playing on boards of size 19.")
 set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Pinned Dao-AILab/flash-attention checkout for the optional SM89 AOT kernel")
-set(SM89_DUAL_GEMM_SWIZZLE 2 CACHE STRING "Threadblock swizzle for the optional SM89 dual GEMM kernel")
 set(SM89_TACTIC_TILELANG_ROOT "" CACHE PATH "TileLang package root for generated SM89 tactic sources")
 set(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 dual-FFN fat registry")
 set(SM89_SEARCH_DUAL_FFN_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 dual-FFN sources")
@@ -94,6 +93,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(SM120_SEARCH_LINEAR2_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_stub.cu"
     CACHE FILEPATH "Exact-batch linear2 AOT candidate used by the whole-graph search slot")
+  set(SM120_SEARCH_OUTPROJ_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_outproj_stub.cu"
+    CACHE FILEPATH "Exact-batch outproj AOT candidate used by the whole-graph search slot")
   set(SM120_SEARCH_FA4_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/sm120_search_fa4_stub.cpp"
     CACHE FILEPATH "Exact-batch FA4 AOT bridge used by the whole-graph search slot")
@@ -105,10 +107,20 @@ if(USE_BACKEND STREQUAL "CUDA")
     "Semicolon-separated exact-batch QKV TileLang TUs linked for one fat scan")
   set(SM120_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING
     "Semicolon-separated exact-batch linear2 TileLang TUs linked for one fat scan")
+  set(SM120_SEARCH_OUTPROJ_FAT_SOURCES "" CACHE STRING
+    "Semicolon-separated exact-batch outproj TileLang TUs linked for one fat scan")
   set(SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES "" CACHE STRING
     "Semicolon-separated exact-batch CuTe QKV bridge TUs linked for one fat scan")
   set(SM120_SEARCH_QKV_FAT_OBJECTS "" CACHE STRING
     "Semicolon-separated exact-batch CuTe QKV AOT objects linked for one fat scan")
+  set(SM120_SEARCH_QKV_ROPE_FAT_BRIDGE_SOURCES "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe QKV+RoPE bridge TUs linked for one fat scan")
+  set(SM120_SEARCH_QKV_ROPE_FAT_OBJECTS "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe QKV+RoPE AOT objects linked for one fat scan")
+  set(SM120_SEARCH_FFN_FAT_BRIDGE_SOURCES "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe fused-FFN bridge TUs linked for one fat scan")
+  set(SM120_SEARCH_FFN_FAT_OBJECTS "" CACHE STRING
+    "Semicolon-separated exact-batch CuTe fused-FFN AOT objects linked for one fat scan")
   set(SM120_SEARCH_FA4_FAT_SOURCES "" CACHE STRING
     "Semicolon-separated exact-batch FA4 bridge TUs linked for one fat scan")
   set(SM120_SEARCH_FA4_FAT_OBJECTS "" CACHE STRING
@@ -119,9 +131,15 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(SM120_SEARCH_QKV_FAT_REGISTRY_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_qkv_fat_stub.cu"
     CACHE FILEPATH "Generated exact-batch QKV fat-scan registry, or its empty stub")
+  set(SM120_SEARCH_QKV_ROPE_FAT_REGISTRY_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_qkv_rope_fat_stub.cu"
+    CACHE FILEPATH "Generated exact-batch QKV+RoPE fat registry, or its empty stub")
   set(SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_linear2_fat_stub.cu"
     CACHE FILEPATH "Generated exact-batch linear2 fat-scan registry, or its empty stub")
+  set(SM120_SEARCH_OUTPROJ_FAT_REGISTRY_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_outproj_fat_stub.cu"
+    CACHE FILEPATH "Generated exact-batch outproj fat-scan registry, or its empty stub")
   set(SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/sm120_search_fa4_fat_stub.cpp"
     CACHE FILEPATH "Generated exact-batch FA4 fat-scan registry, or its empty stub")
@@ -133,57 +151,63 @@ if(USE_BACKEND STREQUAL "CUDA")
     neuralnet/cudabackend_sm120.cpp
     neuralnet/cudabackend_sm120_kernels.cu
     neuralnet/cudabackend_sm120_aot_registry.cu
-    neuralnet/tilelang_aot/fused_ffn_b13.cu
-    neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
-    neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
-    neuralnet/tilelang_aot/wide_qkv_b13.cu
-    neuralnet/tilelang_aot/wide_qkv_b13_s1.cu
-    neuralnet/tilelang_aot/linear2_residual_b13.cu
-    neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
-    neuralnet/tilelang_aot/outproj_residual_b13.cu
+    neuralnet/fa4_aot/fa4_cuda_bridge.cpp
+    neuralnet/sm120_aot/outproj_residual_cutlass.cu
+    neuralnet/sm120_aot/linear2_residual_cutlass.cu
+    neuralnet/sm120_aot/dual_ffn_shared_a.cu
+    neuralnet/sm120_aot/outer_projection.cu
+    neuralnet/sm120_aot/postconv_residual_affine_silu.cu
     ${SM120_SEARCH_FFN_SOURCE}
     ${SM120_SEARCH_QKV_SOURCE}
     ${SM120_SEARCH_LINEAR2_SOURCE}
+    ${SM120_SEARCH_OUTPROJ_SOURCE}
     ${SM120_SEARCH_FA4_SOURCE}
     ${SM120_SEARCH_FFN_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_QKV_FAT_REGISTRY_SOURCE}
+    ${SM120_SEARCH_QKV_ROPE_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE}
+    ${SM120_SEARCH_OUTPROJ_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_FFN_FAT_SOURCES}
     ${SM120_SEARCH_QKV_FAT_SOURCES}
     ${SM120_SEARCH_LINEAR2_FAT_SOURCES}
+    ${SM120_SEARCH_OUTPROJ_FAT_SOURCES}
     ${SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_QKV_ROPE_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_FFN_FAT_BRIDGE_SOURCES}
     ${SM120_SEARCH_FA4_FAT_SOURCES}
-    neuralnet/fa4_aot/fa4_cuda_bridge.cpp
     neuralnet/cudautils.cpp
     neuralnet/cudahelpers.cu
   )
   set_source_files_properties(
     neuralnet/cudabackend_sm120_aot_registry.cu
-    neuralnet/tilelang_aot/fused_ffn_b13.cu
-    neuralnet/tilelang_aot/fused_ffn_b13_a_reuse.cu
-    neuralnet/tilelang_aot/fused_ffn_b13_s1.cu
-    neuralnet/tilelang_aot/wide_qkv_b13.cu
-    neuralnet/tilelang_aot/wide_qkv_b13_s1.cu
-    neuralnet/tilelang_aot/linear2_residual_b13.cu
-    neuralnet/tilelang_aot/linear2_residual_b13_balanced.cu
-    neuralnet/tilelang_aot/outproj_residual_b13.cu
+    neuralnet/sm120_aot/outproj_residual_cutlass.cu
+    neuralnet/sm120_aot/linear2_residual_cutlass.cu
+    neuralnet/sm120_aot/dual_ffn_shared_a.cu
+    neuralnet/sm120_aot/outer_projection.cu
+    neuralnet/sm120_aot/postconv_residual_affine_silu.cu
     ${SM120_SEARCH_FFN_SOURCE}
     ${SM120_SEARCH_QKV_SOURCE}
     ${SM120_SEARCH_LINEAR2_SOURCE}
+    ${SM120_SEARCH_OUTPROJ_SOURCE}
     ${SM120_SEARCH_FFN_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_QKV_FAT_REGISTRY_SOURCE}
+    ${SM120_SEARCH_QKV_ROPE_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE}
+    ${SM120_SEARCH_OUTPROJ_FAT_REGISTRY_SOURCE}
     ${SM120_SEARCH_FFN_FAT_SOURCES}
     ${SM120_SEARCH_QKV_FAT_SOURCES}
     ${SM120_SEARCH_LINEAR2_FAT_SOURCES}
+    ${SM120_SEARCH_OUTPROJ_FAT_SOURCES}
     PROPERTIES
       CUDA_ARCHITECTURES "120"
       INCLUDE_DIRECTORIES
-      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${KATAGO_TILELANG_ROOT}/src;${KATAGO_CUTLASS_ROOT}/include"
+      "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${KATAGO_TILELANG_ROOT}/src;${KATAGO_CUTLASS_ROOT}/include;${KATAGO_CUTLASS_ROOT}/examples/45_dual_gemm"
   )
   set_source_files_properties(
     ${SM120_SEARCH_QKV_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_QKV_ROPE_FAT_BRIDGE_SOURCES}
+    ${SM120_SEARCH_FFN_FAT_BRIDGE_SOURCES}
     ${SM120_SEARCH_FA4_FAT_SOURCES}
     ${SM120_SEARCH_FA4_FAT_REGISTRY_SOURCE}
     PROPERTIES
@@ -271,7 +295,6 @@ if(USE_BACKEND STREQUAL "CUDA")
       KATAGO_FLASH_BLOCK_N=96
       KATAGO_FLASH_NUM_WARPS=4
       KATAGO_FLASH_PACK_GQA=0
-      KATAGO_DUAL_GEMM_SWIZZLE=${SM89_DUAL_GEMM_SWIZZLE}
       NDEBUG
     )
     target_compile_options(katago_sm89_flash PRIVATE
@@ -553,6 +576,7 @@ add_executable(katago
   neuralnet/sgfmetadata.cpp
   neuralnet/modelversion.cpp
   neuralnet/nneval.cpp
+  neuralnet/cudatacticplan.cpp
   neuralnet/npzreader.cpp
   neuralnet/desc.cpp
   neuralnet/debugprint.cpp
@@ -601,6 +625,8 @@ add_executable(katago
   tests/testsgf.cpp
   tests/testsymmetries.cpp
   tests/testnninputs.cpp
+  tests/testnnbatchingdispatcher.cpp
+  tests/testnngtpharness.cpp
   tests/testownership.cpp
   tests/testsearchcommon.cpp
   tests/testsearchnonn.cpp
@@ -674,10 +700,7 @@ if(USE_BACKEND STREQUAL "CUDA")
   include_directories(SYSTEM external/cudnn-frontend/include) #SYSTEM suppresses warnings inside the vendored header-only cudnn_frontend library
   # cudnn_frontend's experimental OSS engine headers reference NVRTC symbols at link time
   # (we don't actually use those engines, but the references are pulled in by the header-only includes).
-  # SM120 FA4 AOT: the DSL host object embeds the cubin and needs the small
-  # `_cuda*` bridge (fa4_cuda_bridge.cpp) plus the CUDA driver API.
   target_link_libraries(katago CUDA::cublas CUDA::cublasLt ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
-  target_link_libraries(katago ${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/fa4_aot/fa4_sm120_b13.o)
   if(SM120_SEARCH_FA4_OBJECT)
     target_link_libraries(katago ${SM120_SEARCH_FA4_OBJECT})
   endif()
@@ -686,6 +709,12 @@ if(USE_BACKEND STREQUAL "CUDA")
   endif()
   if(SM120_SEARCH_QKV_FAT_OBJECTS)
     target_link_libraries(katago ${SM120_SEARCH_QKV_FAT_OBJECTS})
+  endif()
+  if(SM120_SEARCH_QKV_ROPE_FAT_OBJECTS)
+    target_link_libraries(katago ${SM120_SEARCH_QKV_ROPE_FAT_OBJECTS})
+  endif()
+  if(SM120_SEARCH_FFN_FAT_OBJECTS)
+    target_link_libraries(katago ${SM120_SEARCH_FFN_FAT_OBJECTS})
   endif()
   if(SM120_SEARCH_FA4_FAT_OBJECTS)
     target_link_libraries(katago ${SM120_SEARCH_FA4_FAT_OBJECTS})

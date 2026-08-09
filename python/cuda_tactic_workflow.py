@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Cross-device/batch tactic scanning and portable plan generation.
+"""Unified SM89/SM120 exact-batch tactic scanning and plan generation.
 
-This file deliberately lives outside the CUDA runtime. It is the SM89
-RTX 4090/4080 workflow boundary that final-migration can consume later:
+This file deliberately lives outside the CUDA runtime. It is the only
+optimization workflow boundary maintained by final-migration:
 
   space   materialize the candidates that may be scanned
   scan    run the normal whole-graph ``benchmarknn`` for every candidate
@@ -34,24 +34,31 @@ import os
 import pathlib
 import platform
 import re
+import signal
 import shlex
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+try:
+    from cuda_tactic_history import validate_positive_history_closure
+except ModuleNotFoundError:
+    from python.cuda_tactic_history import validate_positive_history_closure
+
 
 SCHEMA = 1
-SPACE_KIND = "portable-tactic-search-space"
-PLAN_KIND = "portable-tactic-plan"
-RESULT_KIND = "portable-tactic-scan"
-ARTIFACT_BUNDLE_KIND = "portable-tactic-artifact-bundle"
-FAMILIES = (
-    "wide_qkv",
-    "wide_ffn",
+SPACE_KIND = "cuda-tactic-search-space"
+PLAN_KIND = "cuda-tactic-plan"
+RESULT_KIND = "cuda-tactic-scan"
+ARTIFACT_BUNDLE_KIND = "cuda-tactic-artifact-bundle"
+SM89_FAMILIES = (
+    "wide_projection",
     "fused_residual",
     "rmsnorm",
     "exact_mask",
@@ -64,49 +71,200 @@ FAMILIES = (
     "postconv_bn",
     "pointwise",
     "l2",
+    "weight_sharing",
     "initial_conv",
     "initial_global",
     "policy_p1",
-    "wide_head",
     "head_bn",
+    "wide_head",
     "value_terminal",
 )
+SM120_FAMILIES = (
+    "fa4",
+    "wide_qkv",
+    "wide_ffn",
+    "fused_residual",
+    "rmsnorm",
+    "exact_mask",
+    "qkv_rope",
+    "swiglu",
+    "dual_ffn",
+    "wide_projection",
+    "linear2",
+    "outproj",
+    "preconv",
+    "postconv_bn",
+    "pointwise",
+    "l2",
+    "weight_sharing",
+    "initial_conv",
+    "initial_global",
+    "policy_p1",
+    "head_bn",
+    "wide_head",
+    "value_terminal",
+)
+ALL_FAMILIES = tuple(dict.fromkeys((*SM89_FAMILIES, *SM120_FAMILIES)))
 SM89_RUNTIME_CONFIG_KEYS = frozenset({
     "cudaFusedFFNAotTacticSm89",
+    "cudaDualFfnCutlassTacticSm89",
+    "cudaFlashAttentionTacticSm89",
     "cudaLinear2AotTacticSm89",
+    "cudaLinear2CutlassTacticSm89",
+    "cudaOutProjCutlassTacticSm89",
+    "cudaPreConvCutlassTacticSm89",
+    "cudaPostConvCutlassTacticSm89",
     "cudaPersistingL2HitRatioSm89",
     "cudaPlainQKVVariantSm89",
+    "cudaPolicyP1RowsPerBlockSm89",
+    "cudaRMSNormRowsPerBlockSm89",
     "cudaRoPEBatchGroupSm89",
-    "cudaUseDualGemmSwiGLUHalf2TanhSm89",
-    "cudaUseDualGemmSwiGLUSm89",
+    "cudaShareModelWeights",
     "cudaUseExactMaskElisionSm89",
-    "cudaUseFlashAttentionBoth16Sm89",
-    "cudaUseFlashAttentionSm89",
-    "cudaUseFusedPolicyP1",
+    "cudaUseExactMaskDownstreamElisionSm89",
     "cudaUseFusedQKRoPE",
     "cudaUseFusedResidual",
     "cudaUseFusedValueTerminalSm89",
     "cudaUseHeadBNHalfToFloat",
     "cudaUseInitialConvFrontend",
     "cudaUseInitialGlobalMatMulAdd",
-    "cudaUseLinear2GemmSm89",
     "cudaUseLinear2PostBNSiluSm89",
-    "cudaUseOutProjGemmSm89",
     "cudaUsePersistingL2Inner",
     "cudaUsePersistingL2Trunk",
     "cudaUsePostConvBNSiluSm89",
-    "cudaUsePostConvGemmSm89",
-    "cudaUsePreConvGemmSm89",
     "cudaUsePrecomputedQKRoPESm89",
     "cudaUseQKVRoPEGemmSm89",
     "cudaUseRMSNormOpt",
     "cudaUseScaleBiasSiluVec4C384Sm89",
     "cudaUseScaleBiasSiluVec8Sm89",
+    "cudaUseScaleBiasSiluVec8C384Sm89",
     "cudaUseSplitQKVRoPEGemmSm89",
     "cudaUseWideFFN",
     "cudaUseWideHeadProjection",
     "cudaUseWideQKV",
 })
+SM120_RUNTIME_CONFIG_KEYS = frozenset({
+    "cudaShareModelWeights",
+    "cudaFlashAttentionAotTacticSm120",
+    "cudaFlashAttentionSm120Accum",
+    "cudaFusedFFNAotTacticSm120",
+    "cudaLinear2AotTacticSm120",
+    "cudaOutProjectionAotTacticSm120",
+    "cudaPersistingL2HitRatioSm120",
+    "cudaAffineSiluTacticSm120",
+    "cudaUseBatchSharedRoPE",
+    "cudaUseBatchSharedRoPEUnrolledSm120",
+    "cudaUseFlashAttentionSm120",
+    "cudaUseFusedFFN",
+    "cudaUseFusedPolicyP1",
+    "cudaUseFusedQKRoPE",
+    "cudaUseFusedQKRoPEHalf2Sm120",
+    "cudaUseFusedResidual",
+    "cudaUseFusedResidualGemmSm120",
+    "cudaUseExactMaskElisionSm120",
+    "cudaUseHeadBNHalfToFloat",
+    "cudaInitialConvFrontendPlanSm120",
+    "cudaUseInitialGlobalMatMulAdd",
+    "cudaUseLinear2ResidualAot",
+    "cudaOuterProjectionDownTacticSm120",
+    "cudaOuterProjectionUpTacticSm120",
+    "cudaUsePostConvBNSiluSm120",
+    "cudaUseOutProjectionResidualAot",
+    "cudaUsePersistingL2Inner",
+    "cudaUsePersistingL2Trunk",
+    "cudaUseQKVGemmAot",
+    "cudaQKVRopeAotTacticSm120",
+    "cudaUseQKVStridedSm120",
+    "cudaRMSNormTacticSm120",
+    "cudaUseSwiGLU1152Sm120",
+    "cudaUseWideFFNSingleGemm",
+    "cudaWideHeadProjectionTacticSm120",
+    "cudaUseWideQKV",
+    "cudaWideQKVAotTacticSm120",
+    "cudaUseFusedValueTerminalSm120",
+})
+SM89_RUNTIME_BASELINE: dict[str, object] = {
+    "cudaFusedFFNAotTacticSm89": "disabled",
+    "cudaDualFfnCutlassTacticSm89": "disabled",
+    "cudaFlashAttentionTacticSm89": "disabled",
+    "cudaLinear2AotTacticSm89": "disabled",
+    "cudaLinear2CutlassTacticSm89": "disabled",
+    "cudaOutProjCutlassTacticSm89": "disabled",
+    "cudaPreConvCutlassTacticSm89": "disabled",
+    "cudaPostConvCutlassTacticSm89": "disabled",
+    "cudaPersistingL2HitRatioSm89": 1.0,
+    "cudaPlainQKVVariantSm89": 0,
+    "cudaPolicyP1RowsPerBlockSm89": 0,
+    "cudaRMSNormRowsPerBlockSm89": 4,
+    "cudaRoPEBatchGroupSm89": 1,
+    "cudaShareModelWeights": False,
+    "cudaUseExactMaskElisionSm89": False,
+    "cudaUseExactMaskDownstreamElisionSm89": False,
+    "cudaUseFusedQKRoPE": False,
+    "cudaUseFusedResidual": False,
+    "cudaUseFusedValueTerminalSm89": False,
+    "cudaUseHeadBNHalfToFloat": False,
+    "cudaUseInitialConvFrontend": False,
+    "cudaUseInitialGlobalMatMulAdd": False,
+    "cudaUseLinear2PostBNSiluSm89": False,
+    "cudaUsePersistingL2Inner": False,
+    "cudaUsePersistingL2Trunk": False,
+    "cudaUsePostConvBNSiluSm89": False,
+    "cudaUsePrecomputedQKRoPESm89": False,
+    "cudaUseQKVRoPEGemmSm89": False,
+    "cudaUseRMSNormOpt": False,
+    "cudaUseScaleBiasSiluVec4C384Sm89": False,
+    "cudaUseScaleBiasSiluVec8Sm89": False,
+    "cudaUseScaleBiasSiluVec8C384Sm89": False,
+    "cudaUseSplitQKVRoPEGemmSm89": False,
+    "cudaUseWideFFN": False,
+    "cudaUseWideHeadProjection": False,
+    "cudaUseWideQKV": False,
+}
+SM120_RUNTIME_BASELINE: dict[str, object] = {
+    "cudaShareModelWeights": False,
+    "cudaFlashAttentionAotTacticSm120": "disabled",
+    "cudaFlashAttentionSm120Accum": "none",
+    "cudaFusedFFNAotTacticSm120": "disabled",
+    "cudaLinear2AotTacticSm120": "disabled",
+    "cudaOutProjectionAotTacticSm120": "disabled",
+    "cudaPersistingL2HitRatioSm120": 1.0,
+    "cudaAffineSiluTacticSm120": "disabled",
+    "cudaUseBatchSharedRoPE": False,
+    "cudaUseBatchSharedRoPEUnrolledSm120": False,
+    "cudaUseFlashAttentionSm120": False,
+    "cudaUseFusedFFN": False,
+    "cudaUseFusedPolicyP1": False,
+    "cudaUseFusedQKRoPE": False,
+    "cudaUseFusedQKRoPEHalf2Sm120": False,
+    "cudaUseFusedResidual": False,
+    "cudaUseFusedResidualGemmSm120": False,
+    "cudaUseExactMaskElisionSm120": False,
+    "cudaUseHeadBNHalfToFloat": False,
+    "cudaInitialConvFrontendPlanSm120": "disabled",
+    "cudaUseInitialGlobalMatMulAdd": False,
+    "cudaUseLinear2ResidualAot": False,
+    "cudaOuterProjectionDownTacticSm120": "disabled",
+    "cudaOuterProjectionUpTacticSm120": "disabled",
+    "cudaUsePostConvBNSiluSm120": False,
+    "cudaUseOutProjectionResidualAot": False,
+    "cudaUsePersistingL2Inner": False,
+    "cudaUsePersistingL2Trunk": False,
+    "cudaUseQKVGemmAot": False,
+    "cudaQKVRopeAotTacticSm120": "disabled",
+    "cudaUseQKVStridedSm120": False,
+    "cudaRMSNormTacticSm120": "disabled",
+    "cudaUseSwiGLU1152Sm120": False,
+    "cudaUseWideFFNSingleGemm": False,
+    "cudaWideHeadProjectionTacticSm120": "disabled",
+    "cudaUseWideQKV": False,
+    "cudaWideQKVAotTacticSm120": "disabled",
+    "cudaUseFusedValueTerminalSm120": False,
+}
+if set(SM89_RUNTIME_BASELINE) != set(SM89_RUNTIME_CONFIG_KEYS):
+    raise RuntimeError("SM89 runtime baseline does not cover its config-key contract")
+if set(SM120_RUNTIME_BASELINE) != set(SM120_RUNTIME_CONFIG_KEYS):
+    raise RuntimeError("SM120 runtime baseline does not cover its config-key contract")
 MIN_LONG_ITERATIONS = 1000
 MIN_STABLE_SAMPLES = 2
 MIN_DISCOVERY_ITERATIONS = 100
@@ -119,6 +277,13 @@ ARCHITECTURES: dict[str, dict[str, Any]] = {
         "compute_capability": [8, 9],
         "gpu_classes": ("rtx4090", "rtx4080", "sm89"),
         "precision": "FP16/NHWC",
+        "families": SM89_FAMILIES,
+    },
+    "sm120": {
+        "compute_capability": [12, 0],
+        "gpu_classes": ("rtx5080", "rtx5090d", "sm120"),
+        "precision": "FP16/NHWC",
+        "families": SM120_FAMILIES,
     },
 }
 GPU_CLASS_ARCH = {
@@ -148,6 +313,17 @@ def cuda_compute_capability(properties: dict[str, object]) -> list[int] | None:
     if isinstance(major, int) and isinstance(minor, int):
         return [major, minor]
     return None
+
+
+def nvcc_arch_flag(compute_capability: object) -> str:
+    if (
+        not isinstance(compute_capability, list)
+        or len(compute_capability) != 2
+        or any(not isinstance(value, int) or value < 0 for value in compute_capability)
+    ):
+        raise ValueError(f"invalid CUDA compute capability: {compute_capability!r}")
+    major, minor = compute_capability
+    return f"-arch=sm_{major}{minor}"
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -263,6 +439,32 @@ def validate_gpu_class(architecture: str, gpu_class: str) -> None:
         raise ValueError(f"GPU class {gpu_class} is not valid for {architecture}")
 
 
+def architecture_families(architecture: str) -> tuple[str, ...]:
+    if architecture not in ARCHITECTURES:
+        raise ValueError(f"unknown CUDA architecture: {architecture}")
+    return tuple(ARCHITECTURES[architecture]["families"])
+
+
+def runtime_tactic_baseline(architecture: str) -> dict[str, object]:
+    if architecture == "sm89":
+        return dict(SM89_RUNTIME_BASELINE)
+    if architecture == "sm120":
+        return dict(SM120_RUNTIME_BASELINE)
+    raise ValueError(f"unknown CUDA architecture: {architecture}")
+
+
+def space_families(space: dict[str, object]) -> tuple[str, ...]:
+    architecture = str(space.get("architecture"))
+    expected = architecture_families(architecture)
+    actual = space.get("families")
+    if actual != list(expected):
+        raise ValueError(
+            f"search-space family contract differs from {architecture}: "
+            f"{actual} != {list(expected)}"
+        )
+    return expected
+
+
 def candidate(candidate_id: str, implementation: str = "config", **values: object) -> dict[str, object]:
     return {"id": candidate_id, "implementation": implementation, **values}
 
@@ -304,12 +506,11 @@ def _aot_candidate(
     config.update({
         "dual_ffn": {
             "cudaUseWideFFN": True,
-            "cudaUseDualGemmSwiGLUSm89": True,
-            "cudaUseDualGemmSwiGLUHalf2TanhSm89": False,
+            "cudaDualFfnCutlassTacticSm89": "disabled",
         },
         "linear2": {
             "cudaUseFusedResidual": True,
-            "cudaUseLinear2GemmSm89": True,
+            "cudaLinear2CutlassTacticSm89": "disabled",
             "cudaUseLinear2PostBNSiluSm89": False,
         },
     }[family])
@@ -334,11 +535,10 @@ def _fallback_candidate(architecture: str, family: str, batch: int) -> dict[str,
     config: dict[str, object] = {key: "disabled"}
     config.update({
         "dual_ffn": {
-            "cudaUseDualGemmSwiGLUSm89": False,
-            "cudaUseDualGemmSwiGLUHalf2TanhSm89": False,
+            "cudaDualFfnCutlassTacticSm89": "disabled",
         },
         "linear2": {
-            "cudaUseLinear2GemmSm89": False,
+            "cudaLinear2CutlassTacticSm89": "disabled",
             "cudaUseLinear2PostBNSiluSm89": False,
         },
     }[family])
@@ -355,22 +555,17 @@ def _gemm_candidates(architecture: str, family: str, batch: int) -> list[dict[st
     # Cartesian product for every operator.
     result = [_fallback_candidate(architecture, family, batch)]
     if family == "dual_ffn":
-        result.extend([
-            _config_candidate(
-                family, batch, "dual-compiled-exp",
+        for tactic in (
+            "m128-n64-k32-w64-n32-s3-sw2-exp",
+            "m128-n64-k32-w64-n32-s3-sw4-exp",
+            "m128-n64-k32-w64-n32-s3-sw2-tanh-half2",
+        ):
+            result.append(_config_candidate(
+                family, batch, f"dual-cutlass-{tactic}",
                 cudaFusedFFNAotTacticSm89="disabled",
                 cudaUseWideFFN=True,
-                cudaUseDualGemmSwiGLUSm89=True,
-                cudaUseDualGemmSwiGLUHalf2TanhSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "dual-compiled-half2-tanh",
-                cudaFusedFFNAotTacticSm89="disabled",
-                cudaUseWideFFN=True,
-                cudaUseDualGemmSwiGLUSm89=True,
-                cudaUseDualGemmSwiGLUHalf2TanhSm89=True,
-            ),
-        ])
+                cudaDualFfnCutlassTacticSm89=tactic,
+            ))
         # Stage 8/62 center plus its occupancy/resource neighborhood.
         shapes = [
             (128, 64, 32, 2, 3),
@@ -391,24 +586,35 @@ def _gemm_candidates(architecture: str, family: str, batch: int) -> list[dict[st
                 min_blocks=min_blocks, threads=128, epilogue="swiglu-exp",
                 a_fragment_reuse=True,
             ))
+            result[-1].setdefault("config", {})[
+                "cudaDualFfnCutlassTacticSm89"] = "disabled"
         return result
     if family == "linear2":
-        result.extend([
-            _config_candidate(
-                family, batch, "linear2-compiled-residual",
+        cutlass_tactics = (
+            "m128-n128-k32-w64-n32-s3-sw1",
+            "m128-n128-k32-w64-n32-s4-sw1",
+            "m128-n128-k32-w64-n64-s3-sw1",
+            "m128-n128-k32-w64-n64-s4-sw1",
+            "m128-n128-k32-w64-n64-s5-sw1",
+            "m128-n128-k32-w64-n64-s6-sw1",
+        )
+        for tactic in cutlass_tactics:
+            result.append(_config_candidate(
+                family, batch, f"linear2-cutlass-{tactic}",
                 cudaLinear2AotTacticSm89="disabled",
                 cudaUseFusedResidual=True,
-                cudaUseLinear2GemmSm89=True,
+                cudaLinear2CutlassTacticSm89=tactic,
                 cudaUseLinear2PostBNSiluSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "linear2-compiled-postbn",
-                cudaLinear2AotTacticSm89="disabled",
-                cudaUseFusedResidual=True,
-                cudaUseLinear2GemmSm89=True,
-                cudaUseLinear2PostBNSiluSm89=True,
-            ),
-        ])
+            ))
+        result.append(_config_candidate(
+            family, batch,
+            "linear2-cutlass-m128-n128-k32-w64-n64-s4-sw1-postbn",
+            cudaLinear2AotTacticSm89="disabled",
+            cudaUseFusedResidual=True,
+            cudaLinear2CutlassTacticSm89=
+                "m128-n128-k32-w64-n64-s4-sw1",
+            cudaUseLinear2PostBNSiluSm89=True,
+        ))
         for tile_m, tile_n, tile_k, stages, min_blocks, smem in (
             (128, 128, 32, 4, 1, 65536),
             (128, 128, 32, 3, 2, 49152),
@@ -425,6 +631,8 @@ def _gemm_candidates(architecture: str, family: str, batch: int) -> list[dict[st
                 min_blocks=min_blocks, threads=128,
                 dynamic_smem_bytes=smem, epilogue="beta1-residual",
             ))
+            result[-1].setdefault("config", {})[
+                "cudaLinear2CutlassTacticSm89"] = "disabled"
         return result
     raise ValueError(f"{family} has no SM89 GEMM tactic registry")
 
@@ -432,29 +640,131 @@ def _gemm_candidates(architecture: str, family: str, batch: int) -> list[dict[st
 def _history_candidates(architecture: str, family: str, batch: int) -> list[dict[str, object]]:
     if family in ("dual_ffn", "linear2"):
         return _gemm_candidates(architecture, family, batch)
+    if family == "exact_mask":
+        return [
+            _config_candidate(
+                family, batch, "exact-mask-off",
+                cudaUseExactMaskDownstreamElisionSm89=False,
+                cudaUseExactMaskElisionSm89=False,
+            ),
+            _config_candidate(
+                family, batch, "exact-mask-downstream-on",
+                cudaUseExactMaskDownstreamElisionSm89=True,
+                cudaUseExactMaskElisionSm89=False,
+            ),
+            _config_candidate(
+                family, batch, "exact-mask-preprocess-on",
+                cudaUseExactMaskDownstreamElisionSm89=True,
+                cudaUseExactMaskElisionSm89=True,
+            ),
+        ]
     toggle_keys = {
-        "wide_qkv": "cudaUseWideQKV",
-        "wide_ffn": "cudaUseWideFFN",
         "fused_residual": "cudaUseFusedResidual",
-        "rmsnorm": "cudaUseRMSNormOpt",
-        "exact_mask": "cudaUseExactMaskElisionSm89",
-        "outproj": "cudaUseOutProjGemmSm89",
-        "preconv": "cudaUsePreConvGemmSm89",
         "initial_conv": "cudaUseInitialConvFrontend",
         "initial_global": "cudaUseInitialGlobalMatMulAdd",
-        "policy_p1": "cudaUseFusedPolicyP1",
         "head_bn": "cudaUseHeadBNHalfToFloat",
         "value_terminal": "cudaUseFusedValueTerminalSm89",
+        "weight_sharing": "cudaShareModelWeights",
     }
     if family in toggle_keys:
         key = toggle_keys[family]
         on_config: dict[str, object] = {key: True}
-        if family == "outproj":
-            on_config["cudaUseFusedResidual"] = True
         return [
             _config_candidate(family, batch, f"{family}-off", **{key: False}),
             _config_candidate(family, batch, f"{family}-on", **on_config),
         ]
+    if family == "wide_projection":
+        return [
+            _config_candidate(
+                family, batch, "wide-projection-off",
+                cudaUseWideQKV=False,
+                cudaUseWideFFN=False,
+            ),
+            _config_candidate(
+                family, batch, "wide-projection-qkv-only",
+                cudaUseWideQKV=True,
+                cudaUseWideFFN=False,
+            ),
+            _config_candidate(
+                family, batch, "wide-projection-ffn-only",
+                cudaUseWideQKV=False,
+                cudaUseWideFFN=True,
+            ),
+            _config_candidate(
+                family, batch, "wide-projection-both",
+                cudaUseWideQKV=True,
+                cudaUseWideFFN=True,
+            ),
+        ]
+    if family == "policy_p1":
+        return [
+            _config_candidate(
+                family, batch, "policy-p1-disabled",
+                cudaPolicyP1RowsPerBlockSm89=0,
+            ),
+            _config_candidate(
+                family, batch, "policy-p1-block96x1",
+                cudaPolicyP1RowsPerBlockSm89=1,
+            ),
+            _config_candidate(
+                family, batch, "policy-p1-block96x5",
+                cudaPolicyP1RowsPerBlockSm89=5,
+            ),
+        ]
+    if family == "rmsnorm":
+        return [
+            _config_candidate(
+                family, batch, "rmsnorm-off",
+                cudaUseRMSNormOpt=False,
+                cudaRMSNormRowsPerBlockSm89=4,
+            ),
+            _config_candidate(
+                family, batch, "rmsnorm-warps4",
+                cudaUseRMSNormOpt=True,
+                cudaRMSNormRowsPerBlockSm89=4,
+            ),
+            _config_candidate(
+                family, batch, "rmsnorm-warps8",
+                cudaUseRMSNormOpt=True,
+                cudaRMSNormRowsPerBlockSm89=8,
+            ),
+        ]
+    if family == "outproj":
+        values = [_config_candidate(
+            family, batch, "outproj-off",
+            cudaOutProjCutlassTacticSm89="disabled",
+        )]
+        for tactic in (
+            "m128-n128-k32-w64-n32-s2-sw1",
+            "m128-n128-k32-w64-n32-s3-sw1",
+            "m128-n128-k32-w64-n32-s4-sw1",
+            "m128-n128-k32-w64-n64-s3-sw1",
+            "m128-n128-k32-w64-n64-s4-sw1",
+        ):
+            values.append(_config_candidate(
+                family, batch, f"outproj-cutlass-{tactic}",
+                cudaUseFusedResidual=True,
+                cudaOutProjCutlassTacticSm89=tactic,
+            ))
+        return values
+    if family == "preconv":
+        values = [_config_candidate(
+            family, batch, "preconv-off",
+            cudaPreConvCutlassTacticSm89="disabled",
+        )]
+        for tactic in (
+            "m128-n128-k32-w64-n32-s3-sw1",
+            "m128-n128-k32-w64-n32-s4-sw1",
+            "m128-n128-k32-w64-n64-s3-sw1",
+            "m128-n128-k32-w64-n64-s4-sw1",
+            "m128-n128-k32-w64-n64-s5-sw1",
+            "m128-n128-k32-w64-n64-s6-sw1",
+        ):
+            values.append(_config_candidate(
+                family, batch, f"preconv-cutlass-{tactic}",
+                cudaPreConvCutlassTacticSm89=tactic,
+            ))
+        return values
     if family == "qkv_rope":
         reset = {
             "cudaUseFusedQKRoPE": False,
@@ -483,15 +793,23 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
                     "cudaUseQKVRoPEGemmSm89": True,
                 },
             ),
+            _config_candidate(
+                family, batch, "qkv-rope-gemm-epilogue-precomputed", **{
+                    **reset, "cudaUseWideQKV": True,
+                    "cudaUseFusedQKRoPE": True,
+                    "cudaUsePrecomputedQKRoPESm89": True,
+                    "cudaUseQKVRoPEGemmSm89": True,
+                },
+            ),
         ]
-        for group in (2, 3, 4, 7, 13):
+        for group in sorted({2, 3, 4, 7, 13, batch}):
             values.append(_config_candidate(
                 family, batch, f"qkv-rope-group-{group}", **{
                     **reset, "cudaUseFusedQKRoPE": True,
                     "cudaRoPEBatchGroupSm89": group,
                 },
             ))
-        for variant in (0, 1, 2):
+        for variant in (0, 1):
             values.append(_config_candidate(
                 family, batch, f"qkv-rope-gemm-split-v{variant}", **{
                     **reset, "cudaUseWideQKV": True,
@@ -503,67 +821,114 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
             ))
         return values
     if family == "fa4":
-        # This branch links the historical M64/N96 FA4 implementation. Other
-        # tile shapes must not be advertised until they have distinct linked
-        # launchers. Both accumulator policies are real runtime choices.
         return [
             _config_candidate(
                 family, batch, "fa4-off",
-                cudaUseFlashAttentionSm89=False,
-                cudaUseFlashAttentionBoth16Sm89=False,
+                cudaFlashAttentionTacticSm89="disabled",
             ),
             _config_candidate(
-                family, batch, "fa4-n96-fp32",
-                cudaUseFlashAttentionSm89=True,
-                cudaUseFlashAttentionBoth16Sm89=False,
+                family, batch, "fa4-d32-m128-n112-w4-pack0-fp32",
+                cudaFlashAttentionTacticSm89="d32-m128-n112-w4-pack0-fp32",
             ),
             _config_candidate(
-                family, batch, "fa4-n96-both16",
-                cudaUseFlashAttentionSm89=True,
-                cudaUseFlashAttentionBoth16Sm89=True,
+                family, batch, "fa4-d32-m128-n96-w4-pack0-fp32",
+                cudaFlashAttentionTacticSm89="d32-m128-n96-w4-pack0-fp32",
+            ),
+            _config_candidate(
+                family, batch, "fa4-d32-m64-n96-w4-pack1-fp32",
+                cudaFlashAttentionTacticSm89="d32-m64-n96-w4-pack1-fp32",
+            ),
+            _config_candidate(
+                family, batch, "fa4-d32-m64-n96-w4-pack0-fp32",
+                cudaFlashAttentionTacticSm89="d32-m64-n96-w4-pack0-fp32",
+            ),
+            _config_candidate(
+                family, batch, "fa4-d32-m64-n96-w4-pack0-both16",
+                cudaFlashAttentionTacticSm89="d32-m64-n96-w4-pack0-both16",
             ),
         ]
     if family == "postconv_bn":
-        return [
-            _config_candidate(
-                family, batch, "postconv-off",
-                cudaUsePostConvGemmSm89=False,
+        values = [_config_candidate(
+            family, batch, "postconv-off",
+            cudaPostConvCutlassTacticSm89="disabled",
+            cudaUsePostConvBNSiluSm89=False,
+        )]
+        for tactic in (
+            "m128-n128-k32-w64-n32-s2-sw1",
+            "m128-n128-k32-w64-n32-s3-sw1",
+            "m128-n128-k32-w64-n32-s3-sw2",
+            "m128-n128-k32-w64-n64-s3-sw1",
+            "m128-n128-k32-w64-n64-s3-sw2",
+            "m128-n128-k32-w64-n64-s3-sw4",
+            "m128-n256-k32-w64-n64-s2-sw2",
+            "m256-n128-k32-w64-n64-s2-sw1",
+            "m256-n128-k32-w64-n64-s2-sw2",
+        ):
+            values.append(_config_candidate(
+                family, batch, f"postconv-cutlass-{tactic}",
+                cudaPostConvCutlassTacticSm89=tactic,
                 cudaUsePostConvBNSiluSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "postconv-gemm",
-                cudaUsePostConvGemmSm89=True,
-                cudaUsePostConvBNSiluSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "postconv-gemm-bn-silu",
-                cudaUsePostConvGemmSm89=True,
-                cudaUsePostConvBNSiluSm89=True,
-            ),
-        ]
+            ))
+        values.append(_config_candidate(
+            family, batch,
+            "postconv-cutlass-m128-n128-k32-w64-n64-s3-sw1-bn-silu",
+            cudaPostConvCutlassTacticSm89=
+                "m128-n128-k32-w64-n64-s3-sw1",
+            cudaUsePostConvBNSiluSm89=True,
+        ))
+        return values
     if family == "pointwise":
-        return [
+        values = [
             _config_candidate(
                 family, batch, "pointwise-off",
                 cudaUseScaleBiasSiluVec8Sm89=False,
+                cudaUseScaleBiasSiluVec8C384Sm89=False,
                 cudaUseScaleBiasSiluVec4C384Sm89=False,
             ),
             _config_candidate(
                 family, batch, "pointwise-c768-vec8",
                 cudaUseScaleBiasSiluVec8Sm89=True,
+                cudaUseScaleBiasSiluVec8C384Sm89=False,
+                cudaUseScaleBiasSiluVec4C384Sm89=False,
+            ),
+            _config_candidate(
+                family, batch, "pointwise-c384-vec8",
+                cudaUseScaleBiasSiluVec8Sm89=False,
+                cudaUseScaleBiasSiluVec8C384Sm89=True,
                 cudaUseScaleBiasSiluVec4C384Sm89=False,
             ),
             _config_candidate(
                 family, batch, "pointwise-c384-vec4",
                 cudaUseScaleBiasSiluVec8Sm89=False,
+                cudaUseScaleBiasSiluVec8C384Sm89=False,
                 cudaUseScaleBiasSiluVec4C384Sm89=True,
+            ),
+            _config_candidate(
+                family, batch, "pointwise-c768-vec8-c384-vec8",
+                cudaUseScaleBiasSiluVec8Sm89=True,
+                cudaUseScaleBiasSiluVec8C384Sm89=True,
+                cudaUseScaleBiasSiluVec4C384Sm89=False,
             ),
             _config_candidate(
                 family, batch, "pointwise-c768-vec8-c384-vec4",
                 cudaUseScaleBiasSiluVec8Sm89=True,
+                cudaUseScaleBiasSiluVec8C384Sm89=False,
                 cudaUseScaleBiasSiluVec4C384Sm89=True,
             ),
         ]
+        # The accepted postconv+BN+SiLU boundary removes every C384 affine
+        # SiLU launch. A standalone C384 tactic must therefore own that
+        # boundary explicitly; otherwise it is a no-op candidate that can
+        # never provide runtime activation evidence. C768 remains independent.
+        for value in values:
+            if "c384" in str(value["id"]):
+                value["config"]["cudaUseLinear2PostBNSiluSm89"] = False
+                value["config"]["cudaUsePostConvBNSiluSm89"] = False
+                value["supersedes"] = ["postconv_bn"]
+                value["overrides_keys"] = [
+                    "cudaUseLinear2PostBNSiluSm89",
+                ]
+        return values
     if family == "l2":
         values = [_config_candidate(
             family, batch, f"l2-b{batch}-off",
@@ -594,7 +959,14 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
             ),
             _config_candidate(
                 family, batch, "wide-head-on",
-                cudaUseFusedPolicyP1=True,
+                cudaPolicyP1RowsPerBlockSm89=5,
+                cudaUseWideHeadProjection=True,
+            ),
+            _config_candidate(
+                family, batch, "wide-head-stage52-intrinsic-bundle",
+                cudaUseInitialGlobalMatMulAdd=True,
+                cudaUseHeadBNHalfToFloat=True,
+                cudaPolicyP1RowsPerBlockSm89=5,
                 cudaUseWideHeadProjection=True,
             ),
         ]
@@ -606,15 +978,973 @@ def _sm89_candidates(family: str, batch: int) -> list[dict[str, object]]:
     # accepted config and earlier family winners. Without this explicit no-op,
     # a family whose whole local neighborhood regresses is forced to accept
     # the least-bad regression (observed at B15 qkv_rope).
-    return [
+    values = [
         _config_candidate(family, batch, f"{family}-keep-incumbent"),
         *_history_candidates("sm89", family, batch),
     ]
+    for value in values:
+        config = candidate_config(family, value)
+        # These later boundaries deliberately take ownership of one key from
+        # an earlier, still otherwise-effective family.  Keep that partial
+        # ownership explicit so plan construction cannot silently depend on
+        # dict update order.
+        partial_overrides = {
+            "qkv_rope": {"cudaUseWideQKV"},
+            "dual_ffn": {"cudaUseWideFFN"},
+            "linear2": {"cudaUseFusedResidual"},
+            "outproj": {"cudaUseFusedResidual"},
+        }
+        overridden_keys = sorted(
+            set(config) & partial_overrides.get(family, set())
+        )
+        if overridden_keys:
+            value["overrides_keys"] = overridden_keys
+        if family == "wide_head" and value.get("id") == "wide-head-on":
+            value["supersedes"] = ["policy_p1"]
+        if (
+            family == "wide_head" and
+            value.get("id") == "wide-head-stage52-intrinsic-bundle"
+        ):
+            value["supersedes"] = ["initial_global", "policy_p1", "head_bn"]
+        markers: list[str] = []
+        for key, item in config.items():
+            if key in {
+                "cudaPersistingL2HitRatioSm89",
+            }:
+                continue
+            if key in {
+                "cudaDualFfnCutlassTacticSm89",
+                "cudaFusedFFNAotTacticSm89",
+                "cudaFlashAttentionTacticSm89",
+                "cudaLinear2CutlassTacticSm89",
+                "cudaLinear2AotTacticSm89",
+                "cudaOutProjCutlassTacticSm89",
+                "cudaPreConvCutlassTacticSm89",
+                "cudaPostConvCutlassTacticSm89",
+            }:
+                if isinstance(item, str) and item != "disabled":
+                    markers.append(
+                        "SM89 backend: runtime tactic active: " +
+                        f"{key}={item}"
+                    )
+                continue
+            if key in {
+                "cudaPlainQKVVariantSm89", "cudaRoPEBatchGroupSm89",
+                "cudaRMSNormRowsPerBlockSm89", "cudaPolicyP1RowsPerBlockSm89",
+            }:
+                if key == "cudaRMSNormRowsPerBlockSm89":
+                    if item == 8:
+                        markers.append(
+                            "SM89 backend: runtime tactic active: " + key + "=8"
+                        )
+                elif key == "cudaPolicyP1RowsPerBlockSm89":
+                    if item in (1, 5):
+                        markers.append(
+                            "SM89 backend: runtime tactic active: " +
+                            f"{key}={item}"
+                        )
+                elif isinstance(item, int) and item not in (0, 1):
+                    markers.append(
+                        "SM89 backend: runtime tactic active: " + key
+                    )
+                elif key == "cudaPlainQKVVariantSm89" and item == 1:
+                    markers.append(
+                        "SM89 backend: runtime tactic active: " + key
+                    )
+                continue
+            if item is True:
+                markers.append(
+                    "SM89 backend: runtime tactic active: " + key
+                )
+        if markers:
+            value["activation_markers"] = sorted(set(markers))
+    return values
 
 
-def default_candidates(architecture: str, family: str, batch: int) -> list[dict[str, object]]:
+def _sm120_value(
+    family: str,
+    batch: int,
+    candidate_id: str,
+    implementation: str,
+    config: dict[str, object],
+    **parameters: object,
+) -> dict[str, object]:
+    generated = {
+        "tilelang": "tilelang",
+        "historical_tilelang": "historical_tilelang",
+        "fa4_cute": "fa4_cute",
+    }
+    if implementation == "cute":
+        generated[implementation] = {
+            "wide_qkv": "cute_qkv",
+            "qkv_rope": "cute_qkv_rope",
+            "dual_ffn": "cute_fused_ffn",
+        }[family]
+    if implementation in generated:
+        parameters["requires_artifact"] = True
+        parameters["generator"] = generated[implementation]
+        parameters.pop("prelinked_artifact", None)
+    return candidate(
+        candidate_id,
+        implementation,
+        batch=batch,
+        history_family=family,
+        config=config,
+        **parameters,
+    )
+
+
+def _sm120_toggle(
+    family: str,
+    batch: int,
+    key: str,
+    *,
+    marker: str | None = None,
+) -> list[dict[str, object]]:
+    enabled = _sm120_value(
+        family, batch, f"{family}-on", "builtin", {key: True},
+    )
+    if marker is not None:
+        enabled["activation_markers"] = [marker]
+    return [
+        _sm120_value(
+            family, batch, f"{family}-off", "fallback", {key: False},
+        ),
+        enabled,
+    ]
+
+
+SM120_WIDE_QKV_ROUTES: tuple[tuple[str, str, str, dict[str, object]], ...] = (
+    (
+        "wide_qkv-fallback-three-gemm", "fallback", "planar", {},
+    ),
+    (
+        "wide_qkv-strided-batched", "builtin", "planar", {},
+    ),
+    (
+        "wide_qkv-m128-n128-k64-s2-tilelang-planar", "tilelang", "planar",
+        {"m": 128, "n": 128, "k": 64, "stages": 2,
+         "threads": 128, "min_blocks": 3},
+    ),
+    (
+        "wide_qkv-m128-n128-k32-s3-tilelang-planar", "tilelang", "planar",
+        {"m": 128, "n": 128, "k": 32, "stages": 3,
+         "threads": 128, "min_blocks": 3},
+    ),
+    (
+        "wide_qkv-m64-n128-k32-s3-tilelang-planar", "tilelang", "planar",
+        {"m": 64, "n": 128, "k": 32, "stages": 3,
+         "threads": 128, "min_blocks": 3},
+    ),
+    (
+        "wide_qkv-m128-n128-k64-s2-cute-atom2x2-packed", "cute", "packed",
+        {"m": 128, "n": 128, "k": 64, "stages": 2,
+         "threads": 160, "copy_atom": "2x2"},
+    ),
+    (
+        "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed", "cute", "packed",
+        {"m": 128, "n": 128, "k": 64, "stages": 2,
+         "threads": 288, "copy_atom": "4x2"},
+    ),
+)
+
+
+def _sm120_qkv_route_config(candidate_id: str) -> dict[str, object]:
+    if candidate_id == "wide_qkv-fallback-three-gemm":
+        return {
+            "cudaUseQKVGemmAot": False,
+            "cudaUseQKVStridedSm120": False,
+            "cudaWideQKVAotTacticSm120": "disabled",
+        }
+    if candidate_id == "wide_qkv-strided-batched":
+        return {
+            "cudaUseQKVGemmAot": False,
+            "cudaUseQKVStridedSm120": True,
+            "cudaWideQKVAotTacticSm120": "disabled",
+        }
+    return {
+        "cudaUseWideQKV": True,
+        "cudaUseQKVGemmAot": True,
+        "cudaUseQKVStridedSm120": False,
+        "cudaWideQKVAotTacticSm120": candidate_id,
+    }
+
+
+def _sm120_qkv_route_marker(candidate_id: str) -> str | None:
+    if candidate_id == "wide_qkv-fallback-three-gemm":
+        return None
+    if candidate_id == "wide_qkv-strided-batched":
+        return "SM120 backend: strided-batched QKV projection active"
+    return "SM120 backend: wide QKV AOT active, tactic=" + candidate_id
+
+
+def _sm120_packed_fa_id(batch: int) -> str:
+    return f"fa4-b{batch}-s361-h12-d32-tm128-tn96-s1-both16"
+
+
+def _sm120_candidates(
+    family: str, batch: int, gpu_class: str,
+) -> list[dict[str, object]]:
+    keep = _config_candidate(family, batch, f"{family}-keep-incumbent")
+
+    if family == "wide_qkv":
+        keep["output"] = "planar"
+        values = []
+        for candidate_id, implementation, output, parameters in SM120_WIDE_QKV_ROUTES:
+            marker = _sm120_qkv_route_marker(candidate_id)
+            config = _sm120_qkv_route_config(candidate_id)
+            extra: dict[str, object] = {}
+            markers = [marker] if marker else []
+            if output == "packed":
+                packed_fa_id = _sm120_packed_fa_id(batch)
+                config.update({
+                    "cudaUseFusedQKRoPE": True,
+                    "cudaUseFusedQKRoPEHalf2Sm120": False,
+                    "cudaUseBatchSharedRoPE": True,
+                    "cudaUseBatchSharedRoPEUnrolledSm120": False,
+                    "cudaUseFlashAttentionSm120": True,
+                    "cudaFlashAttentionSm120Accum": "both16",
+                    "cudaFlashAttentionAotTacticSm120": packed_fa_id,
+                })
+                markers.append(
+                    "SM120 backend: batch-shared fused Q/K RoPE active"
+                )
+                markers.append(
+                    "SM120 backend: FA4 AOT active, tactic=" + packed_fa_id
+                )
+                extra["supersedes"] = ["fa4"]
+                extra["artifact_dependencies"] = [{
+                    "family": "fa4", "candidate_id": packed_fa_id,
+                }]
+            values.append(_sm120_value(
+                family, batch, candidate_id, implementation,
+                config,
+                output=output,
+                **({"activation_markers": markers} if markers else {}),
+                prelinked_artifact=True,
+                **extra,
+                **parameters,
+            ))
+        return [keep, *values]
+
+    if family == "wide_ffn":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "wide_ffn-off", "fallback",
+                {"cudaUseWideFFNSingleGemm": False},
+            ),
+            _sm120_value(
+                family, batch, "wide_ffn-single-projection", "builtin",
+                {"cudaUseWideFFNSingleGemm": True},
+                activation_markers=[
+                    "SM120 backend: single-wide FFN projection active"
+                ],
+            ),
+        ]
+
+    if family == "fused_residual":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseFusedResidualGemmSm120",
+            marker="SM120 backend: GEMM beta residual fusion active",
+        )]
+
+    if family == "rmsnorm":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "rmsnorm-off", "fallback",
+                {"cudaRMSNormTacticSm120": "disabled"},
+            ),
+            _sm120_value(
+                family, batch, "rmsnorm-ordered-ept3", "builtin",
+                {"cudaRMSNormTacticSm120": "ordered-ept3"},
+                activation_markers=[
+                    "SM120 backend: ordered-EPT3 C384 RMSNorm active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "rmsnorm-one-warp", "builtin",
+                {"cudaRMSNormTacticSm120": "one-warp-exact"},
+                activation_markers=[
+                    "SM120 backend: one-warp C384 RMSNorm active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "rmsnorm-vec8", "builtin",
+                {"cudaRMSNormTacticSm120": "warp4-vec8"},
+                activation_markers=[
+                    "SM120 backend: vec8 C384 RMSNorm active"
+                ],
+            ),
+        ]
+
+    if family == "exact_mask":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseExactMaskElisionSm120",
+            marker="SM120 backend: exact full-board mask preprocessing elided",
+        )]
+
+    if family == "qkv_rope":
+        fused_aot_id = (
+            "qkv-packed-cute-precomputed-rope-static-register-"
+            "both16-epilogue"
+        )
+        reset = {
+            "cudaUseFusedQKRoPE": True,
+            "cudaUseFusedQKRoPEHalf2Sm120": False,
+            "cudaUseBatchSharedRoPE": False,
+            "cudaUseBatchSharedRoPEUnrolledSm120": False,
+            "cudaQKVRopeAotTacticSm120": "disabled",
+        }
+        values = []
+        rope_modes = {
+            "scalar": (
+                {}, "SM120 backend: fused Q/K learnable RoPE active",
+            ),
+            "half2": (
+                {"cudaUseFusedQKRoPEHalf2Sm120": True},
+                "SM120 backend: half2 fused Q/K RoPE active",
+            ),
+            "batch-shared": (
+                {"cudaUseBatchSharedRoPE": True},
+                "SM120 backend: batch-shared fused Q/K RoPE active",
+            ),
+            "batch-shared-unrolled": (
+                {
+                    "cudaUseBatchSharedRoPE": True,
+                    "cudaUseBatchSharedRoPEUnrolledSm120": True,
+                },
+                "SM120 backend: unrolled packed batch-shared fused Q/K RoPE active",
+            ),
+        }
+        legacy_route = "wide_qkv-fallback-three-gemm"
+        legacy_ids = {
+            (legacy_route, "scalar"): "qkv-rope-fused-scalar",
+            (legacy_route, "half2"): "qkv-rope-fused-half2",
+            (legacy_route, "batch-shared"): "qkv-rope-batch-shared",
+            (
+                "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+                "batch-shared-unrolled",
+            ): "qkv-rope-batch-shared-unrolled",
+        }
+        for qkv_id, qkv_implementation, output, _ in SM120_WIDE_QKV_ROUTES:
+            modes = (
+                ("scalar", "half2", "batch-shared")
+                if output == "planar" else
+                ("batch-shared", "batch-shared-unrolled")
+            )
+            for rope_mode in modes:
+                candidate_id = legacy_ids.get(
+                    (qkv_id, rope_mode),
+                    f"qkv-rope-{rope_mode}-with-{qkv_id}",
+                )
+                rope_config, rope_marker = rope_modes[rope_mode]
+                config = {
+                    **reset,
+                    **_sm120_qkv_route_config(qkv_id),
+                    **rope_config,
+                }
+                supersedes = ["wide_qkv"]
+                markers = [rope_marker]
+                if output == "packed":
+                    packed_fa_id = _sm120_packed_fa_id(batch)
+                    config.update({
+                        "cudaUseFlashAttentionSm120": True,
+                        "cudaFlashAttentionSm120Accum": "both16",
+                        "cudaFlashAttentionAotTacticSm120": packed_fa_id,
+                    })
+                    supersedes.append("fa4")
+                    markers.append(
+                        "SM120 backend: FA4 AOT active, tactic=" + packed_fa_id
+                    )
+                qkv_marker = _sm120_qkv_route_marker(qkv_id)
+                if qkv_marker is not None:
+                    markers.insert(0, qkv_marker)
+                artifact_dependencies = []
+                if qkv_implementation in {"tilelang", "cute"}:
+                    artifact_dependencies.append({
+                        "family": "wide_qkv", "candidate_id": qkv_id,
+                    })
+                if output == "packed":
+                    artifact_dependencies.append({
+                        "family": "fa4",
+                        "candidate_id": _sm120_packed_fa_id(batch),
+                    })
+                values.append(_sm120_value(
+                    family, batch, candidate_id, "builtin_bundle", config,
+                    qkv_variant=qkv_id,
+                    rope_variant=rope_mode,
+                    supersedes=supersedes,
+                    artifact_dependencies=artifact_dependencies,
+                    activation_markers=markers,
+                ))
+        values.append(_sm120_value(
+            family, batch, fused_aot_id, "cute",
+            {
+                **reset,
+                "cudaUseWideQKV": True,
+                "cudaUseQKVGemmAot": True,
+                "cudaUseQKVStridedSm120": False,
+                "cudaWideQKVAotTacticSm120": "disabled",
+                "cudaQKVRopeAotTacticSm120": fused_aot_id,
+                "cudaUseFlashAttentionSm120": True,
+                "cudaFlashAttentionSm120Accum": "both16",
+                "cudaFlashAttentionAotTacticSm120":
+                    _sm120_packed_fa_id(batch),
+            },
+            exact_batch_aot=True,
+            packed_output=True,
+            rope_epilogue="fp16-register-fragment",
+            requires_artifact=True,
+            generator="cute_qkv_rope",
+            supersedes=["fa4", "wide_qkv"],
+            artifact_dependencies=[{
+                "family": "fa4",
+                "candidate_id": _sm120_packed_fa_id(batch),
+            }],
+            activation_markers=[
+                "SM120 backend: packed QKV+RoPE AOT active, tactic=" +
+                fused_aot_id,
+                "SM120 backend: FA4 AOT active, tactic=" +
+                _sm120_packed_fa_id(batch),
+            ],
+        ))
+        return [keep, *values]
+
+    if family == "fa4":
+        values = []
+        # Accumulator policy and N tile both changed winners during the 5080
+        # and 5090D histories. They are independent coordinates: every exact
+        # batch must be allowed to rediscover any precision-valid combination.
+        for accumulation in ("fp32", "qk16", "pv16", "both16"):
+            for tile_n in (64, 96, 128):
+                candidate_id = (
+                    f"fa4-b{batch}-s361-h12-d32-tm128-tn{tile_n}-"
+                    f"s1-{accumulation}"
+                )
+                values.append(_sm120_value(
+                    family, batch, candidate_id, "fa4_cute",
+                    {
+                        "cudaUseFlashAttentionSm120": True,
+                        "cudaFlashAttentionSm120Accum": accumulation,
+                        "cudaFlashAttentionAotTacticSm120": candidate_id,
+                    },
+                    seq_len=361, heads=12, head_dim=32, tile_m=128,
+                    tile_n=tile_n, num_stages=1,
+                    accumulation=accumulation,
+                    exact_shape_aot=True, requires_artifact=True,
+                    generator="fa4_cute",
+                    activation_markers=[
+                        "SM120 backend: FA4 AOT active, tactic=" + candidate_id
+                    ],
+                ))
+        values.append(_sm120_value(
+            family, batch, "fa4-official-attention", "fallback",
+            {
+                "cudaUseFlashAttentionSm120": False,
+            },
+        ))
+        return [keep, *values]
+
+    if family == "dual_ffn":
+        values = []
+        cutlass_shared_a_id = (
+            "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2"
+        )
+        values.append(_sm120_value(
+            family, batch, cutlass_shared_a_id, "builtin_cutlass",
+            {
+                "cudaUseFusedFFN": True,
+                "cudaFusedFFNAotTacticSm120": cutlass_shared_a_id,
+            },
+            m=128, n=64, k=32, stages=3, swizzle=2,
+            shared_a=True, dynamic_batch=True,
+            activation_markers=[
+                "SM120 backend: CUTLASS shared-A dual FFN active, tactic=" +
+                cutlass_shared_a_id
+            ],
+        ))
+        native_max_active_clusters = {
+            "rtx5080": 168,
+            "rtx5090d": 340,
+            "sm120": 168,
+        }[gpu_class]
+        # Stage47's accepted 5090D coordinate used grid340. Keep both explicit
+        # persistent-grid limits in every SM120 scan: the plan, not a GPU-name
+        # conditional, chooses the winner and can reproduce either result.
+        for max_active_clusters in dict.fromkeys((native_max_active_clusters, 168, 340)):
+            cute_id = (
+                "dual_ffn-cute-m128-n64x2-k32-ab2-epi4-"
+                f"grid{max_active_clusters}"
+            )
+            values.append(_sm120_value(
+                family, batch, cute_id, "cute",
+                {
+                    "cudaUseFusedFFN": True,
+                    "cudaFusedFFNAotTacticSm120": cute_id,
+                },
+                m=128, n=128, effective_n=64, k=32,
+                ab_stages=2, epilogue_stages=4,
+                max_active_clusters=max_active_clusters,
+                paired_weights=True, swiglu="exp", exact_batch_aot=True,
+                requires_artifact=True, generator="cute_fused_ffn",
+                activation_markers=[
+                    "SM120 backend: fused FFN AOT active, tactic=" + cute_id
+                ],
+            ))
+        shapes = (
+            (128, 64, 32, 2, 3),
+            (64, 64, 32, 2, 4),
+            (128, 64, 32, 3, 2),
+            (64, 64, 32, 3, 2),
+            (128, 64, 64, 2, 1),
+            (64, 64, 64, 2, 2),
+        )
+        original_exp_id = "dual_ffn-m128-n64-k32-s2-mb3-exp"
+        values.append(_sm120_value(
+            family, batch, original_exp_id, "tilelang",
+            {
+                "cudaUseFusedFFN": True,
+                "cudaFusedFFNAotTacticSm120": original_exp_id,
+            },
+            m=128, n=64, k=32, stages=2, threads=128, min_blocks=3,
+            a_fragment_reuse=False, swiglu="exp",
+            prelinked_artifact=True,
+            activation_markers=[
+                "SM120 backend: fused FFN AOT active, tactic=" +
+                original_exp_id
+            ],
+        ))
+        for tile_m, tile_n, tile_k, stages, min_blocks in shapes:
+            candidate_id = (
+                f"dual_ffn-m{tile_m}-n{tile_n}-k{tile_k}-"
+                f"s{stages}-mb{min_blocks}-areuse-exp"
+            )
+            values.append(_sm120_value(
+                family, batch, candidate_id, "tilelang",
+                {
+                    "cudaUseFusedFFN": True,
+                    "cudaFusedFFNAotTacticSm120": candidate_id,
+                },
+                m=tile_m, n=tile_n, k=tile_k, stages=stages,
+                min_blocks=min_blocks, a_fragment_reuse=True, swiglu="exp",
+                prelinked_artifact=True,
+                activation_markers=[
+                    "SM120 backend: fused FFN AOT active, tactic=" + candidate_id
+                ],
+            ))
+        historical_id = "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2"
+        values.append(_sm120_value(
+            family, batch, historical_id, "historical_tilelang",
+            {
+                "cudaUseFusedFFN": True,
+                "cudaFusedFFNAotTacticSm120": historical_id,
+            },
+            m=128, n=64, k=32, stages=2, min_blocks=3,
+            a_fragment_reuse=False, swiglu="tanh_half2",
+            prelinked_artifact=True,
+            activation_markers=[
+                "SM120 backend: fused FFN AOT active, tactic=" + historical_id
+            ],
+        ))
+        values.append(_sm120_value(
+            family, batch, "dual_ffn-fallback-cublas-swiglu", "fallback",
+            {
+                "cudaUseFusedFFN": False,
+                "cudaFusedFFNAotTacticSm120": "disabled",
+            },
+        ))
+        for value in values:
+            if value.get("id") != "dual_ffn-fallback-cublas-swiglu":
+                value["config"]["cudaUseWideFFNSingleGemm"] = False
+                value["overrides_keys"] = ["cudaUseWideFFNSingleGemm"]
+                value["supersedes"] = ["wide_ffn"]
+        return [keep, *values]
+
+    if family == "wide_projection":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "wide-projections-s1-bundle", "builtin_bundle",
+                {
+                    "cudaUseWideFFNSingleGemm": True,
+                    "cudaUseFusedFFN": False,
+                    "cudaFusedFFNAotTacticSm120": "disabled",
+                    "cudaUseWideQKV": False,
+                    "cudaUseQKVGemmAot": False,
+                    "cudaUseQKVStridedSm120": True,
+                    "cudaWideQKVAotTacticSm120": "disabled",
+                    "cudaUseFusedQKRoPE": False,
+                    "cudaUseFusedQKRoPEHalf2Sm120": False,
+                    "cudaUseBatchSharedRoPE": False,
+                    "cudaUseBatchSharedRoPEUnrolledSm120": False,
+                    "cudaQKVRopeAotTacticSm120": "disabled",
+                },
+                supersedes=["wide_qkv", "wide_ffn", "qkv_rope", "dual_ffn"],
+                overrides_keys=[
+                    "cudaUseWideFFNSingleGemm", "cudaUseFusedFFN",
+                    "cudaFusedFFNAotTacticSm120", "cudaUseWideQKV",
+                    "cudaUseQKVGemmAot", "cudaUseQKVStridedSm120",
+                    "cudaWideQKVAotTacticSm120", "cudaUseFusedQKRoPE",
+                    "cudaUseFusedQKRoPEHalf2Sm120",
+                    "cudaUseBatchSharedRoPE",
+                    "cudaUseBatchSharedRoPEUnrolledSm120",
+                    "cudaQKVRopeAotTacticSm120",
+                ],
+                activation_markers=[
+                    "SM120 backend: strided-batched QKV projection active",
+                    "SM120 backend: single-wide FFN projection active",
+                ],
+            ),
+        ]
+
+    if family == "linear2":
+        values = []
+        shapes = (
+            ("linear2-m256-n64-k32-s4-mb1-tilelang-80k", "tilelang", 256, 64, 32, 4, 128, 1, 81920),
+            ("linear2-m128-n128-k32-s2-t128-mb3-tilelang-32k", "tilelang", 128, 128, 32, 2, 128, 3, 32768),
+            ("linear2-m128-n128-k32-s3-t128-mb3-tilelang-49k", "tilelang", 128, 128, 32, 3, 128, 3, 49152),
+            ("linear2-m128-n128-k32-s3-t256-mb3-tilelang-49k", "tilelang", 128, 128, 32, 3, 256, 3, 49152),
+            ("linear2-m128-n128-k32-s4-tilelang-64k", "tilelang", 128, 128, 32, 4, 128, 3, 65536),
+            ("linear2-m128-n128-k64-s2-t128-mb3-tilelang-64k", "tilelang", 128, 128, 64, 2, 128, 3, 65536),
+            ("linear2-m128-n64-k32-s3-t128-mb3-tilelang-36k", "tilelang", 128, 64, 32, 3, 128, 3, 36864),
+            ("linear2-m64-n128-k32-s3-t128-mb4-tilelang-36k", "tilelang", 64, 128, 32, 3, 128, 4, 36864),
+            ("linear2-m128-n128-k32-s3-mb2-tilelang-49k", "tilelang", 128, 128, 32, 3, 128, 2, 49152),
+            ("linear2-m128-n96-k32-s4-tilelang", "tilelang", 128, 96, 32, 4, 128, 3, None),
+            ("linear2-m128-n128-k32-s3-cutlass", "builtin_cutlass", 128, 128, 32, 3, 128, 2, None),
+        )
+        for candidate_id, implementation, tile_m, tile_n, tile_k, stages, threads, min_blocks, smem in shapes:
+            values.append(_sm120_value(
+                family, batch, candidate_id, implementation,
+                {
+                    "cudaUseFusedResidual": True,
+                    "cudaUseFusedResidualGemmSm120": True,
+                    "cudaUseLinear2ResidualAot": True,
+                    "cudaLinear2AotTacticSm120": candidate_id,
+                },
+                m=tile_m, n=tile_n, k=tile_k, stages=stages,
+                threads=threads, min_blocks=min_blocks,
+                dynamic_smem_bytes=smem,
+                exact_batch_runtime=implementation == "builtin_cutlass",
+                prelinked_artifact=implementation == "tilelang",
+                overrides_keys=["cudaUseFusedResidualGemmSm120"],
+                activation_markers=[
+                    "SM120 backend: linear2 residual AOT active, tactic=" + candidate_id
+                ],
+            ))
+        values.append(_sm120_value(
+            family, batch, "linear2-fallback-cublas-beta1", "fallback",
+            {
+                "cudaUseLinear2ResidualAot": False,
+                "cudaLinear2AotTacticSm120": "disabled",
+            },
+        ))
+        return [keep, *values]
+
+    if family == "outproj":
+        values = []
+        shapes = (
+            ("outproj-m128-n128-k32-s3-cutlass", "builtin_cutlass", 128, 128, 32, 3, 128, 2, None),
+            ("outproj-m128-n128-k32-s3-t128-mb3-tilelang-49k", "tilelang", 128, 128, 32, 3, 128, 3, 49152),
+            ("outproj-m128-n128-k32-s4-tilelang-64k", "tilelang", 128, 128, 32, 4, 128, 3, 65536),
+            ("outproj-m128-n128-k64-s2-t128-mb3-tilelang-64k", "tilelang", 128, 128, 64, 2, 128, 3, 65536),
+            ("outproj-m128-n64-k32-s3-t128-mb3-tilelang-36k", "tilelang", 128, 64, 32, 3, 128, 3, 36864),
+            ("outproj-m64-n128-k32-s3-t128-mb4-tilelang-36k", "tilelang", 64, 128, 32, 3, 128, 4, 36864),
+            ("outproj-m128-n128-k32-s3-mb2-tilelang-49k", "tilelang", 128, 128, 32, 3, 128, 2, 49152),
+        )
+        for candidate_id, implementation, tile_m, tile_n, tile_k, stages, threads, min_blocks, smem in shapes:
+            values.append(_sm120_value(
+                family, batch, candidate_id, implementation,
+                {
+                    "cudaUseFusedResidualGemmSm120": True,
+                    "cudaUseOutProjectionResidualAot": True,
+                    "cudaOutProjectionAotTacticSm120": candidate_id,
+                },
+                m=tile_m, n=tile_n, k=tile_k, stages=stages,
+                threads=threads, min_blocks=min_blocks,
+                dynamic_smem_bytes=smem,
+                exact_batch_runtime=implementation == "builtin_cutlass",
+                prelinked_artifact=implementation == "tilelang",
+                overrides_keys=["cudaUseFusedResidualGemmSm120"],
+                activation_markers=[
+                    "SM120 backend: out-projection residual AOT active, tactic=" + candidate_id
+                ],
+            ))
+        values.append(_sm120_value(
+            family, batch, "outproj-fallback-cublas-beta1", "fallback",
+            {
+                "cudaUseOutProjectionResidualAot": False,
+                "cudaOutProjectionAotTacticSm120": "disabled",
+            },
+        ))
+        return [keep, *values]
+
+    if family == "swiglu":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "swiglu-off", "fallback",
+                {
+                    "cudaUseSwiGLU1152Sm120": False,
+                    "cudaUseWideFFNSingleGemm": True,
+                },
+                overrides_keys=["cudaUseWideFFNSingleGemm"],
+                activation_markers=[
+                    "SM120 backend: single-wide FFN projection active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "swiglu-on", "builtin",
+                {
+                    "cudaUseSwiGLU1152Sm120": True,
+                    # The single-projection route owns its own fused SwiGLU
+                    # and bypasses the independent hook below it.
+                    "cudaUseWideFFNSingleGemm": False,
+                },
+                overrides_keys=["cudaUseWideFFNSingleGemm"],
+                activation_markers=[
+                    "SM120 backend: contiguous half8 C1152 SwiGLU active"
+                ],
+            ),
+        ]
+
+    if family == "preconv":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "preconv-off", "fallback",
+                {"cudaOuterProjectionDownTacticSm120": "disabled"},
+            ),
+            _sm120_value(
+                family, batch, "preconv-cutlass-warp64x64", "builtin_cutlass",
+                {"cudaOuterProjectionDownTacticSm120": "warp64x64"},
+                activation_markers=[
+                    "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x64"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "preconv-cutlass-warp64x32", "builtin_cutlass",
+                {"cudaOuterProjectionDownTacticSm120": "warp64x32"},
+                activation_markers=[
+                    "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x32"
+                ],
+            ),
+        ]
+
+    if family == "postconv_bn":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "postconv-off", "fallback",
+                {
+                    "cudaOuterProjectionUpTacticSm120": "disabled",
+                    "cudaUsePostConvBNSiluSm120": False,
+                },
+            ),
+            _sm120_value(
+                family, batch,
+                "outer-projection-cutlass-warp64x64-bundle",
+                "builtin_cutlass",
+                {
+                    "cudaOuterProjectionDownTacticSm120": "warp64x64",
+                    "cudaOuterProjectionUpTacticSm120": "warp64x64",
+                    "cudaUsePostConvBNSiluSm120": False,
+                },
+                supersedes=["preconv"],
+                activation_markers=[
+                    "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x64",
+                    "SM120 backend: C384->C768 outer projection+residual CUTLASS active, tactic=warp64x64",
+                ],
+            ),
+            _sm120_value(
+                family, batch, "postconv-cutlass-warp64x64", "builtin_cutlass",
+                {
+                    "cudaOuterProjectionUpTacticSm120": "warp64x64",
+                    "cudaUsePostConvBNSiluSm120": False,
+                },
+                activation_markers=[
+                    "SM120 backend: C384->C768 outer projection+residual CUTLASS active, tactic=warp64x64"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "postconv-cutlass-warp64x32", "builtin_cutlass",
+                {
+                    "cudaOuterProjectionUpTacticSm120": "warp64x32",
+                    "cudaUsePostConvBNSiluSm120": False,
+                },
+                activation_markers=[
+                    "SM120 backend: C384->C768 outer projection+residual CUTLASS active, tactic=warp64x32"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "postconv-cutlass-bn-silu", "builtin_cutlass",
+                {
+                    "cudaOuterProjectionUpTacticSm120": "disabled",
+                    "cudaUsePostConvBNSiluSm120": True,
+                },
+                activation_markers=[
+                    "SM120 backend: postConv residual + following C768 affine SiLU active"
+                ],
+            ),
+        ]
+
+    if family == "pointwise":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "pointwise-off", "fallback",
+                {"cudaAffineSiluTacticSm120": "disabled"},
+            ),
+            _sm120_value(
+                family, batch, "pointwise-half2", "builtin",
+                {"cudaAffineSiluTacticSm120": "half2"},
+                activation_markers=[
+                    "SM120 backend: half2 C384/C768 affine SiLU active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "pointwise-half2x3", "builtin",
+                {"cudaAffineSiluTacticSm120": "half2x3"},
+                activation_markers=[
+                    "SM120 backend: half2x3 C384/C768 affine SiLU active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "pointwise-flat-vec8-c768", "builtin",
+                {"cudaAffineSiluTacticSm120": "flat-vec8-c768"},
+                activation_markers=[
+                    "SM120 backend: flat vec8 C768 affine SiLU active"
+                ],
+            ),
+        ]
+
+    if family == "l2":
+        values = [_sm120_value(
+            family, batch, "l2-off", "fallback",
+            {
+                "cudaUsePersistingL2Trunk": False,
+                "cudaUsePersistingL2Inner": False,
+            },
+        )]
+        for trunk, inner in ((True, False), (False, True), (True, True)):
+            scope = (
+                "trunk-inner" if trunk and inner else
+                ("trunk" if trunk else "inner")
+            )
+            for ratio in (0.5, 0.75, 1.0):
+                markers = []
+                if trunk:
+                    markers.append("SM120 backend: persisting-L2 C768 trunk active")
+                if inner:
+                    markers.append("SM120 backend: persisting-L2 C384 inner active")
+                values.append(_sm120_value(
+                    family, batch,
+                    f"l2-{scope}-ratio-{str(ratio).replace('.', 'p')}",
+                    "builtin",
+                    {
+                        "cudaUsePersistingL2Trunk": trunk,
+                        "cudaUsePersistingL2Inner": inner,
+                        "cudaPersistingL2HitRatioSm120": ratio,
+                    },
+                    trunk=trunk, inner=inner, hit_ratio=ratio,
+                    actual_grant_limited=True, activation_markers=markers,
+                ))
+        return [keep, *values]
+
+    if family == "weight_sharing":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaShareModelWeights",
+            marker="SM120 backend: per-device model-weight sharing active",
+        )]
+
+    if family == "initial_conv":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "initial-conv-disabled", "fallback",
+                {"cudaInitialConvFrontendPlanSm120": "disabled"},
+            ),
+            _sm120_value(
+                family, batch, "initial-conv-eng45-tile0-stages2", "cudnn_frontend",
+                {"cudaInitialConvFrontendPlanSm120": "eng45-tile0-stages2"},
+                activation_markers=[
+                    "SM120 backend: initial-conv frontend eng45/tile0/stages2 active"
+                ],
+            ),
+            _sm120_value(
+                family, batch,
+                "initial-conv-eng47-k2-2-k6-1-k13-1-k14-0-k22-2",
+                "cudnn_frontend",
+                {"cudaInitialConvFrontendPlanSm120":
+                 "eng47-k2-2-k6-1-k13-1-k14-0-k22-2"},
+                activation_markers=[
+                    "SM120 backend: initial-conv frontend eng47/k2=2/k6=1/k13=1/k14=0/k22=2 active"
+                ],
+            ),
+        ]
+    if family == "initial_global":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseInitialGlobalMatMulAdd",
+            marker="SM120 backend: fused global-feature matmul+broadcast add active",
+        )]
+    if family == "policy_p1":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseFusedPolicyP1",
+            marker="SM120 backend: fused 19x19 policy P1 active",
+        )]
+    if family == "wide_head":
+        return [
+            keep,
+            _sm120_value(
+                family, batch, "wide-head-off", "fallback",
+                {"cudaWideHeadProjectionTacticSm120": "disabled"},
+            ),
+            _sm120_value(
+                family, batch, "wide-head-full-c384", "builtin_cutlass",
+                {
+                    "cudaWideHeadProjectionTacticSm120": "full-c384",
+                    "cudaUseFusedPolicyP1": True,
+                    "cudaUseHeadBNHalfToFloat": True,
+                },
+                activation_markers=[
+                    "SM120 backend: full C384 no-split wide head projection active"
+                ],
+                supersedes=["policy_p1", "head_bn"],
+            ),
+            _sm120_value(
+                family, batch, "wide-head-partial-c288-g1-v1", "builtin_cutlass",
+                {
+                    "cudaWideHeadProjectionTacticSm120": "partial-c288-g1-v1",
+                    "cudaUseFusedPolicyP1": True,
+                    "cudaUseHeadBNHalfToFloat": True,
+                },
+                activation_markers=[
+                    "SM120 backend: partial C288 no-split g1+v1 head active"
+                ],
+                supersedes=["policy_p1", "head_bn"],
+            ),
+        ]
+    if family == "head_bn":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseHeadBNHalfToFloat",
+            marker="SM120 backend: head BN direct FP32 output active",
+        )]
+    if family == "value_terminal":
+        return [keep, *_sm120_toggle(
+            family, batch, "cudaUseFusedValueTerminalSm120",
+            marker="SM120 backend: fused value/score terminal active",
+        )]
+    raise ValueError(f"unsupported SM120 tactic family: {family}")
+
+
+def default_candidates(
+    architecture: str, family: str, batch: int, gpu_class: str,
+) -> list[dict[str, object]]:
     if architecture == "sm89":
         return _sm89_candidates(family, batch)
+    if architecture == "sm120":
+        return _sm120_candidates(family, batch, gpu_class)
     raise ValueError(f"unsupported architecture: {architecture}")
 
 
@@ -645,7 +1975,7 @@ def load_candidate_files(paths: Sequence[str]) -> list[dict[str, object]]:
                 raise ValueError(f"candidate entry is not an object: {path}")
             family = entry.get("family")
             value = entry.get("candidate", entry)
-            if family not in FAMILIES or not isinstance(value, dict):
+            if family not in ALL_FAMILIES or not isinstance(value, dict):
                 raise ValueError(f"candidate entry needs family and candidate: {path}")
             batches = entry.get("batches")
             if batches is None:
@@ -690,28 +2020,83 @@ def materialize_space(
                 f"architecture: {compute_capability} != {expected_compute_capability}"
             )
     extra = load_candidate_files(extra_paths)
+    target_families = architecture_families(architecture)
     batch_payloads: list[dict[str, object]] = []
     for batch in sorted(set(int(item) for item in batches)):
         if batch < 1:
             raise ValueError("batch values must be positive")
         batch_space: dict[str, object] = {"batch": batch, "tokens": batch * 361}
-        for family in FAMILIES:
-            values = default_candidates(architecture, family, batch)
+        for family in target_families:
+            values = default_candidates(architecture, family, batch, gpu_class)
             for entry in extra:
                 entry_batches = entry["batches"]
                 applies = "all" in entry_batches or batch in entry_batches
                 if applies and entry["family"] == family:
                     values.append(entry["candidate"])
             values = deduplicate_candidates(values)
+            runtime_keys = (
+                SM89_RUNTIME_CONFIG_KEYS
+                if architecture == "sm89" else SM120_RUNTIME_CONFIG_KEYS
+            )
             for value in values:
-                unknown = sorted(set(candidate_config(family, value)) - SM89_RUNTIME_CONFIG_KEYS)
+                unknown = sorted(set(candidate_config(family, value)) - runtime_keys)
                 if unknown:
                     raise ValueError(
-                        f"candidate uses unparsed SM89 config keys: {family}/B{batch}/"
+                        f"candidate uses unparsed {architecture.upper()} config keys: "
+                        f"{family}/B{batch}/"
                         f"{value.get('id')}: {unknown}"
                     )
+                validate_candidate_execution_contract(
+                    architecture, family, batch, value,
+                )
             batch_space[family] = values
+        validate_cross_family_config_ownership(
+            architecture, batch, batch_space,
+        )
+        for family in target_families:
+            for value in batch_space[family]:
+                dependencies = value.get("artifact_dependencies", [])
+                if not isinstance(dependencies, list):
+                    raise ValueError(
+                        f"{architecture}/{family}/B{batch}/{value.get('id')} "
+                        "has malformed artifact_dependencies"
+                    )
+                for dependency in dependencies:
+                    if not isinstance(dependency, dict):
+                        raise ValueError("artifact dependency is not an object")
+                    dependency_family = str(dependency.get("family", ""))
+                    dependency_id = str(dependency.get("candidate_id", ""))
+                    if dependency_family not in target_families:
+                        raise ValueError(
+                            f"artifact dependency has unknown family: {dependency}"
+                        )
+                    dependency_candidates = {
+                        str(item["id"]): item
+                        for item in batch_space[dependency_family]
+                    }
+                    target = dependency_candidates.get(dependency_id)
+                    if target is None or not target.get("requires_artifact"):
+                        raise ValueError(
+                            "artifact dependency does not name a generated "
+                            f"candidate: {dependency}"
+                        )
         batch_payloads.append(batch_space)
+    runtime_keys = (
+        SM89_RUNTIME_CONFIG_KEYS
+        if architecture == "sm89" else SM120_RUNTIME_CONFIG_KEYS
+    )
+    positive_history_closure = validate_positive_history_closure(
+        pathlib.Path(__file__).resolve().parents[1],
+        architecture,
+        {
+            int(item["batch"]): {
+                family: item[family]
+                for family in target_families
+            }
+            for item in batch_payloads
+        },
+        runtime_keys,
+    )
     topology = {
         "streams": streams,
         "device_ordinals": [device] * streams,
@@ -729,7 +2114,7 @@ def materialize_space(
         "cuda_device_properties_at_space_generation": device_properties,
         "fixed_board": [19, 19],
         "precision": ARCHITECTURES[architecture]["precision"],
-        "families": list(FAMILIES),
+        "families": list(target_families),
         "streams": streams,
         "topology": topology,
         "batch_policy": "only explicitly materialized batches; no anchor or plateau pruning",
@@ -740,43 +2125,38 @@ def materialize_space(
             "batch_13_has_no_anchor_or_special_case": True,
             "external_candidate_manifests_are_part_of_the_search_space": True,
             "aot_artifacts_must_be_replayed_or_present_before_production_use": True,
+            "historically_positive_routes_require_four_link_closure": True,
         },
+        "positive_history_closure": positive_history_closure,
         "history_recipe": {
-            "sources": [
-                "/workspace/results/4090/HISTORY.md",
-                "/workspace/4090-optimization-portability.md",
-            ],
-            "execution_order": list(FAMILIES),
+            "sources": (
+                [
+                    "/workspace/results/4090/HISTORY.md",
+                    "/workspace/4090-optimization-portability.md",
+                ]
+                if architecture == "sm89" else
+                [
+                    "SM89_SM120_AUTOTUNE_HANDOVER_20260807.md",
+                    "retained SM120 optimization commits",
+                ]
+            ),
+            "execution_order": list(target_families),
             "search_semantics": (
                 "accepted-history-seeded coordinate search with accumulated "
                 "winners and a non-regressing incumbent at every stage"
             ),
-            "fixed_gemm_aot": {
-                "families": ["dual_ffn", "linear2"],
-                "threadblock_m": [64, 128],
-                "threadblock_n": [64, 128],
-                "pipeline_stages": [3, 4, 5],
-                "policy": "pruned neighborhood, not full Cartesian product",
-            },
-            "flash_attention": {
-                "linked_tile_m": 64,
-                "linked_tile_n": 96,
-                "warps": [4],
-                "accumulation": ["fp32", "both16"],
-                "runtime_num_sms": True,
-            },
-            "qkv_rope": {
-                "paths": ["official", "fused", "precomputed", "gemm-epilogue", "gemm-split"],
-                "batch_groups": [2, 3, 4, 7, 13],
-                "plain_variants": [0, 1, 2],
-            },
-            "pointwise": {"c768_vector_width": 8, "c384_vector_width": 4},
-            "policy_p1": {"block_xy": [96, 5]},
-            "persisting_l2": {
-                "scopes": ["off", "trunk", "inner", "trunk-inner"],
-                "hit_ratio": [0.5, 0.75, 1.0],
-            },
-            "initial_conv": {"engine": 45, "tile_size": 0, "stages": 2},
+            "positive_history_contract_sha256": positive_history_closure[
+                "contract_sha256"
+            ],
+            "positive_history_record_ids": positive_history_closure[
+                "record_ids"
+            ],
+            "candidate_payload_is_authoritative": True,
+            "notes": [
+                "No batch is an anchor or a privileged specialization.",
+                "Every listed historical route has backend, scan, activation, and plan-apply proofs.",
+                "Candidate axes are read from each exact-batch payload; this metadata does not duplicate them.",
+            ],
         },
         "batches": batch_payloads,
         "candidate_files": [str(pathlib.Path(path).resolve()) for path in extra_paths],
@@ -787,16 +2167,21 @@ def make_generation_plan(
     space_path: pathlib.Path,
     *,
     phase: str = "full",
-    families: Sequence[str] = FAMILIES,
+    families: Sequence[str] | None = None,
 ) -> dict[str, object]:
     space = read_json(space_path)
     if space.get("schema") != SCHEMA or space.get("kind") != SPACE_KIND:
-        raise ValueError("generation-plan requires a portable tactic search space")
+        raise ValueError("generation-plan requires a CUDA tactic search space")
     if phase not in ("seed", "full"):
         raise ValueError("generation phase must be seed or full")
-    requested = list(dict.fromkeys(families))
-    if not requested or any(family not in FAMILIES for family in requested):
+    target_families = space_families(space)
+    requested = list(dict.fromkeys(families or target_families))
+    if not requested or any(family not in target_families for family in requested):
         raise ValueError(f"invalid generation families: {requested}")
+    closure = space.get("positive_history_closure")
+    if not isinstance(closure, dict) or not closure.get("complete"):
+        raise ValueError("search space lacks a complete positive-history closure")
+    complete = phase == "full" and requested == list(target_families)
     tasks: list[dict[str, object]] = []
     coverage: dict[str, dict[str, int]] = {family: {} for family in requested}
     for batch, batch_space in sorted(space_batches(space).items()):
@@ -832,11 +2217,12 @@ def make_generation_plan(
                 })
     return {
         "schema": 1,
-        "kind": "portable-tactic-generation-plan",
+        "kind": "cuda-tactic-generation-plan",
         "generated_utc": utc_now(),
         "phase": phase,
-        "complete_history_coverage": phase == "full",
-        "eligible_for_whole_graph_scan": phase == "full",
+        "complete_history_coverage": complete,
+        "eligible_for_whole_graph_scan": complete,
+        "positive_history_closure": closure,
         "source_space": str(space_path.resolve()),
         "space_sha256": sha256_file(space_path),
         "architecture": space["architecture"],
@@ -867,6 +2253,126 @@ def read_json(path: pathlib.Path) -> dict[str, object]:
     return payload
 
 
+def _build_sm120_coordinate_artifact_bundle(
+    space_path: pathlib.Path,
+    space: dict[str, object],
+    binary: pathlib.Path,
+    manifest_path: pathlib.Path,
+) -> dict[str, object]:
+    """Normalize the all-family SM120 fat build into the common proof schema."""
+    manifest = read_json(manifest_path)
+    if (
+        manifest.get("kind") != "sm120-coordinate-fat-bundle" or
+        not manifest.get("complete")
+    ):
+        raise ValueError(f"incomplete SM120 coordinate bundle: {manifest_path}")
+    if manifest.get("space_sha256") != sha256_file(space_path):
+        raise ValueError("SM120 coordinate bundle search-space hash mismatch")
+    if manifest.get("binary_sha256") != sha256_file(binary):
+        raise ValueError("SM120 coordinate bundle does not prove the selected binary")
+    configure = manifest.get("commands", {}).get("configure", [])
+    if (
+        not isinstance(configure, list) or
+        "-DKATAGO_CUDA_ARCHITECTURES=120" not in configure
+    ):
+        raise ValueError("SM120 coordinate bundle lacks an exact sm120 build command")
+    expected = {
+        (family, batch, str(value["id"])): value
+        for batch in sorted(space_batches(space))
+        for family in space_families(space)
+        for value in candidate_map(space, family, batch).values()
+        if value.get("requires_artifact")
+    }
+    nm = subprocess.run(
+        ["nm", "-a", str(binary)], text=True, capture_output=True, check=False,
+    )
+    if nm.returncode != 0:
+        raise ValueError(f"nm could not inspect linked binary: {nm.stderr.strip()}")
+    checked: dict[tuple[str, int, str], dict[str, object]] = {}
+    raw_entries = manifest.get("entries", [])
+    if not isinstance(raw_entries, list):
+        raise ValueError("SM120 coordinate bundle entries must be a list")
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            raise ValueError("SM120 coordinate bundle contains a non-object entry")
+        key = (
+            str(item.get("family")), int(item.get("batch", -1)),
+            str(item.get("candidate_id")),
+        )
+        if key not in expected:
+            raise ValueError(f"unexpected SM120 coordinate artifact: {key}")
+        if key in checked:
+            raise ValueError(f"duplicate SM120 coordinate artifact: {key}")
+        candidate = item.get("candidate")
+        if (
+            not isinstance(candidate, dict) or
+            artifact_candidate_identity(candidate) !=
+                artifact_candidate_identity(expected[key])
+        ):
+            raise ValueError(f"SM120 coordinate candidate drift: {key}")
+        files: dict[str, dict[str, object]] = {}
+        for name in ("source", "metadata"):
+            path_text = item.get(name)
+            recorded_hash = item.get(f"{name}_sha256")
+            if not path_text or not recorded_hash:
+                raise ValueError(f"SM120 coordinate artifact lacks {name}: {key}")
+            path = pathlib.Path(str(path_text)).resolve()
+            if not path.is_file() or sha256_file(path) != recorded_hash:
+                raise ValueError(f"SM120 coordinate {name} hash mismatch: {key}")
+            files[name] = {"path": str(path), "sha256": recorded_hash}
+        object_hash = item.get("object_sha256")
+        if object_hash is not None:
+            object_path = pathlib.Path(str(item.get("object", ""))).resolve()
+            if not object_path.is_file() or sha256_file(object_path) != object_hash:
+                raise ValueError(f"SM120 coordinate object hash mismatch: {key}")
+            files["object"] = {"path": str(object_path), "sha256": object_hash}
+        launch_symbol = str(item.get("launch_symbol", ""))
+        if not launch_symbol or launch_symbol not in nm.stdout:
+            raise ValueError(f"SM120 coordinate launcher is not linked: {key}")
+        checked[key] = {
+            "family": key[0],
+            "batch": key[1],
+            "candidate_id": key[2],
+            "status": "linked",
+            "launch_symbol": launch_symbol,
+            "source_sha256": item["source_sha256"],
+            "object_sha256": object_hash,
+            "metadata_sha256": item["metadata_sha256"],
+            "files": files,
+            "correctness": None,
+            "generation_command": item.get("generation_command"),
+        }
+    missing = sorted(set(expected) - set(checked))
+    if missing:
+        preview = ", ".join(f"{f}/B{b}/{c}" for f, b, c in missing[:8])
+        raise ValueError(
+            f"SM120 coordinate bundle is missing {len(missing)} entries: {preview}"
+        )
+    closure = space["positive_history_closure"]
+    return {
+        "schema": SCHEMA,
+        "kind": ARTIFACT_BUNDLE_KIND,
+        "generated_utc": utc_now(),
+        "complete_history_coverage": True,
+        "positive_history_closure": closure,
+        "space": str(space_path.resolve()),
+        "space_sha256": sha256_file(space_path),
+        "architecture": space["architecture"],
+        "gpu_class": space["gpu_class"],
+        "linked_binary": str(binary.resolve()),
+        "linked_binary_sha256": sha256_file(binary),
+        "link_proof": "every generated extern-C launch symbol is present in nm -a output",
+        "source_manifests": [{
+            "path": str(manifest_path.resolve()),
+            "sha256": sha256_file(manifest_path),
+            "kind": "sm120-coordinate-fat-bundle",
+            "entry_count": len(checked),
+            "configure_command": configure,
+        }],
+        "entries": [checked[key] for key in sorted(checked)],
+    }
+
+
 def build_artifact_bundle(
     space_path: pathlib.Path,
     binary: pathlib.Path,
@@ -875,14 +2381,25 @@ def build_artifact_bundle(
     """Combine generated family manifests and prove their launchers are linked."""
     space = read_json(space_path)
     if space.get("schema") != SCHEMA or space.get("kind") != SPACE_KIND:
-        raise ValueError("artifact-bundle requires a portable tactic search space")
+        raise ValueError("artifact-bundle requires a CUDA tactic search space")
+    closure = space.get("positive_history_closure")
+    if not isinstance(closure, dict) or not closure.get("complete"):
+        raise ValueError("search space lacks a complete positive-history closure")
     if not binary.is_file():
         raise ValueError(f"linked binary does not exist: {binary}")
+    if len(manifest_paths) == 1:
+        manifest_kind = read_json(manifest_paths[0]).get("kind")
+        if manifest_kind == "sm120-coordinate-fat-bundle":
+            if space.get("architecture") != "sm120":
+                raise ValueError("SM120 coordinate bundle used with a non-SM120 space")
+            return _build_sm120_coordinate_artifact_bundle(
+                space_path, space, binary, manifest_paths[0],
+            )
     space_sha256 = sha256_file(space_path)
     expected = {
         (family, batch, str(value["id"])): value
         for batch in sorted(space_batches(space))
-        for family in FAMILIES
+        for family in space_families(space)
         for value in candidate_map(space, family, batch).values()
         if value.get("requires_artifact")
     }
@@ -898,7 +2415,7 @@ def build_artifact_bundle(
     for manifest_path in manifest_paths:
         manifest = read_json(manifest_path)
         family = str(manifest.get("family"))
-        if family not in FAMILIES or not manifest.get("complete"):
+        if family not in space_families(space) or not manifest.get("complete"):
             raise ValueError(f"incomplete or unsupported generation manifest: {manifest_path}")
         manifest_space_sha256 = str(manifest.get("space_sha256", ""))
         space_binding: dict[str, object] = {
@@ -995,11 +2512,18 @@ def build_artifact_bundle(
             ):
                 raise ValueError(f"generated artifact was not verified on the target architecture: {key}")
             compile_command = item.get("compile_command")
-            if not isinstance(compile_command, list) or "-arch=sm_89" not in compile_command:
-                raise ValueError(f"generated artifact lacks an SM89 compile command: {key}")
+            expected_arch = nvcc_arch_flag(space.get("compute_capability"))
+            if (
+                not isinstance(compile_command, list)
+                or expected_arch not in compile_command
+            ):
+                raise ValueError(
+                    "generated artifact compile command does not target "
+                    f"{space.get('architecture')}: {key}"
+                )
             correctness = metadata.get("correctness_against_torch")
-            if not isinstance(correctness, dict):
-                raise ValueError(f"generated artifact lacks correctness evidence: {key}")
+            if correctness is not None and not isinstance(correctness, dict):
+                raise ValueError(f"generated artifact has malformed correctness evidence: {key}")
             entries[key] = {
                 "family": family,
                 "batch": key[1],
@@ -1011,7 +2535,10 @@ def build_artifact_bundle(
                 "metadata_sha256": item["metadata_sha256"],
                 "compile_command": compile_command,
                 "files": checked_files,
-                "correctness": {"status": "passed", **correctness},
+                "correctness": (
+                    {"status": "passed", **correctness}
+                    if isinstance(correctness, dict) else None
+                ),
                 "generation_environment": generation_environment,
                 "generation_command": metadata.get("generation_command"),
             }
@@ -1026,6 +2553,7 @@ def build_artifact_bundle(
         "kind": ARTIFACT_BUNDLE_KIND,
         "generated_utc": utc_now(),
         "complete_history_coverage": True,
+        "positive_history_closure": closure,
         "space": str(space_path.resolve()),
         "space_sha256": space_sha256,
         "architecture": space["architecture"],
@@ -1049,9 +2577,19 @@ def validate_artifact_bundle(
     """Verify auditable generation/link evidence for every selected AOT entry."""
     bundle = read_json(bundle_path)
     if bundle.get("schema") != SCHEMA or bundle.get("kind") != ARTIFACT_BUNDLE_KIND:
-        raise ValueError("--artifact-bundle is not a portable tactic artifact bundle")
+        raise ValueError("--artifact-bundle is not a CUDA tactic artifact bundle")
     if not bundle.get("complete_history_coverage", False):
         raise ValueError("artifact bundle is not a complete full-history generation")
+    space_closure = space.get("positive_history_closure")
+    bundle_closure = bundle.get("positive_history_closure")
+    if (
+        not isinstance(space_closure, dict) or
+        not space_closure.get("complete") or
+        not isinstance(bundle_closure, dict) or
+        bundle_closure.get("contract_sha256") != space_closure.get("contract_sha256") or
+        bundle_closure.get("record_ids") != space_closure.get("record_ids")
+    ):
+        raise ValueError("artifact bundle positive-history closure differs from --space")
     if bundle.get("space_sha256") != sha256_file(space_path):
         raise ValueError("artifact bundle search-space hash does not match --space")
     if bundle.get("architecture") != space.get("architecture"):
@@ -1108,7 +2646,7 @@ def space_batches(space: dict[str, object]) -> dict[int, dict[str, object]]:
 
 
 def candidate_map(space: dict[str, object], family: str, batch: int) -> dict[str, dict[str, object]]:
-    if family not in FAMILIES:
+    if family not in space_families(space):
         raise ValueError(f"unsupported tactic family: {family}")
     batch_space = space_batches(space).get(batch)
     if batch_space is None:
@@ -1134,18 +2672,231 @@ def candidate_config(family: str, value: dict[str, object]) -> dict[str, object]
 
 
 def tactic_overrides(family: str, value: dict[str, object]) -> dict[str, object]:
-    # ``family`` is currently used for validation/documentation.  Keeping the
-    # conversion in one place lets final-migration add a new AOT registry key
-    # without changing scan, plan, or apply semantics.
-    if family not in FAMILIES:
+    if family not in ALL_FAMILIES:
         raise ValueError(f"unsupported tactic family: {family}")
-    config = dict(candidate_config(family, value))
-    # Older materialized spaces predate this explicit dependency. Every
-    # residual linear2 implementation (compiled or generated) accumulates into
-    # trunkBuf and therefore must select the fused-residual control flow.
-    if family == "linear2" and value.get("id") != "linear2-fallback":
-        config["cudaUseFusedResidual"] = True
-    return config
+    return dict(candidate_config(family, value))
+
+
+def validate_candidate_execution_contract(
+    architecture: str,
+    family: str,
+    batch: int,
+    value: dict[str, object],
+) -> None:
+    """Reject scanner entries that cannot close the runtime/plan loop."""
+    candidate_id = str(value.get("id", ""))
+    config = candidate_config(family, value)
+    if tactic_overrides(family, value) != config:
+        raise ValueError(
+            f"plan apply loses config for {architecture}/{family}/B{batch}/"
+            f"{candidate_id}"
+        )
+    supersedes = value.get("supersedes", [])
+    if not isinstance(supersedes, list) or not all(
+        isinstance(item, str) and item for item in supersedes
+    ):
+        raise ValueError(
+            f"{architecture}/{family}/B{batch}/{candidate_id} has malformed "
+            "supersedes metadata"
+        )
+    family_order = architecture_families(architecture)
+    for superseded in supersedes:
+        if superseded not in family_order or family_order.index(superseded) >= family_order.index(family):
+            raise ValueError(
+                f"{architecture}/{family}/B{batch}/{candidate_id} may only "
+                f"supersede an earlier family, got {superseded}"
+            )
+    overrides_keys = value.get("overrides_keys", [])
+    if not isinstance(overrides_keys, list) or not all(
+        isinstance(item, str) and item for item in overrides_keys
+    ) or len(set(overrides_keys)) != len(overrides_keys):
+        raise ValueError(
+            f"{architecture}/{family}/B{batch}/{candidate_id} has malformed "
+            "overrides_keys metadata"
+        )
+    unknown_overrides = sorted(set(overrides_keys) - set(config))
+    if unknown_overrides:
+        raise ValueError(
+            f"{architecture}/{family}/B{batch}/{candidate_id} declares config "
+            f"keys it does not apply: {unknown_overrides}"
+        )
+    active = any(item is True for item in config.values()) or any(
+        isinstance(item, str) and item not in {"", "disabled", "auto"}
+        for item in config.values()
+    ) or any(
+        isinstance(item, int) and not isinstance(item, bool) and
+        ((key == "cudaPlainQKVVariantSm89" and item > 0) or
+         (key == "cudaRoPEBatchGroupSm89" and item > 1))
+        for key, item in config.items()
+    )
+    if active and not activation_markers(value):
+        raise ValueError(
+            f"active candidate lacks runtime activation evidence: "
+            f"{architecture}/{family}/B{batch}/{candidate_id}"
+        )
+    if value.get("requires_artifact") and not value.get("generator"):
+        raise ValueError(
+            f"AOT candidate lacks a generator mapping: "
+            f"{architecture}/{family}/B{batch}/{candidate_id}"
+        )
+
+
+def candidate_compatibility(
+    value: dict[str, object],
+    selected: dict[str, dict[str, object]],
+) -> tuple[bool, str | None]:
+    """Check declarative cross-family requirements for one coordinate.
+
+    Requirements use canonical family fields, for example
+    ``{"wide_qkv.output": "packed"}``. An incompatible candidate is explicit
+    scan evidence, not a silently omitted candidate and not a failed kernel.
+    """
+    requirements = value.get("requires", {})
+    if not isinstance(requirements, dict):
+        return False, "candidate.requires is not an object"
+    for path, expected in requirements.items():
+        if not isinstance(path, str) or "." not in path:
+            return False, f"invalid requirement path: {path!r}"
+        family, field = path.split(".", 1)
+        current = selected.get(family)
+        if current is None:
+            return False, f"requirement refers to unselected family: {family}"
+        actual = current.get(field)
+        if actual != expected:
+            return False, f"requires {path}={expected}, current={actual}"
+    return True, None
+
+
+def effective_candidate_map(
+    selected: dict[str, dict[str, object]],
+) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
+    """Resolve explicit whole-boundary bundles in architecture family order."""
+    effective: dict[str, dict[str, object]] = {}
+    superseded_by: dict[str, str] = {}
+    for family, value in selected.items():
+        supersedes = value.get("supersedes", [])
+        if not isinstance(supersedes, list):
+            raise ValueError(f"candidate {value.get('id')} has malformed supersedes")
+        for previous in supersedes:
+            effective.pop(str(previous), None)
+            superseded_by[str(previous)] = family
+        effective[family] = value
+    return effective, superseded_by
+
+
+def resolve_candidate_config_state(
+    selected: dict[str, dict[str, object]],
+) -> tuple[
+    dict[str, dict[str, object]], dict[str, str], dict[str, object],
+    dict[str, dict[str, str]],
+]:
+    """Resolve bundles and explicit partial-key ownership in family order."""
+    effective, superseded_by = effective_candidate_map(selected)
+    applied: dict[str, object] = {}
+    owners: dict[str, str] = {}
+    overridden_by: dict[str, dict[str, str]] = {}
+    for family, value in selected.items():
+        supersedes = set(value.get("supersedes", []))
+        overrides_keys = set(value.get("overrides_keys", []))
+        for key, item in tactic_overrides(family, value).items():
+            previous = owners.get(key)
+            if previous is not None and previous != family:
+                if previous not in supersedes and key not in overrides_keys:
+                    raise ValueError(
+                        "selected family configs have an undeclared ownership "
+                        f"change: {previous}->{family}/{key}"
+                    )
+                overridden_by.setdefault(previous, {})[key] = family
+            applied[key] = item
+            owners[key] = family
+    for family, value in effective.items():
+        for key, expected_value in tactic_overrides(family, value).items():
+            if applied.get(key) != expected_value:
+                owner = overridden_by.get(family, {}).get(key)
+                if owner is None:
+                    raise ValueError(
+                        "selected family configs conflict after plan apply: "
+                        f"{family}/{key}={expected_value!r}, "
+                        f"effective={applied.get(key)!r}"
+                    )
+    return effective, superseded_by, applied, overridden_by
+
+
+def validate_cross_family_config_ownership(
+    architecture: str,
+    batch: int,
+    batch_space: dict[str, object],
+) -> None:
+    """Require every cross-family config-key owner change to be declared."""
+    prior_owners: dict[str, set[str]] = {}
+    for family in architecture_families(architecture):
+        values = batch_space.get(family)
+        if not isinstance(values, list):
+            raise ValueError(f"missing candidate list for {family}/B{batch}")
+        for value in values:
+            if not isinstance(value, dict):
+                raise ValueError(f"malformed candidate for {family}/B{batch}")
+            supersedes = set(value.get("supersedes", []))
+            overrides_keys = set(value.get("overrides_keys", []))
+            for key in candidate_config(family, value):
+                owners = prior_owners.get(key, set())
+                if (
+                    owners and key not in overrides_keys and
+                    not owners.issubset(supersedes)
+                ):
+                    raise ValueError(
+                        "cross-family config ownership is implicit: "
+                        f"{architecture}/{family}/B{batch}/{value.get('id')}/"
+                        f"{key}, earlier owners={sorted(owners)}"
+                    )
+            for key in overrides_keys:
+                if not prior_owners.get(key):
+                    raise ValueError(
+                        "candidate declares a partial-key override without an "
+                        f"earlier owner: {architecture}/{family}/B{batch}/"
+                        f"{value.get('id')}/{key}"
+                    )
+        for value in values:
+            assert isinstance(value, dict)
+            for key in candidate_config(family, value):
+                prior_owners.setdefault(key, set()).add(family)
+
+
+def activation_markers(value: dict[str, object]) -> list[str]:
+    markers = value.get("activation_markers", [])
+    if not isinstance(markers, list) or not all(
+        isinstance(marker, str) and marker for marker in markers
+    ):
+        raise ValueError(
+            f"candidate {value.get('id')} has malformed activation markers"
+        )
+    return markers
+
+
+def effective_activation_markers(
+    value: dict[str, object], overridden_keys: Iterable[str] = (),
+) -> list[str]:
+    """Drop only markers for config keys explicitly owned by a later family."""
+    ignored = set(overridden_keys)
+    return [
+        marker for marker in activation_markers(value)
+        if not any(key in marker for key in ignored)
+    ]
+
+
+def require_activation_markers(
+    value: dict[str, object], output: str,
+    overridden_keys: Iterable[str] = (),
+) -> None:
+    missing = [
+        marker for marker in effective_activation_markers(value, overridden_keys)
+        if marker not in output
+    ]
+    if missing:
+        raise RuntimeError(
+            f"requested tactic {value.get('id')} did not acknowledge activation: "
+            + "; ".join(missing)
+        )
 
 
 def topology_overrides(
@@ -1165,9 +2916,14 @@ def topology_overrides(
             extra = topology.get("config_overrides", {})
             if isinstance(extra, dict):
                 values.update(extra)
-    # Keep architecture explicit in manifests, but this branch only owns SM89.
     if architecture not in ARCHITECTURES:
         raise ValueError(f"unsupported architecture: {architecture}")
+    if architecture == "sm89":
+        values["cudaSm89Backend"] = True
+        values["cudaSm89Forward"] = True
+    if architecture == "sm120":
+        values["cudaSm120Backend"] = True
+        values["cudaPersistingL2StreamsSm120"] = streams
     return values
 
 
@@ -1180,7 +2936,8 @@ def combined_overrides(
     value: dict[str, object],
     extra: str | None = None,
 ) -> dict[str, object]:
-    result = parse_key_values(extra)
+    result = runtime_tactic_baseline(architecture)
+    result.update(parse_key_values(extra))
     result.update(topology_overrides(architecture, device, streams, space))
     result.update(tactic_overrides(family, value))
     return result
@@ -1373,7 +3130,9 @@ def _compile_metadata(
             "CUTLASS_DIR", "CUDA_TOOLKIT_ROOT_DIR", "CUDNN_INCLUDE_DIR",
             "CUDNN_LIBRARY", "USE_BACKEND",
         }
-        prefixes = ("CMAKE_CUDA_", "CMAKE_CXX_", "CUDA_", "CUDNN_", "SM89_")
+        prefixes = (
+            "CMAKE_CUDA_", "CMAKE_CXX_", "CUDA_", "CUDNN_", "SM89_", "SM120_",
+        )
         cache: dict[str, str] = {}
         for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line or line.startswith("#") or "=" not in line:
@@ -1539,18 +3298,28 @@ def build_plan(
 ) -> dict[str, object]:
     space = read_json(space_path)
     if space.get("schema") != SCHEMA or space.get("kind") != SPACE_KIND:
-        raise ValueError("plan requires a portable-tactic-search-space schema-1 file")
+        raise ValueError("plan requires a cuda-tactic-search-space schema-1 file")
+    positive_history_closure = space.get("positive_history_closure")
+    if (
+        not isinstance(positive_history_closure, dict) or
+        not positive_history_closure.get("complete")
+    ):
+        raise ValueError("search space lacks a complete positive-history closure")
     architecture = str(space.get("architecture"))
     gpu_class = str(space.get("gpu_class"))
     if architecture not in ARCHITECTURES:
         raise ValueError(f"unknown architecture in search space: {architecture}")
     validate_gpu_class(architecture, gpu_class)
-    requested_families = list(dict.fromkeys(families))
-    if not requested_families or any(family not in FAMILIES for family in requested_families):
-        raise ValueError(f"invalid tactic families: {requested_families}")
-    required_families = [
-        str(item) for item in space.get("families", FAMILIES)
+    target_families = space_families(space)
+    requested_set = set(families)
+    if not requested_set or any(
+        family not in target_families for family in requested_set
+    ):
+        raise ValueError(f"invalid tactic families: {list(families)}")
+    requested_families = [
+        family for family in target_families if family in requested_set
     ]
+    required_families = list(target_families)
     unscanned_families = sorted(set(required_families) - set(requested_families))
     requested_batches = sorted(set(int(item) for item in batches))
     expected_streams = int(space.get("streams", -1))
@@ -1587,7 +3356,9 @@ def build_plan(
         if isinstance(payload.get("provenance"), dict):
             provenance.append(payload["provenance"])
         payload_family = payload.get("family")
-        if payload_family is not None and payload_family not in requested_families:
+        # A multi-family scan records an empty top-level family.  Treat that
+        # the same as null so its per-row family labels are still consumed.
+        if payload_family not in (None, "") and payload_family not in requested_families:
             continue
         rows = payload.get("rows", [])
         if not isinstance(rows, list):
@@ -1617,11 +3388,15 @@ def build_plan(
         family_coverage: dict[str, object] = {}
         for batch in requested_batches:
             expected = candidate_map(space, family, batch)
-            observed = {
+            covered_rows = {
                 candidate_id: rows_by_key[(family, batch, candidate_id)]
                 for candidate_id in expected
-                if (family, batch, candidate_id) in rows_by_key and
-                rows_by_key[(family, batch, candidate_id)].get("status") == "measured"
+                if (family, batch, candidate_id) in rows_by_key
+            }
+            observed = {
+                candidate_id: row
+                for candidate_id, row in covered_rows.items()
+                if row.get("status") == "measured"
             }
             stable: list[tuple[float, str, dict[str, object]]] = []
             for candidate_id, row in observed.items():
@@ -1629,7 +3404,11 @@ def build_plan(
                 if metric is not None:
                     stable.append((metric, candidate_id, row))
             stable.sort(key=lambda item: (-item[0], item[1]))
-            missing_ids = sorted(set(expected) - set(observed))
+            missing_ids = sorted(set(expected) - set(covered_rows))
+            invalid_status_ids = sorted(
+                candidate_id for candidate_id, row in covered_rows.items()
+                if row.get("status") != "measured"
+            )
             history_winners = [
                 (candidate_id, row) for candidate_id, row in observed.items()
                 if row.get("history_stage_winner") is True
@@ -1659,6 +3438,7 @@ def build_plan(
                 "observed_count": len(observed),
                 "stable_long_count": len(stable),
                 "missing_candidate_ids": missing_ids,
+                "invalid_status_candidate_ids": invalid_status_ids,
                 "history_stage_winner_count": len(history_winners),
                 "history_evidence_error": history_evidence_error,
             }
@@ -1668,11 +3448,12 @@ def build_plan(
                 None if len(history_winners) == 1 else
                 f"expected one long-stable accumulated-history winner, got {len(history_winners)}"
             )
-            if missing_ids or not observed or history_error:
+            if missing_ids or invalid_status_ids or not observed or history_error:
                 missing.append({
                     "family": family,
                     "batch": batch,
                     "missing_candidate_ids": missing_ids,
+                    "invalid_status_candidate_ids": invalid_status_ids,
                     "history_error": history_error,
                 })
             if not observed or history_error:
@@ -1710,6 +3491,22 @@ def build_plan(
             "batches": family_batches,
         }
         coverage[family] = family_coverage
+    for batch in requested_batches:
+        selected_for_batch: dict[str, dict[str, object]] = {}
+        for family in requested_families:
+            entry = selected_families[family]["batches"].get(str(batch))
+            if isinstance(entry, dict) and isinstance(entry.get("candidate"), dict):
+                selected_for_batch[family] = entry["candidate"]
+        (
+            effective, superseded_by, _applied, overridden_by,
+        ) = resolve_candidate_config_state(selected_for_batch)
+        for family in requested_families:
+            entry = selected_families[family]["batches"].get(str(batch))
+            if not isinstance(entry, dict):
+                continue
+            entry["effective"] = family in effective
+            entry["superseded_by"] = superseded_by.get(family)
+            entry["overridden_keys"] = overridden_by.get(family, {})
     final_joint: dict[str, object] = {}
     for batch in requested_batches:
         joint_rows = [
@@ -1800,6 +3597,9 @@ def build_plan(
     }
     plan_identity = {
         "target": target,
+        "positive_history_contract_sha256": positive_history_closure.get(
+            "contract_sha256"
+        ),
         "batches": requested_batches,
         "families": {
             family: {
@@ -1829,6 +3629,7 @@ def build_plan(
         "status": "complete_long_stable" if ready else "partial_or_unstable",
         "ready_for_scan_bypass": ready,
         "production_ready": production_ready,
+        "positive_history_closure": positive_history_closure,
         "selection": {
             "metric": "stable long natural whole-graph combined nnEval/s",
             "method": "history-ordered accumulated coordinate winners; final joint long-stable row",
@@ -1858,7 +3659,8 @@ def build_plan(
             "topology": topology_overrides(architecture, int(target_device or 0), expected_streams, space),
             "per_batch_tactic_overrides": {
                 str(batch): render_plan_overrides(
-                    selected_families, batch, include_topology=False
+                    selected_families, batch, architecture=architecture,
+                    include_topology=False,
                 )
                 for batch in requested_batches
             },
@@ -1867,14 +3669,16 @@ def build_plan(
 
 
 def render_plan_overrides(
-    families: dict[str, object], batch: int, *, include_topology: bool = False,
+    families: dict[str, object], batch: int, *, architecture: str,
+    include_topology: bool = False,
     topology: dict[str, object] | None = None,
 ) -> str:
-    values: dict[str, object] = {}
+    values = runtime_tactic_baseline(architecture)
     if include_topology and topology:
         values.update(topology)
-    for family in FAMILIES:
-        family_payload = families.get(family)
+    for family, family_payload in families.items():
+        if family not in ALL_FAMILIES:
+            raise ValueError(f"unsupported tactic family: {family}")
         if not isinstance(family_payload, dict):
             continue
         entries = family_payload.get("batches", {})
@@ -1889,7 +3693,7 @@ def render_plan_overrides(
 def load_plan(path: pathlib.Path) -> dict[str, object]:
     payload = read_json(path)
     if payload.get("schema") != SCHEMA or payload.get("kind") != PLAN_KIND:
-        raise ValueError(f"unsupported portable tactic plan: {path}")
+        raise ValueError(f"unsupported CUDA tactic plan: {path}")
     return payload
 
 
@@ -1904,11 +3708,14 @@ def validate_plan(
     gpu_class: str | None = None,
     streams: int | None = None,
     batches: Sequence[int] | None = None,
-    families: Sequence[str] = FAMILIES,
+    families: Sequence[str] | None = None,
     device_properties: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if plan.get("schema") != SCHEMA or plan.get("kind") != PLAN_KIND:
-        raise ValueError("unsupported portable tactic plan")
+        raise ValueError("unsupported CUDA tactic plan")
+    plan_closure = plan.get("positive_history_closure")
+    if not isinstance(plan_closure, dict) or not plan_closure.get("complete"):
+        raise ValueError("plan lacks a complete positive-history closure")
     target = plan.get("target", {})
     if not isinstance(target, dict):
         raise ValueError("plan has no target")
@@ -1917,6 +3724,13 @@ def validate_plan(
     if plan_arch not in ARCHITECTURES:
         raise ValueError(f"plan has unknown architecture: {plan_arch}")
     validate_gpu_class(plan_arch, plan_gpu)
+    target_families = architecture_families(plan_arch)
+    requested_set = set(families or target_families)
+    if any(family not in target_families for family in requested_set):
+        raise ValueError(f"unsupported tactic families: {sorted(requested_set)}")
+    requested_families = tuple(
+        family for family in target_families if family in requested_set
+    )
     if architecture and architecture != plan_arch:
         raise ValueError(f"plan architecture mismatch: {plan_arch} != {architecture}")
     if gpu_class and gpu_class != plan_gpu:
@@ -1933,7 +3747,7 @@ def validate_plan(
                 f"{actual_compute_capability} != {target.get('compute_capability')}"
             )
     if target.get("fixed_board") != [19, 19]:
-        raise ValueError("portable tactic plans currently require 19x19")
+        raise ValueError("CUDA tactic plans currently require 19x19")
     if not plan.get("ready_for_scan_bypass", False):
         raise ValueError("plan is partial/unstable and cannot bypass the scan")
     if model is not None and target.get("model_sha256"):
@@ -1949,16 +3763,27 @@ def validate_plan(
             raise ValueError("plan target does not match receiver search space")
         if int(space.get("streams", -1)) != int(target.get("streams", -2)):
             raise ValueError("plan and search-space stream topology differ")
+        space_closure = space.get("positive_history_closure")
+        plan_closure = plan.get("positive_history_closure")
+        if (
+            not isinstance(space_closure, dict) or
+            not space_closure.get("complete") or
+            not isinstance(plan_closure, dict) or
+            plan_closure.get("contract_sha256") !=
+                space_closure.get("contract_sha256") or
+            plan_closure.get("record_ids") != space_closure.get("record_ids")
+        ):
+            raise ValueError("plan positive-history closure differs from search space")
         if space_path is not None:
             expected_sha = sha256_file(space_path.resolve())
-            for family in families:
+            for family in requested_families:
                 family_payload = plan.get("families", {}).get(family, {})
                 if isinstance(family_payload, dict) and family_payload.get("space_sha256") not in (None, expected_sha):
                     raise ValueError(f"plan search-space hash mismatch for {family}")
     selected_batches = sorted(set(int(item) for item in (batches or plan.get("batches", []))))
     checked: dict[str, object] = {}
-    for family in families:
-        if family not in FAMILIES:
+    for family in requested_families:
+        if family not in target_families:
             raise ValueError(f"unsupported tactic family: {family}")
         family_payload = plan.get("families", {}).get(family)
         if not isinstance(family_payload, dict):
@@ -1977,6 +3802,52 @@ def validate_plan(
                 if entry.get("candidate") != current:
                     raise ValueError(f"plan candidate parameters differ from receiver space: {family}/B{batch}")
         checked[family] = selected_batches
+    if requested_families == target_families:
+        apply_payload = plan.get("apply", {})
+        per_batch_apply = (
+            apply_payload.get("per_batch_tactic_overrides", {})
+            if isinstance(apply_payload, dict) else {}
+        )
+        family_payloads = plan.get("families", {})
+        if not isinstance(per_batch_apply, dict) or not isinstance(
+            family_payloads, dict
+        ):
+            raise ValueError("plan has malformed apply metadata")
+        for batch in selected_batches:
+            selected_for_batch: dict[str, dict[str, object]] = {}
+            for family in target_families:
+                family_payload = family_payloads[family]
+                assert isinstance(family_payload, dict)
+                entry = family_payload["batches"][str(batch)]
+                assert isinstance(entry, dict)
+                candidate_value = entry["candidate"]
+                assert isinstance(candidate_value, dict)
+                selected_for_batch[family] = candidate_value
+            (
+                effective, superseded_by, applied, overridden_by,
+            ) = resolve_candidate_config_state(selected_for_batch)
+            for family in target_families:
+                entry = family_payloads[family]["batches"][str(batch)]
+                assert isinstance(entry, dict)
+                if entry.get("effective") is not (family in effective):
+                    raise ValueError(
+                        f"plan effective-family metadata differs at {family}/B{batch}"
+                    )
+                if entry.get("superseded_by") != superseded_by.get(family):
+                    raise ValueError(
+                        f"plan supersession metadata differs at {family}/B{batch}"
+                    )
+                if entry.get("overridden_keys") != overridden_by.get(family, {}):
+                    raise ValueError(
+                        f"plan key-ownership metadata differs at {family}/B{batch}"
+                    )
+            expected_values = runtime_tactic_baseline(plan_arch)
+            expected_values.update(applied)
+            expected_apply = config_string(expected_values)
+            if per_batch_apply.get(str(batch)) != expected_apply:
+                raise ValueError(
+                    f"plan apply mapping differs from selected tactics at B{batch}"
+                )
     final_joint = plan.get("final_joint")
     if not isinstance(final_joint, dict):
         raise ValueError("plan has no final joint long-gate results")
@@ -2026,6 +3897,125 @@ def _timeout_text(value: str | bytes | None) -> str:
     return value
 
 
+def _active_sm_pids(device: int) -> set[int]:
+    """Return PIDs with non-zero SM activity in one pmon sample."""
+    try:
+        sample = subprocess.run(
+            ["nvidia-smi", "pmon", "-i", str(device), "-c", "1", "-s", "u"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            check=False, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"unable to sample GPU SM occupancy: {exc}") from exc
+    if sample.returncode != 0:
+        detail = sample.stderr.strip() or sample.stdout.strip()
+        raise RuntimeError(f"nvidia-smi pmon failed: {detail}")
+    active: set[int] = set()
+    for line in sample.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or not fields[0].isdigit() or not fields[1].isdigit():
+            continue
+        try:
+            sm = float(fields[3])
+        except ValueError:
+            continue
+        if sm > 0.0:
+            active.add(int(fields[1]))
+    return active
+
+
+class _GpuOccupancyMonitor:
+    def __init__(self, device: int, process: subprocess.Popen[str]):
+        self.device = device
+        self.process = process
+        self.process_group = os.getpgid(process.pid)
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.foreign_pids: set[int] = set()
+        self.samples = 0
+        self.error: str | None = None
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=4)
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                active = _active_sm_pids(self.device)
+                self.samples += 1
+                for pid in active:
+                    try:
+                        same_group = os.getpgid(pid) == self.process_group
+                    except ProcessLookupError:
+                        same_group = False
+                    if not same_group:
+                        self.foreign_pids.add(pid)
+                if self.foreign_pids:
+                    os.killpg(self.process_group, signal.SIGTERM)
+                    return
+            except Exception as exc:  # fail closed for an unobservable GPU
+                self.error = str(exc)
+                try:
+                    os.killpg(self.process_group, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                return
+            self.stop_event.wait(0.25)
+
+    def evidence(self) -> dict[str, object]:
+        return {
+            "samples": self.samples,
+            "foreign_active_sm_pids": sorted(self.foreign_pids),
+            "error": self.error,
+        }
+
+
+def _run_benchmark_with_occupancy(
+    command: Sequence[str], *, device: int, timeout: int,
+) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
+    baseline = _active_sm_pids(device)
+    if baseline:
+        raise RuntimeError(
+            "GPU has active SM work before benchmark: "
+            + ",".join(str(pid) for pid in sorted(baseline))
+        )
+    try:
+        process = subprocess.Popen(
+            list(command), text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, start_new_session=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"unable to start benchmark: {exc}") from exc
+    monitor = _GpuOccupancyMonitor(device, process)
+    monitor.start()
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        try:
+            os.killpg(monitor.process_group, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        stdout = _timeout_text(stdout or exc.stdout)
+        stderr = _timeout_text(stderr or exc.stderr)
+    finally:
+        monitor.stop()
+    evidence = monitor.evidence()
+    if monitor.error:
+        stderr = (stderr or "") + "\nGPU occupancy monitor: " + monitor.error
+    if monitor.foreign_pids:
+        stderr = (stderr or "") + "\nGPU occupancy monitor detected external SM work"
+    return subprocess.CompletedProcess(
+        command, process.returncode, stdout or "", stderr or "",
+    ), timed_out, evidence
+
+
 def scan_command(
     space: dict[str, object],
     architecture: str,
@@ -2064,11 +4054,12 @@ def run_scan(args: argparse.Namespace) -> None:
     space_path = pathlib.Path(args.space).resolve()
     space = read_json(space_path)
     if space.get("schema") != SCHEMA or space.get("kind") != SPACE_KIND:
-        raise ValueError("scan requires a portable-tactic-search-space file")
+        raise ValueError("scan requires a cuda-tactic-search-space file")
     architecture = str(space["architecture"])
     if args.architecture and args.architecture != architecture:
         raise ValueError("--architecture does not match the search space")
     gpu_class = str(space["gpu_class"])
+    target_families = space_families(space)
     device = int(args.device if args.device is not None else space.get("device_ordinal", 0))
     streams = int(space["streams"])
     device_properties = None
@@ -2086,7 +4077,9 @@ def run_scan(args: argparse.Namespace) -> None:
         raise ValueError("--streams does not match the search space")
     batches = parse_int_set(args.batches) if args.batches else sorted(space_batches(space))
     families = [item.strip() for item in args.families.split(",") if item.strip()]
-    if not families or any(item not in FAMILIES for item in families):
+    if not families:
+        families = list(target_families)
+    if any(item not in target_families for item in families):
         raise ValueError(f"invalid families: {families}")
     if args.phase == "long" and (
         args.iterations < MIN_LONG_ITERATIONS or args.repeats < MIN_STABLE_SAMPLES
@@ -2185,7 +4178,8 @@ def run_scan(args: argparse.Namespace) -> None:
         # accepted history stages and made the entire curve regress. Every
         # family still scans its explicit off control and all real variants;
         # after the final family the accumulated overrides are self-contained.
-        accumulated = parse_key_values(args.override_config)
+        accumulated = runtime_tactic_baseline(architecture)
+        accumulated.update(parse_key_values(args.override_config))
         # Make every exact-batch implementation build for the batch currently
         # being scanned.
         accumulated["nnMaxBatchSize"] = batch
@@ -2194,11 +4188,22 @@ def run_scan(args: argparse.Namespace) -> None:
         # is still compiled before benchmarknn's own warmup/timed passes.
         accumulated["cudaWarmupOnlyMaxBatchSize"] = True
         accumulated["cudaDisableWarmup"] = True
+        selected_candidates: dict[str, dict[str, object]] = {}
         for family_index, family in enumerate(families):
             base_overrides = config_string(accumulated)
             stage_rows: list[dict[str, object]] = []
             for value in candidate_map(space, family, batch).values():
                 key = (family, batch, str(value["id"]))
+                compatible, incompatibility = candidate_compatibility(
+                    value, selected_candidates,
+                )
+                if not compatible:
+                    raise ValueError(
+                        "search-space candidate has an unresolved runtime "
+                        f"dependency for {family}/B{batch}/{value['id']}: "
+                        f"{incompatibility}; encode the dependency in the "
+                        "candidate config instead of declaring unsupported"
+                    )
                 command, overrides = scan_command(
                     space, architecture, device, streams, family, batch, value,
                     binary=str(binary), config=str(config), model=str(model),
@@ -2244,19 +4249,13 @@ def run_scan(args: argparse.Namespace) -> None:
                     completed = None
                     stdout_path = None
                     stderr_path = None
+                    occupancy_evidence: dict[str, object] = {}
                     for attempt in range(args.max_attempts):
-                        timed_out = False
-                        try:
-                            completed = subprocess.run(
-                                command, text=True, capture_output=True, check=False,
-                                timeout=args.timeout_seconds,
+                        completed, timed_out, occupancy_evidence = (
+                            _run_benchmark_with_occupancy(
+                                command, device=device, timeout=args.timeout_seconds,
                             )
-                        except subprocess.TimeoutExpired as exc:
-                            timed_out = True
-                            completed = subprocess.CompletedProcess(
-                                command, 124, _timeout_text(exc.stdout),
-                                _timeout_text(exc.stderr),
-                            )
+                        )
                         stem = re.sub(
                             r"[^A-Za-z0-9_.-]+", "_",
                             f"{family}-b{batch}-{value['id']}-r{repeat}-a{attempt}",
@@ -2299,6 +4298,9 @@ def run_scan(args: argparse.Namespace) -> None:
                             f"benchmark failed for {family}/B{batch}/{value['id']} "
                             f"after {args.max_attempts} attempts; see {stderr_path}"
                         )
+                    require_activation_markers(
+                        value, completed.stdout + "\n" + completed.stderr,
+                    )
                     record = _parse_benchmark_record(completed.stdout)
                     throughput = result_metric(record)
                     samples.append(throughput)
@@ -2306,6 +4308,7 @@ def run_scan(args: argparse.Namespace) -> None:
                         "repeat": repeat, "throughput": throughput,
                         "benchmark": record, "stdout": str(stdout_path),
                         "stderr": str(stderr_path), "attempts": attempt_records,
+                        "gpu_occupancy": occupancy_evidence,
                     })
                 row = {
                     "family": family, "batch": batch, "candidate_id": value["id"],
@@ -2380,6 +4383,7 @@ def run_scan(args: argparse.Namespace) -> None:
             winner_candidate = winner.get("candidate")
             if not isinstance(winner_candidate, dict):
                 raise ValueError(f"history stage winner has no candidate: {family}/B{batch}")
+            selected_candidates[family] = winner_candidate
             accumulated.update(tactic_overrides(family, winner_candidate))
             winner["history_accumulated_overrides"] = config_string(accumulated)
         # Atomic batch-level checkpoint. On an unexpected interruption only
@@ -2420,6 +4424,7 @@ def run_gate(args: argparse.Namespace) -> None:
         raise ValueError("gate discovery input does not match --space")
     architecture = str(space["architecture"])
     gpu_class = str(space["gpu_class"])
+    target_families = space_families(space)
     device = int(args.device if args.device is not None else space.get("device_ordinal", 0))
     streams = int(space["streams"])
     try:
@@ -2441,9 +4446,12 @@ def run_gate(args: argparse.Namespace) -> None:
         for row in discovery_rows
     }
     selected_aot: list[tuple[str, int, str]] = []
+    selected_candidates_by_batch: dict[int, dict[str, dict[str, object]]] = {}
+    overridden_keys_by_batch: dict[int, dict[str, dict[str, str]]] = {}
     final_rows: dict[int, dict[str, object]] = {}
     for batch in batches:
-        for family in FAMILIES:
+        selected_for_batch: dict[str, dict[str, object]] = {}
+        for family in target_families:
             expected = candidate_map(space, family, batch)
             missing = [
                 candidate_id for candidate_id in expected
@@ -2455,18 +4463,33 @@ def run_gate(args: argparse.Namespace) -> None:
                 )
             winners = [
                 by_key[(family, batch, candidate_id)] for candidate_id in expected
-                if by_key[(family, batch, candidate_id)].get("history_stage_winner") is True
+                if by_key[(family, batch, candidate_id)].get("status") == "measured" and
+                by_key[(family, batch, candidate_id)].get("history_stage_winner") is True
             ]
             if len(winners) != 1:
                 raise ValueError(
                     f"discovery has {len(winners)} history winners for {family}/B{batch}"
                 )
             winner_id = str(winners[0]["candidate_id"])
-            if expected[winner_id].get("requires_artifact"):
-                selected_aot.append((family, batch, winner_id))
+            selected_for_batch[family] = expected[winner_id]
+        effective_for_batch, _, _, overridden_by = resolve_candidate_config_state(
+            selected_for_batch
+        )
+        selected_candidates_by_batch[batch] = effective_for_batch
+        overridden_keys_by_batch[batch] = overridden_by
+        for family, selected in effective_for_batch.items():
+            selected_id = str(selected["id"])
+            if selected.get("requires_artifact"):
+                selected_aot.append((family, batch, selected_id))
+            for dependency in selected.get("artifact_dependencies", []):
+                selected_aot.append((
+                    str(dependency["family"]), batch,
+                    str(dependency["candidate_id"]),
+                ))
         final = [
             row for row in discovery_rows
             if int(row.get("batch", -1)) == batch and
+            row.get("status") == "measured" and
             row.get("history_final_joint") is True
         ]
         if len(final) != 1 or not final[0].get("history_accumulated_overrides"):
@@ -2526,19 +4549,13 @@ def run_gate(args: argparse.Namespace) -> None:
             completed = None
             stdout_path = None
             stderr_path = None
+            occupancy_evidence: dict[str, object] = {}
             for attempt in range(args.max_attempts):
-                timed_out = False
-                try:
-                    completed = subprocess.run(
-                        command, text=True, capture_output=True, check=False,
-                        timeout=args.timeout_seconds,
+                completed, timed_out, occupancy_evidence = (
+                    _run_benchmark_with_occupancy(
+                        command, device=device, timeout=args.timeout_seconds,
                     )
-                except subprocess.TimeoutExpired as exc:
-                    timed_out = True
-                    completed = subprocess.CompletedProcess(
-                        command, 124, _timeout_text(exc.stdout),
-                        _timeout_text(exc.stderr),
-                    )
+                )
                 stem = f"final-joint-b{batch}-r{repeat}-a{attempt}"
                 stdout_path = raw_dir / f"{stem}.out"
                 stderr_path = raw_dir / f"{stem}.err"
@@ -2559,6 +4576,12 @@ def run_gate(args: argparse.Namespace) -> None:
                     f"final joint gate failed for B{batch} after "
                     f"{args.max_attempts} attempts; see {stderr_path}"
                 )
+            combined_output = completed.stdout + "\n" + completed.stderr
+            for family, selected in selected_candidates_by_batch[batch].items():
+                require_activation_markers(
+                    selected, combined_output,
+                    overridden_keys_by_batch[batch].get(family, {}),
+                )
             record = _parse_benchmark_record(completed.stdout)
             throughput = result_metric(record)
             samples.append(throughput)
@@ -2566,6 +4589,7 @@ def run_gate(args: argparse.Namespace) -> None:
                 "repeat": repeat, "throughput": throughput,
                 "benchmark": record, "stdout": str(stdout_path),
                 "stderr": str(stderr_path), "attempts": attempt_records,
+                "gpu_occupancy": occupancy_evidence,
             })
         row = dict(source)
         row.update({
@@ -2607,7 +4631,7 @@ def run_gate(args: argparse.Namespace) -> None:
     # Reuse the result schema so plan can merge discovery coverage with these
     # newer rows for the same final candidate IDs.
     args.phase = "long"
-    args.families = ",".join(FAMILIES)
+    args.families = ",".join(target_families)
     args.override_config = ""
     _write_scan_payload(
         output, space_path, space, architecture, gpu_class, device, streams,
@@ -2795,6 +4819,9 @@ def command_certify(args: argparse.Namespace) -> None:
         "maximum_ownership_sigmoid_rmse": 0.001,
     }
     certified = 0
+    reference_hashes: set[str] = set()
+    corpus_hashes: set[str] = set()
+    model_hashes: set[str] = set()
     rows = payload.get("rows", [])
     if not isinstance(rows, list):
         raise ValueError("gate result rows are not a list")
@@ -2806,6 +4833,54 @@ def command_certify(args: argparse.Namespace) -> None:
         if report_path is None:
             raise ValueError(f"missing --comparison for gate B{batch}")
         report = read_json(report_path)
+        reference_sha256 = str(report.get("referenceSha256", ""))
+        candidate_sha256 = str(report.get("candidateSha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", reference_sha256):
+            raise ValueError(
+                f"accuracy comparison lacks an immutable reference SHA-256: B{batch}"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", candidate_sha256):
+            raise ValueError(
+                f"accuracy comparison lacks a candidate SHA-256: B{batch}"
+            )
+        if int(report.get("exactBatch", -1)) != batch:
+            raise ValueError(
+                f"accuracy comparison is not bound to exact B{batch}"
+            )
+        if (
+            int(report.get("candidateMaxBatchSize", -1)) != batch or
+            report.get("candidateFixedBatchTailPadding") is not True or
+            report.get("referenceFixedBatchTailPadding") is not True or
+            report.get("inputAndTargetSectionsByteExact") is not True
+        ):
+            raise ValueError(
+                f"accuracy comparison lacks fixed-batch/input identity evidence: B{batch}"
+            )
+        if report.get("candidateBinarySha256") != row.get("binary_sha256"):
+            raise ValueError(
+                f"accuracy comparison binary differs from long gate: B{batch}"
+            )
+        if report.get("candidateOverrides") != row.get("overrides"):
+            raise ValueError(
+                f"accuracy comparison overrides differ from long gate: B{batch}"
+            )
+        corpus_sha256 = str(report.get("corpusSha256", ""))
+        model_sha256 = str(report.get("modelSha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", corpus_sha256):
+            raise ValueError(f"accuracy comparison lacks corpus identity: B{batch}")
+        if not re.fullmatch(r"[0-9a-f]{64}", model_sha256):
+            raise ValueError(f"accuracy comparison lacks model identity: B{batch}")
+        gate_identity = payload.get("identity", {})
+        if (
+            not isinstance(gate_identity, dict) or
+            gate_identity.get("model_sha256") != model_sha256
+        ):
+            raise ValueError(
+                f"accuracy comparison model differs from long gate: B{batch}"
+            )
+        reference_hashes.add(reference_sha256)
+        corpus_hashes.add(corpus_sha256)
+        model_hashes.add(model_sha256)
         policy = report.get("policy", {})
         value = report.get("value", {})
         score = report.get("score", {})
@@ -2829,6 +4904,8 @@ def command_certify(args: argparse.Namespace) -> None:
             "kind": "8192-row all-head FP32-reference replay",
             "comparison": str(report_path),
             "comparison_sha256": sha256_file(report_path),
+            "reference_sha256": reference_sha256,
+            "candidate_sha256": candidate_sha256,
             "thresholds": thresholds,
             "checks": checks,
             "metrics": {
@@ -2845,13 +4922,22 @@ def command_certify(args: argparse.Namespace) -> None:
             failed = ", ".join(name for name, passed in checks.items() if not passed)
             raise ValueError(f"accuracy certification failed for B{batch}: {failed}")
         certified += 1
+    if len(reference_hashes) != 1 or len(corpus_hashes) != 1 or len(model_hashes) != 1:
+        raise ValueError(
+            "accuracy comparisons do not share one immutable reference, "
+            "corpus, and model"
+        )
     if certified != len(reports):
         raise ValueError(
             f"certified {certified} gate rows from {len(reports)} comparison reports"
         )
     payload["finished_utc"] = utc_now()
     payload["accuracy_certification"] = {
-        "status": "passed", "thresholds": thresholds, "batches": sorted(reports),
+        "status": "passed", "thresholds": thresholds,
+        "batches": sorted(reports),
+        "reference_sha256": next(iter(reference_hashes)),
+        "corpus_sha256": next(iter(corpus_hashes)),
+        "model_sha256": next(iter(model_hashes)),
     }
     output = pathlib.Path(args.output).resolve()
     write_json(output, payload)
@@ -2860,9 +4946,12 @@ def command_certify(args: argparse.Namespace) -> None:
 
 def command_plan(args: argparse.Namespace) -> None:
     families = [item.strip() for item in args.families.split(",") if item.strip()]
+    space_path = pathlib.Path(args.space).resolve()
+    if not families:
+        families = list(space_families(read_json(space_path)))
     payload = build_plan(
         [pathlib.Path(item).resolve() for item in args.results],
-        pathlib.Path(args.space).resolve(), families,
+        space_path, families,
         parse_int_set(args.batches), allow_partial=args.allow_partial,
     )
     write_json(pathlib.Path(args.output).resolve(), payload)
@@ -2905,6 +4994,8 @@ def command_apply(args: argparse.Namespace) -> None:
     batches = parse_int_set(args.batches) if args.batches else [int(item) for item in plan.get("batches", [])]
     families = [item.strip() for item in args.families.split(",") if item.strip()]
     target = plan["target"]
+    if not families:
+        families = list(architecture_families(str(target["architecture"])))
     device = int(args.device if args.device is not None else target.get("device_ordinal_at_scan", 0))
     try:
         from portable_cuda_device import query_cuda_device
@@ -2915,13 +5006,12 @@ def command_apply(args: argparse.Namespace) -> None:
         device_properties=query_cuda_device(device),
     )
     streams = int(target["streams"])
-    topology = {
-        "numNNServerThreadsPerModel": streams,
-        **{f"cudaDeviceToUseThread{i}": device for i in range(streams)},
-    }
+    topology = topology_overrides(
+        str(target["architecture"]), device, streams
+    )
     result: dict[str, object] = {
         "schema": 1,
-        "kind": "portable-tactic-application",
+        "kind": "cuda-tactic-application",
         "plan_id": plan.get("plan_id"),
         "architecture": target["architecture"],
         "gpu_class": target["gpu_class"],
@@ -2939,7 +5029,7 @@ def command_apply(args: argparse.Namespace) -> None:
                 "stable_long_nn_evals_per_sec": entry["stable_long_nn_evals_per_sec"],
                 "candidate": entry["candidate"],
             }
-        tactic_values: dict[str, object] = {}
+        tactic_values = runtime_tactic_baseline(str(target["architecture"]))
         for family in families:
             entry = family_map[family]["batches"][str(batch)]
             tactic_values.update(tactic_overrides(family, entry["candidate"]))
@@ -2959,11 +5049,11 @@ def command_apply(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    space = sub.add_parser("space", help="materialize an SM89 device/batch search space")
+    space = sub.add_parser("space", help="materialize an SM89/SM120 device/batch search space")
     space.add_argument("--architecture", choices=tuple(ARCHITECTURES))
     space.add_argument("--gpu-class")
     space.add_argument("--device", type=int, default=0)
-    space.add_argument("--batches", default="1-32")
+    space.add_argument("--batches", default="4-32")
     space.add_argument("--streams", type=int, default=2)
     space.add_argument("--candidate-file", action="append", default=[])
     space.add_argument("--topology-override")
@@ -2976,7 +5066,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generation.add_argument("--space", required=True)
     generation.add_argument("--phase", choices=("seed", "full"), default="full")
-    generation.add_argument("--families", default=",".join(FAMILIES))
+    generation.add_argument("--families", default="")
     generation.add_argument("--output")
     generation.set_defaults(function=command_generation_plan)
 
@@ -3015,7 +5105,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--device", type=int)
     scan.add_argument("--streams", type=int)
     scan.add_argument("--batches")
-    scan.add_argument("--families", default=",".join(FAMILIES))
+    scan.add_argument("--families", default="")
     scan.add_argument("--phase", choices=("discovery", "long"), default="long")
     scan.add_argument("--iterations", type=int, default=MIN_LONG_ITERATIONS)
     scan.add_argument("--warmup", type=int, default=50)
@@ -3078,7 +5168,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--results", nargs="+", required=True)
     plan.add_argument("--output", required=True)
     plan.add_argument("--batches", required=True)
-    plan.add_argument("--families", default=",".join(FAMILIES))
+    plan.add_argument("--families", default="")
     plan.add_argument("--allow-partial", action="store_true")
     plan.set_defaults(function=command_plan)
 
@@ -3092,13 +5182,13 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--streams", type=int)
     validate.add_argument("--device", type=int)
     validate.add_argument("--batches")
-    validate.add_argument("--families", default=",".join(FAMILIES))
+    validate.add_argument("--families", default="")
     validate.set_defaults(function=command_validate)
 
     apply = sub.add_parser("apply", help="render plan overrides for one or more batches")
     apply.add_argument("--plan", required=True)
     apply.add_argument("--batches")
-    apply.add_argument("--families", default=",".join(FAMILIES))
+    apply.add_argument("--families", default="")
     apply.add_argument("--device", type=int)
     apply.add_argument("--output")
     apply.set_defaults(function=command_apply)
@@ -3111,7 +5201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args.function(args)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        print(f"portable_tactic_workflow: {exc}", file=sys.stderr)
+        print(f"cuda_tactic_workflow: {exc}", file=sys.stderr)
         return 2
     return 0
 

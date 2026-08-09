@@ -21,6 +21,19 @@ static bool getBoolOpt(ConfigParser& cfg, const string& key, bool defaultValue) 
   return cfg.contains(key) ? cfg.getBool(key) : defaultValue;
 }
 
+static string getTacticOpt(
+  ConfigParser& cfg,
+  const string& key,
+  std::initializer_list<const char*> allowed
+) {
+  const string value = cfg.contains(key) ? cfg.getString(key) : "disabled";
+  for(const char* candidate : allowed) {
+    if(value == candidate)
+      return value;
+  }
+  throw StringError("unknown " + key + ": " + value);
+}
+
 struct PersistingL2Plan {
   float trunkHitRatio;
   float innerHitRatio;
@@ -71,42 +84,114 @@ Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm89Backend", true);
   o.useForward = getBoolOpt(cfg, "cudaSm89Forward", true);
-  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", true);
-  o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", true);
-  o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", true);
-  o.useRMSNormOpt = getBoolOpt(cfg, "cudaUseRMSNormOpt", true);
+  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", false);
+  o.useWideFFN = getBoolOpt(cfg, "cudaUseWideFFN", false);
+  o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", false);
+  o.useRMSNormOpt = getBoolOpt(cfg, "cudaUseRMSNormOpt", false);
+  o.rmsNormRowsPerBlock = cfg.contains("cudaRMSNormRowsPerBlockSm89") ?
+    cfg.getInt("cudaRMSNormRowsPerBlockSm89",4,8) : 4;
+  if(o.rmsNormRowsPerBlock != 4 && o.rmsNormRowsPerBlock != 8)
+    throw StringError("cudaRMSNormRowsPerBlockSm89 must be 4 or 8");
   o.useMatmulLt = getBoolOpt(cfg, "cudaUseMatmulLt", false);
   o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
   o.usePrecomputedQKRoPE = getBoolOpt(cfg, "cudaUsePrecomputedQKRoPESm89", false);
   o.useQKVRoPEGemm = getBoolOpt(cfg, "cudaUseQKVRoPEGemmSm89", false);
   o.useSplitQKVRoPEGemm = getBoolOpt(cfg, "cudaUseSplitQKVRoPEGemmSm89", false);
   o.plainQKVVariant = cfg.contains("cudaPlainQKVVariantSm89") ?
-    cfg.getInt("cudaPlainQKVVariantSm89",0,2) : 0;
-  o.ropeBatchGroup = cfg.contains("cudaRoPEBatchGroupSm89") ? cfg.getInt("cudaRoPEBatchGroupSm89",1,13) : 1;
-  o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm89", false);
-  o.useFlashAttentionBoth16 = getBoolOpt(cfg, "cudaUseFlashAttentionBoth16Sm89", false);
-  o.useDualGemmSwiGLU = getBoolOpt(cfg, "cudaUseDualGemmSwiGLUSm89", false);
-  o.useDualGemmSwiGLUHalf2Tanh = getBoolOpt(cfg, "cudaUseDualGemmSwiGLUHalf2TanhSm89", false);
-  o.useLinear2Gemm = getBoolOpt(cfg, "cudaUseLinear2GemmSm89", false);
-  o.useOutProjGemm = getBoolOpt(cfg, "cudaUseOutProjGemmSm89", false);
-  o.usePreConvGemm = getBoolOpt(cfg, "cudaUsePreConvGemmSm89", false);
-  o.usePostConvGemm = getBoolOpt(cfg, "cudaUsePostConvGemmSm89", false);
+    cfg.getInt("cudaPlainQKVVariantSm89",0,1) : 0;
+  o.ropeBatchGroup = cfg.contains("cudaRoPEBatchGroupSm89") ?
+    cfg.getInt("cudaRoPEBatchGroupSm89",1,32) : 1;
+  const string flashTactic = cfg.contains("cudaFlashAttentionTacticSm89") ?
+    cfg.getString("cudaFlashAttentionTacticSm89") : "disabled";
+  o.flashAttentionTacticName = flashTactic;
+  if(flashTactic == "disabled") o.flashAttentionTactic = 0;
+  else if(flashTactic == "d32-m128-n112-w4-pack0-fp32") o.flashAttentionTactic = 1;
+  else if(flashTactic == "d32-m128-n96-w4-pack0-fp32") o.flashAttentionTactic = 2;
+  else if(flashTactic == "d32-m64-n96-w4-pack1-fp32") o.flashAttentionTactic = 3;
+  else if(flashTactic == "d32-m64-n96-w4-pack0-fp32") o.flashAttentionTactic = 4;
+  else if(flashTactic == "d32-m64-n96-w4-pack0-both16") o.flashAttentionTactic = 5;
+  else throw StringError("unknown cudaFlashAttentionTacticSm89: " + flashTactic);
+  o.dualFfnCutlassTactic = getTacticOpt(
+    cfg, "cudaDualFfnCutlassTacticSm89", {
+      "disabled",
+      "m128-n64-k32-w64-n32-s3-sw2-exp",
+      "m128-n64-k32-w64-n32-s3-sw4-exp",
+      "m128-n64-k32-w64-n32-s3-sw2-tanh-half2",
+    });
+  o.linear2CutlassTactic = getTacticOpt(
+    cfg, "cudaLinear2CutlassTacticSm89", {
+      "disabled",
+      "m128-n128-k32-w64-n32-s3-sw1",
+      "m128-n128-k32-w64-n32-s4-sw1",
+      "m128-n128-k32-w64-n64-s3-sw1",
+      "m128-n128-k32-w64-n64-s4-sw1",
+      "m128-n128-k32-w64-n64-s5-sw1",
+      "m128-n128-k32-w64-n64-s6-sw1",
+    });
+  o.outProjCutlassTactic = getTacticOpt(
+    cfg, "cudaOutProjCutlassTacticSm89", {
+      "disabled",
+      "m128-n128-k32-w64-n32-s2-sw1",
+      "m128-n128-k32-w64-n32-s3-sw1",
+      "m128-n128-k32-w64-n32-s4-sw1",
+      "m128-n128-k32-w64-n64-s3-sw1",
+      "m128-n128-k32-w64-n64-s4-sw1",
+    });
+  o.preConvCutlassTactic = getTacticOpt(
+    cfg, "cudaPreConvCutlassTacticSm89", {
+      "disabled",
+      "m128-n128-k32-w64-n32-s3-sw1",
+      "m128-n128-k32-w64-n32-s4-sw1",
+      "m128-n128-k32-w64-n64-s3-sw1",
+      "m128-n128-k32-w64-n64-s4-sw1",
+      "m128-n128-k32-w64-n64-s5-sw1",
+      "m128-n128-k32-w64-n64-s6-sw1",
+    });
+  o.postConvCutlassTactic = getTacticOpt(
+    cfg, "cudaPostConvCutlassTacticSm89", {
+      "disabled",
+      "m128-n128-k32-w64-n32-s2-sw1",
+      "m128-n128-k32-w64-n32-s3-sw1",
+      "m128-n128-k32-w64-n32-s3-sw2",
+      "m128-n128-k32-w64-n64-s3-sw1",
+      "m128-n128-k32-w64-n64-s3-sw2",
+      "m128-n128-k32-w64-n64-s3-sw4",
+      "m128-n256-k32-w64-n64-s2-sw2",
+      "m256-n128-k32-w64-n64-s2-sw1",
+      "m256-n128-k32-w64-n64-s2-sw2",
+    });
+  o.useDualGemmSwiGLU = o.dualFfnCutlassTactic != "disabled";
+  o.useLinear2Gemm = o.linear2CutlassTactic != "disabled";
+  o.useOutProjGemm = o.outProjCutlassTactic != "disabled";
+  o.usePreConvGemm = o.preConvCutlassTactic != "disabled";
+  o.usePostConvGemm = o.postConvCutlassTactic != "disabled";
   o.usePostConvBNSilu = getBoolOpt(cfg, "cudaUsePostConvBNSiluSm89", false);
   o.useLinear2PostBNSilu = getBoolOpt(cfg, "cudaUseLinear2PostBNSiluSm89", false);
   o.useBatchSharedRoPE = getBoolOpt(cfg, "cudaUseBatchSharedRoPE", false);
   o.useFusedFFN = getBoolOpt(cfg, "cudaUseFusedFFN", false);
   o.useInitialConvFrontend = getBoolOpt(cfg, "cudaUseInitialConvFrontend", false);
   o.useInitialGlobalMatMulAdd = getBoolOpt(cfg, "cudaUseInitialGlobalMatMulAdd", false);
-  o.useFusedPolicyP1 = getBoolOpt(cfg, "cudaUseFusedPolicyP1", false);
+  o.policyP1RowsPerBlock = cfg.contains("cudaPolicyP1RowsPerBlockSm89") ?
+    cfg.getInt("cudaPolicyP1RowsPerBlockSm89",0,5) : 0;
+  if(o.policyP1RowsPerBlock != 0 && o.policyP1RowsPerBlock != 1 &&
+     o.policyP1RowsPerBlock != 5)
+    throw StringError("cudaPolicyP1RowsPerBlockSm89 must be 0, 1, or 5");
   o.useHeadBNHalfToFloat = getBoolOpt(cfg, "cudaUseHeadBNHalfToFloat", false);
   o.useWideHeadProjection = getBoolOpt(cfg, "cudaUseWideHeadProjection", false);
+  o.useExactMaskDownstreamElision =
+    getBoolOpt(cfg, "cudaUseExactMaskDownstreamElisionSm89", false);
   o.useExactMaskElision = getBoolOpt(cfg, "cudaUseExactMaskElisionSm89", false);
+  if(o.useExactMaskElision && !o.useExactMaskDownstreamElision)
+    throw StringError(
+      "cudaUseExactMaskElisionSm89 requires "
+      "cudaUseExactMaskDownstreamElisionSm89=true");
   o.useFusedValueTerminal = getBoolOpt(cfg, "cudaUseFusedValueTerminalSm89", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
   o.persistingL2HitRatio = cfg.contains("cudaPersistingL2HitRatioSm89") ?
     cfg.getFloat("cudaPersistingL2HitRatioSm89",0.0f,1.0f) : 1.0f;
   o.useScaleBiasSiluVec8 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec8Sm89", false);
+  o.useScaleBiasSiluVec8C384 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec8C384Sm89", false);
   o.useScaleBiasSiluVec4C384 = getBoolOpt(cfg, "cudaUseScaleBiasSiluVec4C384Sm89", false);
   o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", false);
   o.dualFfnAotTactic = cfg.contains("cudaFusedFFNAotTacticSm89") ?
@@ -145,6 +230,7 @@ Sm89Model::Sm89Model(
   options(options_),
   logger(NULL),
   loggedFallback(false),
+  loggedActiveTactics(),
   forward(nullptr),
   forwardActive(false)
 {
@@ -161,34 +247,42 @@ Sm89Model::Sm89Model(
       : PersistingL2Plan{0.0f, 0.0f};
     forward = std::make_unique<Sm89Forward>(
       desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC, stream,
-      options.useWideQKV, options.useWideFFN, options.useFusedResidual, options.useRMSNormOpt,
+      options.useWideQKV, options.useWideFFN, options.useFusedResidual,
+      options.useRMSNormOpt, options.rmsNormRowsPerBlock,
       options.useFusedQKRoPE, options.usePrecomputedQKRoPE, options.useQKVRoPEGemm,
       options.useSplitQKVRoPEGemm,
       options.plainQKVVariant,
-      options.ropeBatchGroup, options.useFlashAttention, options.useFlashAttentionBoth16,
-      options.useDualGemmSwiGLU, options.useDualGemmSwiGLUHalf2Tanh,
+      options.ropeBatchGroup, options.flashAttentionTactic,
+      options.useDualGemmSwiGLU,
       options.useLinear2Gemm, options.useOutProjGemm, options.usePreConvGemm,
       options.usePostConvGemm, options.usePostConvBNSilu,
       options.useLinear2PostBNSilu,
       options.usePersistingL2Trunk,
       persistingL2.trunkHitRatio, options.usePersistingL2Inner,
       persistingL2.innerHitRatio, options.useScaleBiasSiluVec8,
+      options.useScaleBiasSiluVec8C384,
       options.useScaleBiasSiluVec4C384,
       options.useInitialConvFrontend,
       options.useInitialGlobalMatMulAdd,
-      options.useFusedPolicyP1,
+      options.policyP1RowsPerBlock,
       options.useHeadBNHalfToFloat,
       options.useWideHeadProjection,
+      options.useExactMaskDownstreamElision,
       options.useExactMaskElision,
       options.useFusedValueTerminal,
       options.dualFfnAotTactic,
       options.linear2AotTactic,
+      options.dualFfnCutlassTactic,
+      options.linear2CutlassTactic,
+      options.outProjCutlassTactic,
+      options.preConvCutlassTactic,
+      options.postConvCutlassTactic,
       options.serverThreads,
       options.shareModelWeights
     );
     forwardActive = true;
   }
-  // Stage 0 scaffold: apply() delegates to the official model until stages land.
+  // Unsupported model shapes retain the official compatibility path.
 }
 
 Sm89Model::~Sm89Model() {
@@ -216,7 +310,9 @@ void Sm89Model::apply(
   void* ownershipBuf,
 
   void* workspaceBuf,
-  size_t workspaceBytes
+  size_t workspaceBytes,
+  cudaEvent_t inputConsumedEvent,
+  cudaEvent_t outputConsumedEvent
 ) {
   (void)cudaHandles_;
   (void)scratch;
@@ -246,19 +342,29 @@ void Sm89Model::apply(
       scoreValueBuf,
       ownershipBuf,
       workspaceBuf,
-      workspaceBytes
+      workspaceBytes,
+      inputConsumedEvent,
+      outputConsumedEvent
     );
+    for(string key : forward->getActiveTactics()) {
+      if(key == "cudaFlashAttentionTacticSm89")
+        key += "=" + options.flashAttentionTacticName;
+      if(loggedActiveTactics.insert(key).second && logger != NULL)
+        logger->write("SM89 backend: runtime tactic active: " + key);
+    }
     return;
   }
 
   if(!loggedFallback) {
     if(logger != NULL)
-      logger->write("SM89 backend: stage-0 official fallback active (rebuild scaffold)");
+      logger->write("SM89 backend: unsupported-model official fallback active");
     loggedFallback = true;
   }
 
-  // Stage 0: bit-identical delegation to the official backend. Once a stage lands, this becomes
-  // the SM89-specific forward path with per-stage fallback where shapes/precision are unsupported.
+  // The specialized forward rejected this model at construction, so use the
+  // explicit whole-model compatibility path.
+  if(inputConsumedEvent != nullptr || outputConsumedEvent != nullptr)
+    throw StringError("SM89 event-gated inference requires the custom forward path");
   officialApply(
     officialApplyContext,
     cudaHandles,

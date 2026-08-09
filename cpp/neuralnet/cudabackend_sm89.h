@@ -6,6 +6,7 @@
 #include "../neuralnet/desc.h"
 
 #include <memory>
+#include <set>
 #include <string>
 
 // SM89-specific CUDA backend.
@@ -15,12 +16,8 @@
 // cudahelpers.cu, cudautils.cpp, ...) only contain a thin dispatch: ComputeHandle builds an
 // Sm89Model on SM89 and routes apply() through it. cudabackend.cpp remains the official fallback.
 //
-// Rebuild roadmap (from /workspace/cuda-optimization-history.md):
-//   0. scaffold: Sm89Model delegates to the official model (bit-identical)  [current state]
-//   1. wide QKV / wide FFN projections, fused residual epilogues
-//   2. GEMM / attention AOT with higher-occupancy SM89 kernels
-//   3. RMSNorm/silu/head kernels, persisting-L2, weight sharing, initial-conv frontend
-//   4. final batch/stream scan + full accuracy regression per stage
+// Supported transformer shapes use Sm89Forward directly. Unsupported models
+// keep the official Model traversal as the explicit correctness fallback.
 
 struct CudaHandles;    // defined in cudabackend.cpp
 struct ScratchBuffers; // defined in cudabackend.cpp
@@ -55,12 +52,14 @@ struct Options {
   // SM89-specific forward instead of the official fallback.
   bool useForward = true;
 
-  // Historical optimization switches; defaults are conservative so the scaffold is bit-identical.
-  // Each stage lands behind its own switch and is validated before flipping its default.
-  bool useWideQKV = true;
-  bool useWideFFN = true;
-  bool useFusedResidual = true;
-  bool useRMSNormOpt = true;
+  // Historical optimization coordinates. The generated plan selects exact
+  // runtime tactics; unsupported explicit selections fail in Sm89Forward.
+  bool useWideQKV = false;
+  bool useWideFFN = false;
+  bool useFusedResidual = false;
+  bool useRMSNormOpt = false;
+  // Number of independent row-warps per RMSNorm CTA. Stage39 measured both.
+  int rmsNormRowsPerBlock = 4;
   bool useMatmulLt = false;
   bool useFusedQKRoPE = false;
   bool usePrecomputedQKRoPE = false;
@@ -68,29 +67,39 @@ struct Options {
   bool useSplitQKVRoPEGemm = false;
   int plainQKVVariant = 0;
   int ropeBatchGroup = 1;
-  bool useFlashAttention = false;
-  bool useFlashAttentionBoth16 = false;
+  // 0 disabled; 1 M128N112 fp32; 2 M128N96 fp32; 3 M64N96 packed-GQA
+  // fp32; 4 M64N96 unpacked fp32; 5 M64N96 unpacked both16.
+  int flashAttentionTactic = 0;
+  std::string flashAttentionTacticName = "disabled";
   bool useDualGemmSwiGLU = false;
-  bool useDualGemmSwiGLUHalf2Tanh = false;
   bool useLinear2Gemm = false;
   bool useOutProjGemm = false;
   bool usePreConvGemm = false;
   bool usePostConvGemm = false;
+  std::string dualFfnCutlassTactic = "disabled";
+  std::string linear2CutlassTactic = "disabled";
+  std::string outProjCutlassTactic = "disabled";
+  std::string preConvCutlassTactic = "disabled";
+  std::string postConvCutlassTactic = "disabled";
   bool usePostConvBNSilu = false;
   bool useLinear2PostBNSilu = false;
   bool useBatchSharedRoPE = false;
   bool useFusedFFN = false;
   bool useInitialConvFrontend = false;
   bool useInitialGlobalMatMulAdd = false;
-  bool useFusedPolicyP1 = false;
+  // 0 disables the fused policy P1 kernel. Stage25 retained both one-row and
+  // five-row launch geometries as distinct, numerically identical tactics.
+  int policyP1RowsPerBlock = 0;
   bool useHeadBNHalfToFloat = false;
   bool useWideHeadProjection = false;
+  bool useExactMaskDownstreamElision = false;
   bool useExactMaskElision = false;
   bool useFusedValueTerminal = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
   float persistingL2HitRatio = 1.0f;
   bool useScaleBiasSiluVec8 = false;
+  bool useScaleBiasSiluVec8C384 = false;
   bool useScaleBiasSiluVec4C384 = false;
   bool shareModelWeights = false;
   std::string dualFfnAotTactic = "disabled";
@@ -105,8 +114,7 @@ Options parseOptions(ConfigParser& cfg);
 
 class Sm89Forward;
 
-// The SM89 model implementation. The official model is kept alive by the caller and is used as
-// the correctness fallback until each stage of the rebuild lands.
+// SM89 forward owner with an explicit whole-model compatibility fallback.
 class Sm89Model {
  public:
   Sm89Model(
@@ -147,7 +155,9 @@ class Sm89Model {
     void* ownershipBuf,
 
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    cudaEvent_t inputConsumedEvent = nullptr,
+    cudaEvent_t outputConsumedEvent = nullptr
   );
 
  private:
@@ -164,11 +174,9 @@ class Sm89Model {
   Options options;
   Logger* logger;
   bool loggedFallback;
+  std::set<std::string> loggedActiveTactics;
   std::unique_ptr<Sm89Forward> forward;
   bool forwardActive;
-
-  // TODO(rebuild): device weight buffers, AOT kernel handles, per-GPU shared-weight caches,
-  // persisting-L2 access-policy windows, scratch/workspace plan.
 };
 
 } // namespace Sm89Backend

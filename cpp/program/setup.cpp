@@ -4,6 +4,7 @@
 #include "../core/test.h"
 #include "../core/makedir.h"
 #include "../core/fileutils.h"
+#include "../neuralnet/cudatacticplan.h"
 #include "../neuralnet/nninterface.h"
 #include "../search/patternbonustable.h"
 
@@ -104,7 +105,7 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     string idxStr = Global::uint64ToString(i);
     const string& nnModelName = nnModelNames[i];
     const string& nnModelFile = nnModelFiles[i];
-    const string& expectedSha256 = expectedSha256s.size() > 0 ? expectedSha256s[i]: "";
+    string expectedSha256 = expectedSha256s.size() > 0 ? expectedSha256s[i]: "";
 
     bool debugSkipNeuralNetDefault = (nnModelFile == "/dev/null");
     bool debugSkipNeuralNet =
@@ -140,6 +141,15 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
         requireExactNNLen = cfg.getBool("requireMaxBoardSize" + idxStr);
       else if(cfg.contains("requireMaxBoardSize"))
         requireExactNNLen = cfg.getBool("requireMaxBoardSize");
+    }
+
+    unique_ptr<CudaTacticPlan::Plan> cudaTacticPlan =
+      CudaTacticPlan::loadAndApply(cfg,logger,nnXLen,nnYLen,requireExactNNLen);
+    if(cudaTacticPlan != nullptr) {
+      if(expectedSha256 != "" &&
+         Global::toLower(expectedSha256) != Global::toLower(cudaTacticPlan->modelSha256))
+        throw StringError("Configured model SHA-256 differs from the CUDA tactic plan");
+      expectedSha256 = cudaTacticPlan->modelSha256;
     }
 
     bool inputsUseNHWC = backendPrefix == "opencl" || backendPrefix == "trt" || backendPrefix == "metal" ? false : true;
@@ -218,6 +228,8 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
       else
         gpuIdxByServerThread.push_back(-1);
     }
+    if(cudaTacticPlan != nullptr)
+      CudaTacticPlan::validateDevices(*cudaTacticPlan,gpuIdxByServerThread);
 
     string homeDataDirOverride = loadHomeDataDirOverride(cfg);
 
@@ -288,6 +300,12 @@ vector<NNEvaluator*> Setup::initializeNNEvaluators(
     cfg.markAllKeysUsedWithPrefix("nnMaxBatchSize");
     (void)defaultMaxBatchSize;
 #endif
+
+    if(cudaTacticPlan != nullptr && nnMaxBatchSize != cudaTacticPlan->batchSize)
+      throw StringError(
+        "Evaluator batch size B" + Global::intToString(nnMaxBatchSize) +
+        " differs from CUDA tactic plan B" + Global::intToString(cudaTacticPlan->batchSize)
+      );
 
     int defaultSymmetry = forcedSymmetry >= 0 ? forcedSymmetry : 0;
     if(disableFP16)

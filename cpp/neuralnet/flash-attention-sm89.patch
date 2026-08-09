@@ -2,13 +2,31 @@ diff --git a/hopper/flash_fwd_launch_template.h b/hopper/flash_fwd_launch_templa
 index 43567a5..988679d 100644
 --- a/hopper/flash_fwd_launch_template.h
 +++ b/hopper/flash_fwd_launch_template.h
-@@ -29,3 +29,4 @@ template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element,
+@@ -29,3 +29,5 @@ template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element,
            bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
 -          bool PackGQA, bool Split, bool V_colmajor>
 +          bool PackGQA, bool Split, bool V_colmajor,
-+          typename ElementAccum = float>  // KATAGO_FLASH_BOTH16_ACCUM
++          typename ElementAccum = float,  // KATAGO_FLASH_BOTH16_ACCUM
++          int KatagoBlockM = 0, int KatagoBlockN = 0, int KatagoNumWarps = 0>
  void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
-@@ -55,3 +56,3 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+@@ -39,10 +41,13 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+     // Can't use structured binding since it's not compatible with constexpr
+     static constexpr std::tuple<int, int, bool, bool> kBlockMN_RS_IntraWGOverlap = tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap);
+     static constexpr std::tuple<int, int, int, int, bool> kBlockMN_kNWarps_Stages_RS = tile_size_fwd_sm8x(Arch == 86 || Arch == 89, kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, PagedKVNonTMA, Varlen && Split, Has_softcap, AppendKV);
+-    static constexpr int kBlockM = Arch >= 90 ? std::get<0>(kBlockMN_RS_IntraWGOverlap) : std::get<0>(kBlockMN_kNWarps_Stages_RS);
+-    static constexpr int kBlockN = Arch >= 90 ? std::get<1>(kBlockMN_RS_IntraWGOverlap) : std::get<1>(kBlockMN_kNWarps_Stages_RS);
++    static constexpr int kBlockMDefault = Arch >= 90 ? std::get<0>(kBlockMN_RS_IntraWGOverlap) : std::get<0>(kBlockMN_kNWarps_Stages_RS);
++    static constexpr int kBlockNDefault = Arch >= 90 ? std::get<1>(kBlockMN_RS_IntraWGOverlap) : std::get<1>(kBlockMN_kNWarps_Stages_RS);
++    static constexpr int kBlockM = KatagoBlockM > 0 ? KatagoBlockM : kBlockMDefault;
++    static constexpr int kBlockN = KatagoBlockN > 0 ? KatagoBlockN : kBlockNDefault;
+     static constexpr bool MmaPV_is_RS = std::get<2>(kBlockMN_RS_IntraWGOverlap);
+     static constexpr bool IntraWGOverlap = std::get<3>(kBlockMN_RS_IntraWGOverlap);
+-    static constexpr int kNWarps = std::get<2>(kBlockMN_kNWarps_Stages_RS);
++    static constexpr int kNWarpsDefault = std::get<2>(kBlockMN_kNWarps_Stages_RS);
++    static constexpr int kNWarps = KatagoNumWarps > 0 ? KatagoNumWarps : kNWarpsDefault;
+     static constexpr int kStages = Arch >= 90 ? 2 : std::get<3>(kBlockMN_kNWarps_Stages_RS);
+     static constexpr bool Q_in_regs = Arch >= 90 ? false : std::get<4>(kBlockMN_kNWarps_Stages_RS);
+@@ -55,3 +60,3 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
          flash::CollectiveMainloopFwdSm90<kStages, ClusterShape, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm90, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, HasQv, MmaPV_is_RS, IntraWGOverlap, PackGQA, Split, V_colmajor>,
 -        flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm80, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, PackGQA, Split>
 +        flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, ElementAccum, cutlass::arch::Sm80, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, PackGQA, Split>

@@ -240,6 +240,7 @@ int MainCmds::replaynn(const vector<string>& args) {
     meta << "\"numGlobalFeatures\":" << numGlobalFeatures << ",";
     meta << "\"numThreads\":" << numThreads << ",";
     meta << "\"maxBatchSize\":" << maxBatchSize << ",";
+    meta << "\"fixedBatchTailPadding\":true,";
     meta << "\"corpus\":\"" << jsonEscape(corpusFile) << "\",";
     meta << "\"sections\":[";
     for(int s = 0; s < numSections; s++) {
@@ -312,9 +313,14 @@ int MainCmds::replaynn(const vector<string>& args) {
           const float* qValueTargetData = (const float*)qValueTargets.data.data();
 
           for(int64_t rowGlobal = rowStart; rowGlobal < rowEnd; rowGlobal += maxBatchSize) {
-            const int batchSize = (int)std::min<int64_t>(maxBatchSize, rowEnd - rowGlobal);
+            const int realBatchSize =
+              (int)std::min<int64_t>(maxBatchSize, rowEnd - rowGlobal);
+            // Exact-batch AOT plans must also be exercised on the final
+            // partial corpus chunk. Repeat real rows to fill the physical
+            // batch, but serialize only the real rows below.
+            const int batchSize = maxBatchSize;
             for(int b = 0; b < batchSize; b++) {
-              const int64_t row = rowGlobal + b;
+              const int64_t row = rowGlobal + (b % realBatchSize);
               float* dst = hostSpatial.data() + (size_t)b * numBinFeatures * posArea;
               const float* src = binData + row * numBinFeatures * posArea;
               if(nnEval->getInputsUseNHWC()) {
@@ -334,7 +340,6 @@ int MainCmds::replaynn(const vector<string>& args) {
             // (with symmetry applied), so populate those buffers rather than the raw
             // userInputBuffer.
             for(int b = 0; b < batchSize; b++) {
-              const int64_t row = rowGlobal + b;
               NNResultBuf* buf = bufPtrs[b];
               buf->rowSpatialBuf.assign(
                 hostSpatial.data() + (size_t)b * numBinFeatures * posArea,
@@ -385,7 +390,7 @@ int MainCmds::replaynn(const vector<string>& args) {
             float* inputBinary = sectionPtr[10] + localRow * sectionDims[10];
             float* inputGlobal = sectionPtr[11] + localRow * sectionDims[11];
 
-            for(int b = 0; b < batchSize; b++) {
+            for(int b = 0; b < realBatchSize; b++) {
               const int64_t row = rowGlobal + b;
               float* dstRow = policyLogits + (int64_t)b * sectionDims[0];
               const float* srcPolicy = raw.policyResults + (size_t)b * numPolicyChannels * posArea;

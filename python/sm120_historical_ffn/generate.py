@@ -49,7 +49,7 @@ STAGES = 2
 THREADS = 128
 MIN_BLOCKS_PER_SM = 3
 DYNAMIC_SMEM_BYTES = 32768
-CANDIDATE_ID = "ffn-m128-n64-k32-s2-mb3-tanh-half2"
+CANDIDATE_ID = "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2"
 SOURCE_NAME = f"ffn-{CANDIDATE_ID}.cu"
 METADATA_NAME = f"ffn-{CANDIDATE_ID}.json"
 
@@ -72,7 +72,7 @@ WRAPPER = r'''
 
 extern "C" int sm120_search_ffn_batch() { return KATAGO_BATCH; }
 extern "C" const char* sm120_search_ffn_id() {
-  return "ffn-m128-n64-k32-s2-mb3-tanh-half2";
+  return "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2";
 }
 
 extern "C" cudaError_t sm120_search_ffn_launch(
@@ -401,7 +401,7 @@ def append_search_wrapper(
         guarded = isolate_tilelang_debug_symbols(guarded, fat_symbol_token)
         template = FAT_WRAPPER.replace(
             "KATAGO_FAT_LAUNCH_SYMBOL",
-            launch_symbol("ffn", fat_symbol_token),
+            launch_symbol("dual_ffn", fat_symbol_token),
         )
     wrapper = (
         template.replace("KATAGO_GRID_Y", str(grid_y))
@@ -412,8 +412,12 @@ def append_search_wrapper(
 
 def validate_space(path: Path, batch: int, candidate_id: str) -> None:
     space = json.loads(path.read_text(encoding="utf-8"))
-    if space.get("schema") != 2:
-        raise ValueError("--space must use schema 2")
+    if (
+        space.get("schema") != 1 or
+        space.get("kind") != "cuda-tactic-search-space" or
+        space.get("architecture") != "sm120"
+    ):
+        raise ValueError("--space must be an SM120 CUDA tactic search space")
     batch_space = next(
         (item for item in space.get("batches", []) if item.get("batch") == batch),
         None,
@@ -421,7 +425,10 @@ def validate_space(path: Path, batch: int, candidate_id: str) -> None:
     if batch_space is None:
         raise ValueError(f"B{batch} is outside --space")
     candidate = next(
-        (item for item in batch_space.get("ffn", []) if item.get("id") == candidate_id),
+        (
+            item for item in batch_space.get("dual_ffn", [])
+            if item.get("id") == candidate_id
+        ),
         None,
     )
     if candidate is None:
@@ -454,7 +461,7 @@ def metadata_for(
     grid_y = (rows + BLOCK_M - 1) // BLOCK_M
     return {
         "schema": 2,
-        "family": "ffn",
+        "family": "dual_ffn",
         "candidate": CANDIDATE,
         "batch": batch,
         "tokens": rows,
@@ -481,7 +488,7 @@ def metadata_for(
             ),
             "idSymbol": None if fat_symbol_token else "sm120_search_ffn_id",
             "launchSymbol": (
-                launch_symbol("ffn", fat_symbol_token)
+                launch_symbol("dual_ffn", fat_symbol_token)
                 if fat_symbol_token else "sm120_search_ffn_launch"
             ),
             "launchArguments": [
@@ -501,7 +508,7 @@ def metadata_for(
         },
         "fat_symbol_token": fat_symbol_token,
         "launch_symbol": (
-            launch_symbol("ffn", fat_symbol_token)
+            launch_symbol("dual_ffn", fat_symbol_token)
             if fat_symbol_token else "sm120_search_ffn_launch"
         ),
         "source": str(source_path.resolve()),
@@ -595,7 +602,9 @@ def parse_args() -> argparse.Namespace:
         help="stable active-slot path; valid only with one --batch",
     )
     parser.add_argument("--space", type=Path)
-    parser.add_argument("--family", choices=("ffn",), default="ffn")
+    parser.add_argument(
+        "--family", choices=("dual_ffn",), default="dual_ffn"
+    )
     parser.add_argument("--candidate-id", default=CANDIDATE_ID)
     parser.add_argument("--fat-symbol-token")
     return parser.parse_args()

@@ -4,6 +4,7 @@
 #include "../core/global.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ struct NpzReader {
   std::map<std::string, NpzArray> arrays;
 
   explicit NpzReader(const std::string& fileName);
+  NpzReader(const std::string& fileName, const std::set<std::string>& requestedNames);
   bool has(const std::string& name) const { return arrays.find(name) != arrays.end(); }
   const NpzArray& get(const std::string& name) const {
     auto it = arrays.find(name);

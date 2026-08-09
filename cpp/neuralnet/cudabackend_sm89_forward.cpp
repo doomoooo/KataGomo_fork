@@ -36,6 +36,12 @@ namespace Sm89Backend {
 // --------------------------------------------------------------------------------------
 // Context / scratch
 
+static bool streamCaptureIsActive(cudaStream_t stream) {
+  cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
+  CUDA_ERR("Sm89EventPipeline",cudaStreamIsCapturing(stream,&status));
+  return status != cudaStreamCaptureStatusNone;
+}
+
 static Sm89DeviceCapabilities queryCurrentDeviceCapabilities() {
   int device = 0;
   cudaDeviceProp properties = {};
@@ -87,13 +93,25 @@ static void clearPersistingL2Window(cudaStream_t stream) {
 Sm89Ctx::Sm89Ctx(
   cudaStream_t stream_,
   int serverThreads_,
+  int rmsNormRowsPerBlock_,
   const string& dualFfnAotTactic_,
-  const string& linear2AotTactic_
+  const string& linear2AotTactic_,
+  const string& dualFfnCutlassTactic_,
+  const string& linear2CutlassTactic_,
+  const string& outProjCutlassTactic_,
+  const string& preConvCutlassTactic_,
+  const string& postConvCutlassTactic_
 )
   : cublas(NULL), cudnn(NULL), stream(stream_),
     deviceCaps(queryCurrentDeviceCapabilities()),
-    serverThreads(serverThreads_), dualFfnAotTactic(dualFfnAotTactic_),
-    linear2AotTactic(linear2AotTactic_)
+    serverThreads(serverThreads_), rmsNormRowsPerBlock(rmsNormRowsPerBlock_),
+    dualFfnAotTactic(dualFfnAotTactic_),
+    linear2AotTactic(linear2AotTactic_),
+    dualFfnCutlassTactic(dualFfnCutlassTactic_),
+    linear2CutlassTactic(linear2CutlassTactic_),
+    outProjCutlassTactic(outProjCutlassTactic_),
+    preConvCutlassTactic(preConvCutlassTactic_),
+    postConvCutlassTactic(postConvCutlassTactic_)
 {
   if(stream == NULL)
     throw StringError("Sm89Ctx: external CUDA stream must not be null");
@@ -106,6 +124,10 @@ Sm89Ctx::Sm89Ctx(
 Sm89Ctx::~Sm89Ctx() {
   cublasDestroy(cublas);
   cudnnDestroy(cudnn);
+}
+
+void Sm89Ctx::markTacticActive(const string& marker) {
+  activeTactics.insert(marker);
 }
 
 Sm89Scratch::Sm89Scratch(
@@ -406,8 +428,9 @@ struct Sm89SharedMatMulKeyHash {
 };
 
 static std::shared_ptr<Sm89SharedMatMulWeight> getSharedMatMulWeight(
-  const MatMulLayerDesc* desc, bool useFP16, const string& name
+  const MatMulLayerDesc* desc, bool useFP16, const string& name, bool& cacheHit
 ) {
+  cacheHit = false;
   static std::mutex mutex;
   static std::unordered_map<
     Sm89SharedMatMulKey,
@@ -422,8 +445,10 @@ static std::shared_ptr<Sm89SharedMatMulWeight> getSharedMatMulWeight(
   auto it = cache.find(key);
   if(it != cache.end()) {
     std::shared_ptr<Sm89SharedMatMulWeight> existing = it->second.lock();
-    if(existing != nullptr)
+    if(existing != nullptr) {
+      cacheHit = true;
       return existing;
+    }
   }
 
   void* ptr = NULL;
@@ -440,6 +465,7 @@ struct Sm89MatMul {
   const bool usingFP16;
   void* matBuf;
   std::shared_ptr<Sm89SharedMatMulWeight> sharedWeight;
+  bool sharedWeightCacheHit;
 
   Sm89MatMul() = delete;
   Sm89MatMul(const Sm89MatMul&) = delete;
@@ -451,12 +477,15 @@ struct Sm89MatMul {
       outChannels(desc->outChannels),
       usingFP16(useFP16),
       matBuf(NULL),
-      sharedWeight(nullptr)
+      sharedWeight(nullptr),
+      sharedWeightCacheHit(false)
   {
     if(inChannels > 0 && outChannels > 0) {
       testAssert((int)desc->weights.size() == inChannels * outChannels);
       if(shareWeights) {
-        sharedWeight = getSharedMatMulWeight(desc, useFP16, name);
+        sharedWeight = getSharedMatMulWeight(
+          desc, useFP16, name, sharedWeightCacheHit
+        );
         matBuf = sharedWeight->ptr;
       }
       else {
@@ -472,6 +501,8 @@ struct Sm89MatMul {
 
   void apply(Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* inputBuf, void* outputBuf) const {
     assert(inChannels > 0 && outChannels > 0);
+    if(sharedWeightCacheHit)
+      ctx->markTacticActive("cudaShareModelWeights");
     if(!usingFP16) {
       const float alpha = 1.0f;
       const float beta = 0.0f;
@@ -575,7 +606,9 @@ struct Sm89BatchNorm {
   const bool usingFP16;
   const bool usingNHWC;
   const bool useScaleBiasSiluVec8;
+  const bool useScaleBiasSiluVec8C384;
   const bool useScaleBiasSiluVec4C384;
+  Sm89Ctx* const context;
   const cudaStream_t stream;
   void* mergedScaleBuf;
   void* mergedBiasBuf;
@@ -586,8 +619,9 @@ struct Sm89BatchNorm {
 
   Sm89BatchNorm(
     const BatchNormLayerDesc* desc, const ActivationLayerDesc* actDesc,
-    int nnX, int nnY, bool useFP16, bool useNHWC, cudaStream_t stream_,
+    int nnX, int nnY, bool useFP16, bool useNHWC, Sm89Ctx* context_,
     bool useScaleBiasSiluVec8_ = false,
+    bool useScaleBiasSiluVec8C384_ = false,
     bool useScaleBiasSiluVec4C384_ = false
   )
     : name(desc->name),
@@ -598,8 +632,10 @@ struct Sm89BatchNorm {
       usingFP16(useFP16),
       usingNHWC(useNHWC),
       useScaleBiasSiluVec8(useScaleBiasSiluVec8_),
+      useScaleBiasSiluVec8C384(useScaleBiasSiluVec8C384_),
       useScaleBiasSiluVec4C384(useScaleBiasSiluVec4C384_),
-      stream(stream_),
+      context(context_),
+      stream(context_->stream),
       mergedScaleBuf(NULL),
       mergedBiasBuf(NULL)
   {
@@ -630,6 +666,17 @@ struct Sm89BatchNorm {
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
             batchSize, nnXLen * nnYLen, numChannels, stream
           );
+          if(handled)
+            context->markTacticActive("cudaUseScaleBiasSiluVec8Sm89");
+        }
+        if(!handled && useScaleBiasSiluVec8C384 && maskBuf == NULL && activation == ACTIVATION_SILU) {
+          handled = sm89ScaleBiasSiluNHWCHalfVec8C384(
+            (const half*)inputBuf, (half*)outputBuf,
+            (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
+            batchSize, nnXLen * nnYLen, numChannels, stream
+          );
+          if(handled)
+            context->markTacticActive("cudaUseScaleBiasSiluVec8C384Sm89");
         }
         if(!handled && useScaleBiasSiluVec4C384 && maskBuf == NULL && activation == ACTIVATION_SILU) {
           handled = sm89ScaleBiasSiluNHWCHalfVec4C384(
@@ -637,6 +684,8 @@ struct Sm89BatchNorm {
             (const half*)mergedScaleBuf, (const half*)mergedBiasBuf,
             batchSize, nnXLen * nnYLen, numChannels, stream
           );
+          if(handled)
+            context->markTacticActive("cudaUseScaleBiasSiluVec4C384Sm89");
         }
         if(!handled)
           customCudaApplyCScaleBiasNHWC((const half*)inputBuf, (half*)outputBuf, (const half*)mergedScaleBuf, (const half*)mergedBiasBuf, (const half*)maskBuf, batchSize, nnXLen * nnYLen, numChannels, activation,stream);
@@ -652,6 +701,8 @@ struct Sm89TransformerRMSNorm {
   const float epsilon;
   const bool usingFP16;
   const bool useOptimized;
+  const int rowsPerBlock;
+  Sm89Ctx* const context;
   const cudaStream_t stream;
   void* weightBuf;
   void* zeroBetaBuf;
@@ -660,13 +711,17 @@ struct Sm89TransformerRMSNorm {
   Sm89TransformerRMSNorm(const Sm89TransformerRMSNorm&) = delete;
   Sm89TransformerRMSNorm& operator=(const Sm89TransformerRMSNorm&) = delete;
 
-  Sm89TransformerRMSNorm(const TransformerRMSNormDesc* desc, bool useFP16, bool useOptimized_, cudaStream_t stream_)
+  Sm89TransformerRMSNorm(
+    const TransformerRMSNormDesc* desc, bool useFP16, bool useOptimized_,
+    int rowsPerBlock_, Sm89Ctx* context_)
     : name(desc->name),
       numChannels(desc->numChannels),
       epsilon(desc->epsilon),
       usingFP16(useFP16),
       useOptimized(useOptimized_),
-      stream(stream_),
+      rowsPerBlock(rowsPerBlock_),
+      context(context_),
+      stream(context_->stream),
       weightBuf(NULL),
       zeroBetaBuf(NULL)
   {
@@ -680,11 +735,22 @@ struct Sm89TransformerRMSNorm {
     cudaFree(zeroBetaBuf);
   }
   void apply(int batchSize, int xySize, void* inputBuf, void* outputBuf, const void* maskBuf) const {
-    if(useOptimized && usingFP16 && sm89RMSNormNHWCHalf(
-      (const half*)inputBuf, (half*)outputBuf, (const half*)weightBuf, (const half*)zeroBetaBuf,
-      (const half*)maskBuf, batchSize, xySize, numChannels, epsilon, stream
-    ))
-      return;
+    if(useOptimized && usingFP16) {
+      if(sm89RMSNormNHWCHalf(
+        (const half*)inputBuf, (half*)outputBuf,
+        (const half*)weightBuf, (const half*)zeroBetaBuf,
+        (const half*)maskBuf, batchSize, xySize, numChannels, epsilon,
+        rowsPerBlock, stream
+      )) {
+        context->markTacticActive("cudaUseRMSNormOpt");
+        if(rowsPerBlock != 4)
+          context->markTacticActive(
+            "cudaRMSNormRowsPerBlockSm89=" + Global::intToString(rowsPerBlock)
+          );
+        return;
+      }
+      throw StringError("Selected SM89 RMSNorm tactic failed to launch");
+    }
     if(!usingFP16)
       customCudaRMSNormGammaBetaNHWC((const float*)inputBuf, (float*)outputBuf, (const float*)weightBuf, (const float*)zeroBetaBuf, (const float*)maskBuf, batchSize, xySize, numChannels, epsilon, ACTIVATION_IDENTITY,stream);
     else
@@ -710,6 +776,7 @@ struct Sm89Conv {
   int matmulSpatialSize;
   void* matmulWeightBuf;
   bool usingFP16;
+  bool initialConvFrontendRequested;
   bool useInitialConvFrontend;
 #if CUDNN_VERSION >= 8903
   std::shared_ptr<cudnn_frontend::graph::Graph> frontendGraph;
@@ -746,6 +813,7 @@ struct Sm89Conv {
       matmulSpatialSize(0),
       matmulWeightBuf(NULL),
       usingFP16(useFP16),
+      initialConvFrontendRequested(useInitialConvFrontend_),
       useInitialConvFrontend(false)
 #if CUDNN_VERSION >= 8903
       , frontendGraph(nullptr),
@@ -982,10 +1050,14 @@ struct Sm89Conv {
         {frontendX, inputBuf}, {frontendW, filterBuf}, {frontendY, outputBuf}
       };
       auto status = frontendGraph->execute(ctx->cudnn, ptrs, workspaceBuf);
-      if(status.is_good())
+      if(status.is_good()) {
+        ctx->markTacticActive("cudaUseInitialConvFrontend");
         return;
+      }
     }
 #endif
+    if(initialConvFrontendRequested)
+      throw StringError("Selected SM89 initial-conv frontend plan is unavailable");
     const float alpha = 1.0f;
     const float beta = accumulate ? 1.0f : 0.0f;
     CUDNN_ERR(name.c_str(),cudnnConvolutionForward(
@@ -1043,8 +1115,7 @@ struct Sm89AttentionBlock {
   const bool useSplitQKVRoPEGemm;
   const int plainQKVVariant;
   const int ropeBatchGroup;
-  const bool useFlashAttention;
-  const bool useFlashAttentionBoth16;
+  const int flashAttentionTactic;
   const bool useOutProjGemm;
   const Sm89TransformerRMSNorm preLN;
   const Sm89MatMul qProj;
@@ -1060,17 +1131,17 @@ struct Sm89AttentionBlock {
   int ropeNumPairs;
   std::shared_ptr<Sm89SDPACache> sdpaCache;
 #ifdef KATAGO_ENABLE_SM89_OUTPROJ_GEMM
-  std::unique_ptr<Sm89Backend::Sm89OutProjGemmB13> outProjGemm;
+  std::unique_ptr<Sm89Backend::Sm89OutProjGemm> outProjGemm;
 #endif
 #ifdef KATAGO_ENABLE_SM89_QKV_ROPE_GEMM
-  std::unique_ptr<Sm89Backend::Sm89QKVRoPEGemmB13> qkvRopeGemm;
+  std::unique_ptr<Sm89Backend::Sm89QKVRoPEGemm> qkvRopeGemm;
 #endif
 
   Sm89AttentionBlock() = delete;
   Sm89AttentionBlock(const Sm89AttentionBlock&) = delete;
   Sm89AttentionBlock& operator=(const Sm89AttentionBlock&) = delete;
 
-  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, bool useSplitQKVRoPEGemm_, int plainQKVVariant_, int ropeBatchGroup_, bool useFlashAttention_, bool useFlashAttentionBoth16_, bool useOutProjGemm_, bool shareModelWeights_)
+  Sm89AttentionBlock(Sm89Ctx* ctx, const TransformerAttentionDesc* desc, int nnX, int nnY, bool useFP16, bool useNHWC, bool useWideQKV, bool useFusedResidual_, bool useRMSNormOpt_, bool useFusedQKRoPE_, bool usePrecomputedQKRoPE_, bool useQKVRoPEGemm_, bool useSplitQKVRoPEGemm_, int plainQKVVariant_, int ropeBatchGroup_, int flashAttentionTactic_, bool useOutProjGemm_, bool shareModelWeights_)
     : name(desc->name),
       numHeads(desc->numHeads),
       numKVHeads(desc->numKVHeads),
@@ -1089,10 +1160,11 @@ struct Sm89AttentionBlock {
       useSplitQKVRoPEGemm(useSplitQKVRoPEGemm_),
       plainQKVVariant(plainQKVVariant_),
       ropeBatchGroup(ropeBatchGroup_),
-      useFlashAttention(useFlashAttention_),
-      useFlashAttentionBoth16(useFlashAttentionBoth16_),
+      flashAttentionTactic(flashAttentionTactic_),
       useOutProjGemm(useOutProjGemm_),
-      preLN(&desc->preLN, useFP16, useRMSNormOpt_, ctx->stream),
+      preLN(
+        &desc->preLN, useFP16, useRMSNormOpt_,
+        ctx->rmsNormRowsPerBlock, ctx),
       qProj(&desc->qProj, useFP16, shareModelWeights_),
       kProj(&desc->kProj, useFP16, shareModelWeights_),
       vProj(&desc->vProj, useFP16, shareModelWeights_),
@@ -1116,7 +1188,8 @@ struct Sm89AttentionBlock {
       throw StringError("Sm89AttentionBlock: transformer blocks require NHWC");
 #ifdef KATAGO_ENABLE_SM89_OUTPROJ_GEMM
     if(useOutProjGemm && useFP16 && useFusedResidual_)
-      outProjGemm = std::make_unique<Sm89Backend::Sm89OutProjGemmB13>((const half*)outProj.matBuf);
+      outProjGemm = std::make_unique<Sm89Backend::Sm89OutProjGemm>(
+        (const half*)outProj.matBuf, ctx->outProjCutlassTactic);
 #endif
     int qTotalDim = numHeads * qHeadDim;
     int kTotalDim = numKVHeads * qHeadDim;
@@ -1165,8 +1238,9 @@ struct Sm89AttentionBlock {
     if(useQKVRoPEGemm && useQKVBatched && ropeFreqsBuf != NULL &&
        nnXLen == 19 && nnYLen == 19 && inChannels == 384 &&
       numHeads == 12 && numKVHeads == 12 && qHeadDim == 32 && vHeadDim == 32) {
-      qkvRopeGemm = std::make_unique<Sm89Backend::Sm89QKVRoPEGemmB13>(
-        (const half*)qkvWeightsBuf, ropeFreqsBuf, useSplitQKVRoPEGemm_,
+      qkvRopeGemm = std::make_unique<Sm89Backend::Sm89QKVRoPEGemm>(
+        (const half*)qkvWeightsBuf, ropeFreqsBuf, ropeCosSinTable,
+        useSplitQKVRoPEGemm_,
         plainQKVVariant_
       );
     }
@@ -1213,7 +1287,17 @@ struct Sm89AttentionBlock {
         (const half*)trunkScratchBuf, (half*)qkvBuf.buf,
         batchSize, seqLen, inChannels, qTotalDim, numHeads, qHeadDim, ctx->stream
       );
+      if(!usedQKVRoPEGemm)
+        throw StringError("Selected SM89 QKV+RoPE CUTLASS tactic failed to launch");
+      ctx->markTacticActive("cudaUseQKVRoPEGemmSm89");
+      ctx->markTacticActive("cudaUseWideQKV");
+      if(useSplitQKVRoPEGemm)
+        ctx->markTacticActive("cudaUseSplitQKVRoPEGemmSm89");
+      if(plainQKVVariant != 0)
+        ctx->markTacticActive("cudaPlainQKVVariantSm89");
     }
+    else if(useQKVRoPEGemm)
+      throw StringError("Selected SM89 QKV+RoPE tactic is unavailable for this model shape");
 #endif
     if(useQKVBatched) {
       if(!usedQKVRoPEGemm) {
@@ -1229,6 +1313,7 @@ struct Sm89AttentionBlock {
           (half*)qkvBuf.buf, qTotalDim, (int64_t)qTotalDim * matBatchSize,
           3
         ));
+        ctx->markTacticActive("cudaUseWideQKV");
       }
     }
     else {
@@ -1239,12 +1324,16 @@ struct Sm89AttentionBlock {
 
     if(ropeFreqsBuf != NULL) {
       bool usedFusedRoPE = usedQKVRoPEGemm && !useSplitQKVRoPEGemm;
+      bool usedPrecomputedRoPE =
+        usedFusedRoPE && ropeCosSinTable != NULL;
+      bool usedGroupedRoPE = false;
       if(!usedFusedRoPE && useFusedQKRoPE && usingFP16) {
         if(ropeCosSinTable != NULL) {
           usedFusedRoPE = sm89ApplyRoPEQKHalfPrecomputed(
             (half*)qBuf, (half*)kBuf, ropeCosSinTable,
             batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ctx->stream
           );
+          usedPrecomputedRoPE = usedFusedRoPE;
         }
         else {
           if(ropeBatchGroup > 1) {
@@ -1253,6 +1342,7 @@ struct Sm89AttentionBlock {
               batchSize, seqLen, numHeads, numKVHeads, qHeadDim, nnXLen,
               ropeBatchGroup, ctx->stream
             );
+            usedGroupedRoPE = usedFusedRoPE;
           }
           if(!usedFusedRoPE) {
             usedFusedRoPE = sm89ApplyRoPEQKHalf(
@@ -1263,8 +1353,14 @@ struct Sm89AttentionBlock {
         }
       }
       if(usedFusedRoPE) {
-        // handled
+        ctx->markTacticActive("cudaUseFusedQKRoPE");
+        if(usedPrecomputedRoPE)
+          ctx->markTacticActive("cudaUsePrecomputedQKRoPESm89");
+        if(usedGroupedRoPE)
+          ctx->markTacticActive("cudaRoPEBatchGroupSm89");
       }
+      else if(useFusedQKRoPE)
+        throw StringError("Selected SM89 fused QK RoPE tactic failed to launch");
       else if(!usingFP16) {
         customCudaApplyRoPELearnableRecompute((float*)qBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
         customCudaApplyRoPELearnableRecompute((float*)kBuf, ropeFreqsBuf, batchSize, seqLen, numKVHeads, numKVHeads, qHeadDim, ropeNumPairs, nnXLen, ctx->stream);
@@ -1289,13 +1385,16 @@ struct Sm89AttentionBlock {
     SizedBuf<void*> attnOutBuf(&scratch->allocator, (size_t)numHeads * vHeadDim * seqLen * batchSize * bytesPerElt);
     bool usedSDPA = false;
 #ifdef KATAGO_ENABLE_SM89_FLASH_ATTN
-    if(useFlashAttention && usingFP16 && maskBuf == NULL) {
+    if(flashAttentionTactic != 0 && usingFP16 && maskBuf == NULL) {
       SizedBuf<void*> lseBuf(&scratch->allocator, sm89FlashAttentionLseBytesD32(batchSize));
       usedSDPA = sm89FlashAttentionD32(
         (const half*)qBuf, (const half*)kBuf, (const half*)vBuf, (half*)attnOutBuf.buf,
         (float*)lseBuf.buf, batchSize, seqLen, numHeads, numKVHeads, qHeadDim, vHeadDim,
-        useFlashAttentionBoth16, ctx->deviceCaps.numSms, ctx->stream
+        flashAttentionTactic, ctx->deviceCaps.numSms, ctx->stream
       );
+      if(!usedSDPA)
+        throw StringError("Selected SM89 flash-attention tactic failed to launch");
+      ctx->markTacticActive("cudaFlashAttentionTacticSm89");
     }
 #endif
 #if CUDNN_VERSION >= 8903
@@ -1336,13 +1435,21 @@ struct Sm89AttentionBlock {
         (const half*)attnOutBuf.buf, (half*)trunkBuf,
         batchSize, seqLen, numHeads * vHeadDim, inChannels, ctx->stream
       );
+      if(!usedOutProjGemm)
+        throw StringError("Selected SM89 out-projection CUTLASS tactic failed to launch");
+      ctx->markTacticActive(
+        "cudaOutProjCutlassTacticSm89=" + ctx->outProjCutlassTactic
+      );
     }
 #endif
+    if(useOutProjGemm && !usedOutProjGemm)
+      throw StringError("Selected SM89 out-projection CUTLASS tactic is unavailable");
     if(useFusedResidual && usingFP16) {
       if(!usedOutProjGemm)
         outProj.applyAccumulate(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkBuf);
       if(maskBuf != NULL)
         sm89MaskZeroNHWC((half*)trunkBuf, (const half*)maskBuf, batchSize, seqLen, inChannels, ctx->stream);
+      ctx->markTacticActive("cudaUseFusedResidual");
     }
     else {
       outProj.apply(ctx, scratch, matBatchSize, attnOutBuf.buf, trunkScratchBuf);
@@ -1374,11 +1481,11 @@ struct Sm89FFNBlock {
   void* ffnWeightsBuf;
   bool useFFNBatched;
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
-  std::unique_ptr<Sm89Backend::Sm89DualGemmSwiGLUB13> dualGemmSwiGLU;
+  std::unique_ptr<Sm89Backend::Sm89DualGemmSwiGLU> dualGemmSwiGLU;
 #endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-  std::unique_ptr<Sm89Backend::Sm89Linear2GemmB13> linear2Gemm;
-  std::unique_ptr<Sm89Backend::Sm89Linear2BnGemmB13> linear2PostBnGemm;
+  std::unique_ptr<Sm89Backend::Sm89Linear2Gemm> linear2Gemm;
+  std::unique_ptr<Sm89Backend::Sm89Linear2BnGemm> linear2PostBnGemm;
 #endif
 
   Sm89FFNBlock() = delete;
@@ -1396,7 +1503,6 @@ struct Sm89FFNBlock {
     bool useFusedResidual_,
     bool useRMSNormOpt_,
     bool useDualGemmSwiGLU_,
-    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useLinear2PostBNSilu_,
     const Sm89BatchNorm* followingBN,
@@ -1413,7 +1519,9 @@ struct Sm89FFNBlock {
       useRMSNormOpt(useRMSNormOpt_),
       useDualGemmSwiGLU(useDualGemmSwiGLU_),
       useLinear2Gemm(useLinear2Gemm_),
-      preLN(&desc->preLN, useFP16, useRMSNormOpt_, ctx->stream),
+      preLN(
+        &desc->preLN, useFP16, useRMSNormOpt_,
+        ctx->rmsNormRowsPerBlock, ctx),
       linear1(&desc->linear1, useFP16, shareModelWeights_),
       linearGate(&desc->linearGate, useFP16, shareModelWeights_),
       linear2(&desc->linear2, useFP16, shareModelWeights_),
@@ -1443,14 +1551,15 @@ struct Sm89FFNBlock {
       useFFNBatched = true;
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
       if(useDualGemmSwiGLU)
-        dualGemmSwiGLU = std::make_unique<Sm89Backend::Sm89DualGemmSwiGLUB13>(
-          (const half*)ffnWeightsBuf, useDualGemmSwiGLUHalf2Tanh_
+        dualGemmSwiGLU = std::make_unique<Sm89Backend::Sm89DualGemmSwiGLU>(
+          (const half*)ffnWeightsBuf, ctx->dualFfnCutlassTactic
         );
 #endif
     }
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
     if(useLinear2Gemm && useFP16 && useFusedResidual_) {
-      linear2Gemm = std::make_unique<Sm89Backend::Sm89Linear2GemmB13>((const half*)linear2.matBuf);
+      linear2Gemm = std::make_unique<Sm89Backend::Sm89Linear2Gemm>(
+        (const half*)linear2.matBuf, ctx->linear2CutlassTactic);
       if(
         useLinear2PostBNSilu_ && followingBN != nullptr &&
         followingBN->usingFP16 && followingBN->usingNHWC &&
@@ -1458,7 +1567,7 @@ struct Sm89FFNBlock {
         followingBN->activation == ACTIVATION_SILU &&
         followingBN->mergedScaleBuf != nullptr && followingBN->mergedBiasBuf != nullptr
       ) {
-        linear2PostBnGemm = std::make_unique<Sm89Backend::Sm89Linear2BnGemmB13>(
+        linear2PostBnGemm = std::make_unique<Sm89Backend::Sm89Linear2BnGemm>(
           (const half*)linear2.matBuf,
           (const half*)followingBN->mergedScaleBuf,
           (const half*)followingBN->mergedBiasBuf
@@ -1498,9 +1607,9 @@ struct Sm89FFNBlock {
         batchSize, ctx->serverThreads,
         ctx->dualFfnAotTactic.c_str(), requestedIdKnown
       );
-      if(tactic == nullptr && !requestedIdKnown)
+      if(tactic == nullptr)
         throw StringError(
-          "Unknown SM89 dual-FFN tactic for this GPU/stream configuration: " +
+          "Selected SM89 dual-FFN tactic is unavailable for this exact batch/GPU/stream configuration: " +
           ctx->dualFfnAotTactic
         );
       if(tactic != nullptr) {
@@ -1515,6 +1624,10 @@ struct Sm89FFNBlock {
           ctx->stream
         ));
         usedDualGemmSwiGLU = true;
+        ctx->markTacticActive(
+          "cudaFusedFFNAotTacticSm89=" + ctx->dualFfnAotTactic
+        );
+        ctx->markTacticActive("cudaUseWideFFN");
       }
     }
 #endif
@@ -1524,8 +1637,17 @@ struct Sm89FFNBlock {
         (const half*)trunkScratchBuf, (half*)ffnGateBuf.buf,
         batchSize, seqLen, numChannels, ffnChannels, ctx->stream
       );
+      if(!usedDualGemmSwiGLU)
+        throw StringError("Selected SM89 dual-FFN CUTLASS tactic failed to launch");
+      ctx->markTacticActive(
+        "cudaDualFfnCutlassTacticSm89=" + ctx->dualFfnCutlassTactic
+      );
+      ctx->markTacticActive("cudaUseWideFFN");
     }
 #endif
+    if(!usedDualGemmSwiGLU && useDualGemmSwiGLU &&
+       ctx->dualFfnAotTactic == "disabled")
+      throw StringError("Selected SM89 dual-FFN CUTLASS tactic is unavailable");
     if(!usedDualGemmSwiGLU && useFFNBatched) {
       const half alpha = __float2half(1.0f);
       const half beta = __float2half(0.0f);
@@ -1539,6 +1661,7 @@ struct Sm89FFNBlock {
         (half*)ffnGateBuf.buf, ffnChannels, (int64_t)ffnChannels * matBatchSize,
         2
       ));
+      ctx->markTacticActive("cudaUseWideFFN");
     }
     else if(!usedDualGemmSwiGLU) {
       linear1.apply(ctx, scratch, matBatchSize, trunkScratchBuf, ffnGateBuf.buf);
@@ -1565,9 +1688,9 @@ struct Sm89FFNBlock {
         batchSize, ctx->serverThreads, ffnChannels,
         ctx->linear2AotTactic.c_str(), requestedIdKnown
       );
-      if(linear2AotTactic == nullptr && !requestedIdKnown)
+      if(linear2AotTactic == nullptr)
         throw StringError(
-          "Unknown SM89 linear2 tactic for this GPU/stream configuration: " +
+          "Selected SM89 linear2 tactic is unavailable for this exact batch/GPU/stream configuration: " +
           ctx->linear2AotTactic
         );
       if(linear2AotTactic != nullptr &&
@@ -1586,6 +1709,12 @@ struct Sm89FFNBlock {
         (const half*)ffnBuf, (half*)trunkBuf, (half*)trunkScratchBuf,
         batchSize, seqLen, ffnChannels, numChannels, ctx->stream
       );
+      if(!usedLinear2PostBN)
+        throw StringError("Selected SM89 linear2+BN CUTLASS tactic failed to launch");
+      ctx->markTacticActive("cudaUseLinear2PostBNSiluSm89");
+      ctx->markTacticActive(
+        "cudaLinear2CutlassTacticSm89=" + ctx->linear2CutlassTactic
+      );
     }
 #endif
     bool usedLinear2Gemm = usedLinear2PostBN;
@@ -1598,6 +1727,9 @@ struct Sm89FFNBlock {
         ctx->stream
       ));
       usedLinear2Gemm = true;
+      ctx->markTacticActive(
+        "cudaLinear2AotTacticSm89=" + ctx->linear2AotTactic
+      );
     }
 #endif
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
@@ -1606,13 +1738,22 @@ struct Sm89FFNBlock {
         (const half*)ffnBuf, (half*)trunkBuf,
         batchSize, seqLen, ffnChannels, numChannels, ctx->stream
       );
+      if(!usedLinear2Gemm)
+        throw StringError("Selected SM89 linear2 CUTLASS tactic failed to launch");
+      ctx->markTacticActive(
+        "cudaLinear2CutlassTacticSm89=" + ctx->linear2CutlassTactic
+      );
     }
 #endif
+    if(!usedLinear2Gemm && useLinear2Gemm &&
+       ctx->linear2AotTactic == "disabled")
+      throw StringError("Selected SM89 linear2 CUTLASS tactic is unavailable");
     if(useFusedResidual && usingFP16) {
       if(!usedLinear2Gemm)
         linear2.applyAccumulate(ctx, scratch, matBatchSize, ffnBuf, trunkBuf);
       if(maskBuf != NULL)
         sm89MaskZeroNHWC((half*)trunkBuf, (const half*)maskBuf, batchSize, seqLen, numChannels, ctx->stream);
+      ctx->markTacticActive("cudaUseFusedResidual");
     }
     else {
       linear2.apply(ctx, scratch, matBatchSize, ffnBuf, trunkScratchBuf);
@@ -1638,6 +1779,9 @@ struct Sm89NestedBlock {
   const bool usingNHWC;
   const bool useWideQKV;
   const bool useWideFFN;
+  const bool usePreConvGemm;
+  const bool usePostConvGemm;
+  const bool usePostConvBNSilu;
   const bool usePersistingL2Trunk;
   const float persistingL2TrunkHitRatio;
   const bool usePersistingL2Inner;
@@ -1648,11 +1792,11 @@ struct Sm89NestedBlock {
   const Sm89Conv postConv;
   vector<std::function<bool(Sm89Ctx*, Sm89Scratch*, int, void*, void*, void*, void*, size_t)>> innerBlocks;
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
-  std::unique_ptr<Sm89Backend::Sm89PreConvGemmB13> preConvGemm;
+  std::unique_ptr<Sm89Backend::Sm89PreConvGemm> preConvGemm;
 #endif
 #ifdef KATAGO_ENABLE_SM89_POSTCONV_GEMM
-  std::unique_ptr<Sm89Backend::Sm89PostConvGemmB13> postConvGemm;
-  std::unique_ptr<Sm89Backend::Sm89PostConvBnGemmB13> postConvBnGemm;
+  std::unique_ptr<Sm89Backend::Sm89PostConvGemm> postConvGemm;
+  std::unique_ptr<Sm89Backend::Sm89PostConvBnGemm> postConvBnGemm;
 #endif
 
   Sm89NestedBlock() = delete;
@@ -1677,20 +1821,20 @@ struct Sm89NestedBlock {
     bool useSplitQKVRoPEGemm_,
     int plainQKVVariant_,
     int ropeBatchGroup_,
-    bool useFlashAttention_,
-    bool useFlashAttentionBoth16_,
+    int flashAttentionTactic_,
     bool useDualGemmSwiGLU_,
-    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
     bool usePostConvGemm_,
+    bool usePostConvBNSilu_,
     bool useLinear2PostBNSilu_,
     bool usePersistingL2Trunk_,
     float persistingL2TrunkHitRatio_,
     bool usePersistingL2Inner_,
     float persistingL2InnerHitRatio_,
     bool useScaleBiasSiluVec8_,
+    bool useScaleBiasSiluVec8C384_,
     bool useScaleBiasSiluVec4C384_,
     bool shareModelWeights_
   )
@@ -1702,13 +1846,16 @@ struct Sm89NestedBlock {
       usingNHWC(useNHWC),
       useWideQKV(useWideQKV_),
       useWideFFN(useWideFFN_),
+      usePreConvGemm(usePreConvGemm_),
+      usePostConvGemm(usePostConvGemm_),
+      usePostConvBNSilu(usePostConvBNSilu_),
       usePersistingL2Trunk(usePersistingL2Trunk_),
       persistingL2TrunkHitRatio(persistingL2TrunkHitRatio_),
       usePersistingL2Inner(usePersistingL2Inner_),
       persistingL2InnerHitRatio(persistingL2InnerHitRatio_),
-      preBN(&desc->preBN, &desc->preActivation, nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
+      preBN(&desc->preBN, &desc->preActivation, nnX, nnY, useFP16, useNHWC, ctx, useScaleBiasSiluVec8_, useScaleBiasSiluVec8C384_, useScaleBiasSiluVec4C384_),
       preConv(ctx, &desc->preConv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
-      postBN(&desc->postBN, &desc->postActivation, nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_),
+      postBN(&desc->postBN, &desc->postActivation, nnX, nnY, useFP16, useNHWC, ctx, useScaleBiasSiluVec8_, useScaleBiasSiluVec8C384_, useScaleBiasSiluVec4C384_),
       postConv(ctx, &desc->postConv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC)
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
       , preConvGemm(nullptr)
@@ -1720,11 +1867,13 @@ struct Sm89NestedBlock {
   {
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
     if(usePreConvGemm_ && useFP16 && preConv.use1x1Matmul && preConv.matmulWeightBuf != nullptr)
-      preConvGemm = std::make_unique<Sm89Backend::Sm89PreConvGemmB13>((const half*)preConv.matmulWeightBuf);
+      preConvGemm = std::make_unique<Sm89Backend::Sm89PreConvGemm>(
+        (const half*)preConv.matmulWeightBuf, ctx->preConvCutlassTactic);
 #endif
 #ifdef KATAGO_ENABLE_SM89_POSTCONV_GEMM
     if(usePostConvGemm_ && useFP16 && postConv.use1x1Matmul && postConv.matmulWeightBuf != nullptr)
-      postConvGemm = std::make_unique<Sm89Backend::Sm89PostConvGemmB13>((const half*)postConv.matmulWeightBuf);
+      postConvGemm = std::make_unique<Sm89Backend::Sm89PostConvGemm>(
+        (const half*)postConv.matmulWeightBuf, ctx->postConvCutlassTactic);
 #endif
     for(size_t i = 0; i < desc->blocks.size(); i++) {
       int kind = desc->blocks[i].first;
@@ -1735,7 +1884,7 @@ struct Sm89NestedBlock {
           useFusedQKRoPE_, usePrecomputedQKRoPE_, useQKVRoPEGemm_,
           useSplitQKVRoPEGemm_,
           plainQKVVariant_,
-          ropeBatchGroup_, useFlashAttention_, useFlashAttentionBoth16_,
+          ropeBatchGroup_, flashAttentionTactic_,
           useOutProjGemm_, shareModelWeights_
         );
         innerBlocks.push_back([block](Sm89Ctx* ctx, Sm89Scratch* scratch, int batchSize, void* trunkBuf, void* trunkScratchBuf, void* maskBuf, void* workspaceBuf, size_t workspaceBytes) {
@@ -1747,7 +1896,6 @@ struct Sm89NestedBlock {
         auto block = std::make_shared<Sm89FFNBlock>(
           ctx, (const TransformerFFNDesc*)desc->blocks[i].second.get(), nnX, nnY, useFP16,
           useNHWC, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useDualGemmSwiGLU_,
-          useDualGemmSwiGLUHalf2Tanh_,
           useLinear2Gemm_, useLinear2PostBNSilu_ && i + 1 == desc->blocks.size(),
           &postBN, shareModelWeights_
         );
@@ -1773,7 +1921,7 @@ struct Sm89NestedBlock {
       followingBN.activation == ACTIVATION_SILU &&
       followingBN.mergedScaleBuf != nullptr && followingBN.mergedBiasBuf != nullptr
     ) {
-      postConvBnGemm = std::make_unique<Sm89Backend::Sm89PostConvBnGemmB13>(
+      postConvBnGemm = std::make_unique<Sm89Backend::Sm89PostConvBnGemm>(
         (const half*)postConv.matmulWeightBuf,
         (const half*)followingBN.mergedScaleBuf,
         (const half*)followingBN.mergedBiasBuf
@@ -1803,10 +1951,12 @@ struct Sm89NestedBlock {
 
     if(!preBNReady)
       preBN.apply(batchSize, trunkBuf, maskBuf, trunkScratchBuf);
-    if(usePersistingL2Inner)
+    if(usePersistingL2Inner) {
       setPersistingL2Window(
         ctx->stream, mid.buf, midBytes, persistingL2InnerHitRatio
       );
+      ctx->markTacticActive("cudaUsePersistingL2Inner");
+    }
     bool usedPreConvGemm = false;
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
     if(preConvGemm != nullptr && usingFP16) {
@@ -1814,8 +1964,15 @@ struct Sm89NestedBlock {
         (const half*)trunkScratchBuf, (half*)mid.buf,
         batchSize, xySize, preConv.inChannels, preConv.outChannels, ctx->stream
       );
+      if(!usedPreConvGemm)
+        throw StringError("Selected SM89 preConv CUTLASS tactic failed to launch");
+      ctx->markTacticActive(
+        "cudaPreConvCutlassTacticSm89=" + ctx->preConvCutlassTactic
+      );
     }
 #endif
+    if(usePreConvGemm && !usedPreConvGemm)
+      throw StringError("Selected SM89 preConv CUTLASS tactic is unavailable");
     if(!usedPreConvGemm)
       preConv.apply(ctx, batchSize, false, trunkScratchBuf, mid.buf, workspaceBuf, workspaceBytes);
 
@@ -1848,8 +2005,16 @@ struct Sm89NestedBlock {
         (const half*)midScratch.buf, (half*)trunkBuf, (half*)trunkScratchBuf,
         batchSize, xySize, postConv.inChannels, postConv.outChannels, ctx->stream
       );
+      if(!usedPostConvBN)
+        throw StringError("Selected SM89 postConv+BN CUTLASS tactic failed to launch");
+      ctx->markTacticActive("cudaUsePostConvBNSiluSm89");
+      ctx->markTacticActive(
+        "cudaPostConvCutlassTacticSm89=" + ctx->postConvCutlassTactic
+      );
     }
 #endif
+    if(usePostConvBNSilu && !usedPostConvBN)
+      throw StringError("Selected SM89 postConv+BN tactic is unavailable");
     bool usedPostConvGemm = usedPostConvBN;
 #ifdef KATAGO_ENABLE_SM89_POSTCONV_GEMM
     if(!usedPostConvBN && postConvGemm != nullptr && usingFP16) {
@@ -1857,8 +2022,15 @@ struct Sm89NestedBlock {
         (const half*)midScratch.buf, (half*)trunkBuf,
         batchSize, xySize, postConv.inChannels, postConv.outChannels, ctx->stream
       );
+      if(!usedPostConvGemm)
+        throw StringError("Selected SM89 postConv CUTLASS tactic failed to launch");
+      ctx->markTacticActive(
+        "cudaPostConvCutlassTacticSm89=" + ctx->postConvCutlassTactic
+      );
     }
 #endif
+    if(usePostConvGemm && !usedPostConvGemm)
+      throw StringError("Selected SM89 postConv CUTLASS tactic is unavailable");
     if(!usedPostConvGemm)
       postConv.apply(ctx, batchSize, true, midScratch.buf, trunkBuf, workspaceBuf, workspaceBytes);
     return usedPostConvBN;
@@ -1904,10 +2076,8 @@ struct Sm89Trunk {
     bool useSplitQKVRoPEGemm_,
     int plainQKVVariant_,
     int ropeBatchGroup_,
-    bool useFlashAttention_,
-    bool useFlashAttentionBoth16_,
+    int flashAttentionTactic_,
     bool useDualGemmSwiGLU_,
-    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
@@ -1919,6 +2089,7 @@ struct Sm89Trunk {
     bool usePersistingL2Inner_,
     float persistingL2InnerHitRatio_,
     bool useScaleBiasSiluVec8_,
+    bool useScaleBiasSiluVec8C384_,
     bool useScaleBiasSiluVec4C384_,
     bool useInitialConvFrontend_,
     bool useInitialGlobalMatMulAdd_,
@@ -1951,12 +2122,14 @@ struct Sm89Trunk {
         maxBatchSize_, nnX, nnY, useFP16, useNHWC, useWideQKV_, useWideFFN_,
         useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_, usePrecomputedQKRoPE_,
         useQKVRoPEGemm_, useSplitQKVRoPEGemm_, plainQKVVariant_, ropeBatchGroup_,
-        useFlashAttention_, useFlashAttentionBoth16_,
-        useDualGemmSwiGLU_, useDualGemmSwiGLUHalf2Tanh_,
+        flashAttentionTactic_,
+        useDualGemmSwiGLU_,
         useLinear2Gemm_, useOutProjGemm_, usePreConvGemm_,
-        usePostConvGemm_, useLinear2PostBNSilu_, usePersistingL2Trunk_,
+        usePostConvGemm_, usePostConvBNSilu_, useLinear2PostBNSilu_,
+        usePersistingL2Trunk_,
         persistingL2TrunkHitRatio_,
         usePersistingL2Inner_, persistingL2InnerHitRatio_, useScaleBiasSiluVec8_,
+        useScaleBiasSiluVec8C384_,
         useScaleBiasSiluVec4C384_,
         shareModelWeights_
       ));
@@ -1965,7 +2138,8 @@ struct Sm89Trunk {
       throw StringError("Sm89Trunk: only standard trunk BN is supported");
     trunkTipBN = std::make_unique<Sm89BatchNorm>(
       &desc->trunkTipBN, &desc->trunkTipActivation,
-      nnX, nnY, useFP16, useNHWC, ctx->stream, useScaleBiasSiluVec8_, useScaleBiasSiluVec4C384_
+      nnX, nnY, useFP16, useNHWC, ctx, useScaleBiasSiluVec8_,
+      useScaleBiasSiluVec8C384_, useScaleBiasSiluVec4C384_
     );
     if(usePostConvBNSilu_) {
       for(size_t i = 0; i < blocks.size(); i++) {
@@ -1985,16 +2159,19 @@ struct Sm89Trunk {
     void* maskBuf,
     void* trunkBuf,
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    cudaEvent_t inputConsumedEvent
   ) const {
     int xySize = nnXLen * nnYLen;
     const size_t trunkScratchBytes =
       scratch->getBufSizeXY(trunkNumChannels, maxBatchSize, xySize, usingFP16);
     SizedBuf<void*> trunkScratch(&scratch->allocator, trunkScratchBytes);
-    if(usePersistingL2Trunk)
+    if(usePersistingL2Trunk) {
       setPersistingL2Window(
         ctx->stream, trunkScratch.buf, trunkScratchBytes, persistingL2TrunkHitRatio
       );
+      ctx->markTacticActive("cudaUsePersistingL2Trunk");
+    }
 
     initialConv.apply(ctx, batchSize, false, inputBuf, trunkScratch.buf, workspaceBuf, workspaceBytes);
     bool fusedInitialGlobal = false;
@@ -2004,7 +2181,11 @@ struct Sm89Trunk {
         (half*)trunkScratch.buf, batchSize, xySize,
         initialMatMul.inChannels, initialMatMul.outChannels, ctx->stream
       );
+      if(fusedInitialGlobal)
+        ctx->markTacticActive("cudaUseInitialGlobalMatMulAdd");
     }
+    if(useInitialGlobalMatMulAdd && !fusedInitialGlobal)
+      throw StringError("Selected SM89 initial-global fused tactic failed to launch");
     if(!fusedInitialGlobal) {
       initialMatMul.apply(ctx, scratch, batchSize, inputGlobalBuf, trunkBuf);
       if(!usingFP16)
@@ -2013,6 +2194,13 @@ struct Sm89Trunk {
         customCudaAddNCBiasInplaceNHWC((half*)trunkScratch.buf, (const half*)trunkBuf, batchSize, xySize, trunkNumChannels, ctx->stream);
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+    if(inputConsumedEvent != nullptr) {
+      const unsigned int flags =
+        streamCaptureIsActive(ctx->stream) ? cudaEventRecordExternal : cudaEventRecordDefault;
+      CUDA_ERR(name.c_str(),cudaEventRecordWithFlags(
+        inputConsumedEvent,ctx->stream,flags
+      ));
+    }
 
     // Mirror official buffer flip: blocks write into trunkScratch and use trunkBuf as temp.
     bool preBNReady = false;
@@ -2036,7 +2224,7 @@ struct Sm89WideHeadProjection {
   bool available;
   void* weightBuf;
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
-  std::unique_ptr<Sm89Backend::Sm89PreConvGemmB13> gemm;
+  std::unique_ptr<Sm89Backend::Sm89PreConvGemm> gemm;
 #endif
 
   Sm89WideHeadProjection(
@@ -2076,7 +2264,12 @@ struct Sm89WideHeadProjection {
       }
     }
     CudaUtils::mallocAndCopyToDevice("wideHeadProjection", weights, weightBuf, true);
-    gemm = std::make_unique<Sm89Backend::Sm89PreConvGemmB13>((const half*)weightBuf);
+    // The wide-head projection has the same C768->C384 shape as preConv and
+    // uses the retained Stage-2/11 C768->C384 geometry. It is independent of
+    // the preConv scan coordinate so tuning an inner block cannot silently
+    // change the head implementation.
+    gemm = std::make_unique<Sm89Backend::Sm89PreConvGemm>(
+      (const half*)weightBuf, "m128-n128-k32-w64-n64-s5-sw1");
     available = true;
 #else
     (void)policy;
@@ -2119,7 +2312,7 @@ struct Sm89PolicyHead {
   const int p2Channels;
   const bool usingFP16;
   const bool usingNHWC;
-  const bool useFusedPolicyP1;
+  const int policyP1RowsPerBlock;
   const bool useHeadBNHalfToFloat;
   const Sm89Conv p1Conv;
   const Sm89Conv g1Conv;
@@ -2135,7 +2328,7 @@ struct Sm89PolicyHead {
   Sm89PolicyHead(const Sm89PolicyHead&) = delete;
   Sm89PolicyHead& operator=(const Sm89PolicyHead&) = delete;
 
-  Sm89PolicyHead(Sm89Ctx* ctx, const PolicyHeadDesc* desc, int maxBatchSize, int nnX, int nnY, bool useFP16, bool useNHWC, bool useFusedPolicyP1_, bool useHeadBNHalfToFloat_, bool shareModelWeights)
+  Sm89PolicyHead(Sm89Ctx* ctx, const PolicyHeadDesc* desc, int maxBatchSize, int nnX, int nnY, bool useFP16, bool useNHWC, int policyP1RowsPerBlock_, bool useHeadBNHalfToFloat_, bool shareModelWeights)
     : modelVersion(desc->modelVersion),
       nnXLen(nnX),
       nnYLen(nnY),
@@ -2145,13 +2338,13 @@ struct Sm89PolicyHead {
       p2Channels(desc->p2Conv.outChannels),
       usingFP16(useFP16),
       usingNHWC(useNHWC),
-      useFusedPolicyP1(useFusedPolicyP1_),
+      policyP1RowsPerBlock(policyP1RowsPerBlock_),
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       p1Conv(ctx, &desc->p1Conv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
       g1Conv(ctx, &desc->g1Conv, maxBatchSize, nnX, nnY, useFP16, useNHWC, useNHWC),
-      g1BN(&desc->g1BN, &desc->g1Activation, nnX, nnY, useFP16, useNHWC, ctx->stream),
+      g1BN(&desc->g1BN, &desc->g1Activation, nnX, nnY, useFP16, useNHWC, ctx),
       gpoolToBiasMul(&desc->gpoolToBiasMul, false, shareModelWeights),
-      p1BN(&desc->p1BN, &desc->p1Activation, nnX, nnY, false, useNHWC, ctx->stream),
+      p1BN(&desc->p1BN, &desc->p1Activation, nnX, nnY, false, useNHWC, ctx),
       p2Conv(ctx, &desc->p2Conv, maxBatchSize, nnX, nnY, false, useNHWC, useNHWC),
       gpoolToPassMul(&desc->gpoolToPassMul, false, shareModelWeights),
       gpoolToPassBias(&desc->gpoolToPassBias, false, desc->passActivation.activation, ctx->stream),
@@ -2222,6 +2415,8 @@ struct Sm89PolicyHead {
           batchSize, xySize, g1Channels, g1Channels, 0, ctx->stream
         );
       }
+      if(fusedHeadBN && useHeadBNHalfToFloat)
+        ctx->markTacticActive("cudaUseHeadBNHalfToFloat");
       if(!fusedHeadBN) {
         g1BN.apply(batchSize, g1Out.buf, maskBuf, g1Out2.buf);
         customCudaCopyFromHalf((const half*)g1Out2.buf, (float*)g1Float.buf, batchSize * g1Channels * xySize, ctx->stream);
@@ -2233,16 +2428,22 @@ struct Sm89PolicyHead {
     gpoolToBiasMul.apply(ctx, scratch, batchSize, g1Concat.buf, g1Bias.buf);
 
     bool fusedP1 = false;
-    if(usingFP16 && usingNHWC && useFusedPolicyP1 && maskFloatBuf == NULL) {
+    if(usingFP16 && usingNHWC && policyP1RowsPerBlock != 0 && maskFloatBuf == NULL) {
       fusedP1 = sm89FusedPolicyP1(
         useWideHead ? wideHeadBuf : (const half*)p1Out.buf,
         (float*)p1Out2.buf, (const float*)g1Bias.buf,
         (const float*)p1BN.mergedScaleBuf, (const float*)p1BN.mergedBiasBuf,
         batchSize, xySize, p1Channels,
-        useWideHead ? 384 : p1Channels, 0, ctx->stream
+        useWideHead ? 384 : p1Channels, 0, policyP1RowsPerBlock, ctx->stream
       );
     }
+    if(policyP1RowsPerBlock != 0 && !fusedP1)
+      throw StringError("Selected SM89 fused policy-P1 tactic failed to launch");
     if(fusedP1) {
+      ctx->markTacticActive(
+        "cudaPolicyP1RowsPerBlockSm89=" +
+        Global::intToString(policyP1RowsPerBlock)
+      );
       p2Conv.apply(ctx, batchSize, false, p1Out2.buf, policyBuf, workspaceBuf, workspaceBytes);
     }
     else {
@@ -2408,7 +2609,7 @@ struct Sm89ValueHead {
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       useFusedValueTerminal(useFusedValueTerminal_),
       v1Conv(ctx, &desc->v1Conv, maxBatchSize_, nnX, nnY, useFP16, useNHWC, useNHWC),
-      v1BN(&desc->v1BN, &desc->v1Activation, nnX, nnY, useFP16, useNHWC, ctx->stream),
+      v1BN(&desc->v1BN, &desc->v1Activation, nnX, nnY, useFP16, useNHWC, ctx),
       v2Mul(&desc->v2Mul, false, shareModelWeights),
       v2Bias(&desc->v2Bias, false, desc->v2Activation.activation, ctx->stream),
       v3Mul(&desc->v3Mul, false, shareModelWeights),
@@ -2479,6 +2680,8 @@ struct Sm89ValueHead {
           batchSize, xySize, v1Channels, v1Channels, 0, ctx->stream
         );
       }
+      if(fusedHeadBN && useHeadBNHalfToFloat)
+        ctx->markTacticActive("cudaUseHeadBNHalfToFloat");
       if(!fusedHeadBN) {
         v1BN.apply(batchSize, v1Out.buf, maskBuf, v1Out2.buf);
         customCudaCopyFromHalf((const half*)v1Out2.buf, (float*)workspaceBuf, batchSize * v1Channels * xySize, ctx->stream);
@@ -2495,6 +2698,10 @@ struct Sm89ValueHead {
       fusedTerminal = fusedValueTerminal.apply(
         ctx, scratch, batchSize, (const float*)v2Out.buf, valueBuf, scoreValueBuf
       );
+    if(useFusedValueTerminal && !fusedTerminal)
+      throw StringError("Selected SM89 fused value-terminal tactic failed to launch");
+    if(fusedTerminal)
+      ctx->markTacticActive("cudaUseFusedValueTerminalSm89");
     if(!fusedTerminal) {
       v3Mul.apply(ctx, scratch, batchSize, v2Out.buf, valueBuf);
       v3Bias.apply(batchSize, valueBuf);
@@ -2534,10 +2741,8 @@ struct Sm89Forward::Impl {
   const bool useSplitQKVRoPEGemm;
   const int plainQKVVariant;
   const int ropeBatchGroup;
-  const bool useFlashAttention;
-  const bool useFlashAttentionBoth16;
+  const int flashAttentionTactic;
   const bool useDualGemmSwiGLU;
-  const bool useDualGemmSwiGLUHalf2Tanh;
   const bool useLinear2Gemm;
   const bool useOutProjGemm;
   const bool usePreConvGemm;
@@ -2549,12 +2754,14 @@ struct Sm89Forward::Impl {
   const bool usePersistingL2Inner;
   const float persistingL2InnerHitRatio;
   const bool useScaleBiasSiluVec8;
+  const bool useScaleBiasSiluVec8C384;
   const bool useScaleBiasSiluVec4C384;
   const bool useInitialConvFrontend;
   const bool useInitialGlobalMatMulAdd;
-  const bool useFusedPolicyP1;
+  const int policyP1RowsPerBlock;
   const bool useHeadBNHalfToFloat;
   const bool useWideHeadProjection;
+  const bool useExactMaskDownstreamElision;
   const bool useExactMaskElision;
   const bool useFusedValueTerminal;
   const bool shareModelWeights;
@@ -2580,16 +2787,15 @@ struct Sm89Forward::Impl {
     bool useWideFFN_,
     bool useFusedResidual_,
     bool useRMSNormOpt_,
+    int rmsNormRowsPerBlock_,
     bool useFusedQKRoPE_,
     bool usePrecomputedQKRoPE_,
     bool useQKVRoPEGemm_,
     bool useSplitQKVRoPEGemm_,
     int plainQKVVariant_,
     int ropeBatchGroup_,
-    bool useFlashAttention_,
-    bool useFlashAttentionBoth16_,
+    int flashAttentionTactic_,
     bool useDualGemmSwiGLU_,
-    bool useDualGemmSwiGLUHalf2Tanh_,
     bool useLinear2Gemm_,
     bool useOutProjGemm_,
     bool usePreConvGemm_,
@@ -2601,16 +2807,23 @@ struct Sm89Forward::Impl {
     bool usePersistingL2Inner_,
     float persistingL2InnerHitRatio_,
     bool useScaleBiasSiluVec8_,
+    bool useScaleBiasSiluVec8C384_,
     bool useScaleBiasSiluVec4C384_,
     bool useInitialConvFrontend_,
     bool useInitialGlobalMatMulAdd_,
-    bool useFusedPolicyP1_,
+    int policyP1RowsPerBlock_,
     bool useHeadBNHalfToFloat_,
     bool useWideHeadProjection_,
+    bool useExactMaskDownstreamElision_,
     bool useExactMaskElision_,
     bool useFusedValueTerminal_,
     const string& dualFfnAotTactic_,
     const string& linear2AotTactic_,
+    const string& dualFfnCutlassTactic_,
+    const string& linear2CutlassTactic_,
+    const string& outProjCutlassTactic_,
+    const string& preConvCutlassTactic_,
+    const string& postConvCutlassTactic_,
     int serverThreads_,
     bool shareModelWeights_
   )
@@ -2631,10 +2844,8 @@ struct Sm89Forward::Impl {
       useSplitQKVRoPEGemm(useSplitQKVRoPEGemm_),
       plainQKVVariant(plainQKVVariant_),
       ropeBatchGroup(ropeBatchGroup_),
-      useFlashAttention(useFlashAttention_),
-      useFlashAttentionBoth16(useFlashAttentionBoth16_),
+      flashAttentionTactic(flashAttentionTactic_),
       useDualGemmSwiGLU(useDualGemmSwiGLU_),
-      useDualGemmSwiGLUHalf2Tanh(useDualGemmSwiGLUHalf2Tanh_),
       useLinear2Gemm(useLinear2Gemm_),
       useOutProjGemm(useOutProjGemm_),
       usePreConvGemm(usePreConvGemm_),
@@ -2646,16 +2857,23 @@ struct Sm89Forward::Impl {
       usePersistingL2Inner(usePersistingL2Inner_),
       persistingL2InnerHitRatio(persistingL2InnerHitRatio_),
       useScaleBiasSiluVec8(useScaleBiasSiluVec8_),
+      useScaleBiasSiluVec8C384(useScaleBiasSiluVec8C384_),
       useScaleBiasSiluVec4C384(useScaleBiasSiluVec4C384_),
       useInitialConvFrontend(useInitialConvFrontend_),
       useInitialGlobalMatMulAdd(useInitialGlobalMatMulAdd_),
-      useFusedPolicyP1(useFusedPolicyP1_),
+      policyP1RowsPerBlock(policyP1RowsPerBlock_),
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       useWideHeadProjection(useWideHeadProjection_),
+      useExactMaskDownstreamElision(useExactMaskDownstreamElision_),
       useExactMaskElision(useExactMaskElision_),
       useFusedValueTerminal(useFusedValueTerminal_),
       shareModelWeights(shareModelWeights_),
-      ctx(stream, serverThreads_, dualFfnAotTactic_, linear2AotTactic_),
+      ctx(
+        stream, serverThreads_, rmsNormRowsPerBlock_,
+        dualFfnAotTactic_, linear2AotTactic_,
+        dualFfnCutlassTactic_, linear2CutlassTactic_,
+        outProjCutlassTactic_, preConvCutlassTactic_,
+        postConvCutlassTactic_),
       scratch(
         useFP16, useExactMaskElision_, maxBatchSize_, nnXLen_ * nnYLen_
       ),
@@ -2664,20 +2882,21 @@ struct Sm89Forward::Impl {
         usePrecomputedQKRoPE_, useQKVRoPEGemm_, useSplitQKVRoPEGemm_,
         plainQKVVariant_,
         ropeBatchGroup_,
-        useFlashAttention_, useFlashAttentionBoth16_, useDualGemmSwiGLU_,
-        useDualGemmSwiGLUHalf2Tanh_, useLinear2Gemm_, useOutProjGemm_,
+        flashAttentionTactic_, useDualGemmSwiGLU_,
+        useLinear2Gemm_, useOutProjGemm_,
         usePreConvGemm_, usePostConvGemm_, usePostConvBNSilu_,
         useLinear2PostBNSilu_,
         usePersistingL2Trunk_,
         persistingL2TrunkHitRatio_, usePersistingL2Inner_,
         persistingL2InnerHitRatio_, useScaleBiasSiluVec8_,
+        useScaleBiasSiluVec8C384_,
         useScaleBiasSiluVec4C384_,
         useInitialConvFrontend_, useInitialGlobalMatMulAdd_, shareModelWeights_),
       wideHeadProjection(
         &desc->policyHead, &desc->valueHead, useFP16,
-        useWideHeadProjection_ && useFusedPolicyP1_
+        useWideHeadProjection_ && policyP1RowsPerBlock_ != 0
       ),
-      policyHead(&ctx, &desc->policyHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useFusedPolicyP1_, useHeadBNHalfToFloat_, shareModelWeights_),
+      policyHead(&ctx, &desc->policyHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, policyP1RowsPerBlock_, useHeadBNHalfToFloat_, shareModelWeights_),
       valueHead(&ctx, &desc->valueHead, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC, useHeadBNHalfToFloat_, useFusedValueTerminal_, shareModelWeights_),
       convWorkspace(NULL),
       convWorkspaceBytes(64 * 1024 * 1024)
@@ -2702,7 +2921,9 @@ struct Sm89Forward::Impl {
     float* scoreValueBuf,
     void* ownershipBuf,
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    cudaEvent_t inputConsumedEvent,
+    cudaEvent_t outputConsumedEvent
   ) {
     (void)inputMetaBuf;
     (void)workspaceBuf;
@@ -2722,6 +2943,9 @@ struct Sm89Forward::Impl {
       scratch.fullBoardMaskSumBuf != NULL;
     if(elideExactMask) {
       maskSum = (float*)scratch.fullBoardMaskSumBuf;
+      ctx.markTacticActive("cudaUseExactMaskElisionSm89");
+      if(useExactMaskDownstreamElision)
+        ctx.markTacticActive("cudaUseExactMaskDownstreamElisionSm89");
     }
     else {
       maskBuf = std::make_unique<SizedBuf<void*>>(
@@ -2753,12 +2977,19 @@ struct Sm89Forward::Impl {
       }
       CUDA_ERR("Sm89Forward",cudaPeekAtLastError());
 
-      mask = requireExactNNLen ? NULL : maskBuf->buf;
-      maskFloat = requireExactNNLen ? NULL : (float*)maskFloatBuf->buf;
+      const bool elideDownstreamMask =
+        requireExactNNLen && useExactMaskDownstreamElision;
+      if(elideDownstreamMask)
+        ctx.markTacticActive("cudaUseExactMaskDownstreamElisionSm89");
+      mask = elideDownstreamMask ? NULL : maskBuf->buf;
+      maskFloat = elideDownstreamMask ? NULL : (float*)maskFloatBuf->buf;
       maskSum = (float*)maskSumBuf->buf;
     }
 
-    trunk.apply(&ctx, &scratch, batchSize, inputBuf, inputGlobalBuf, mask, trunkBuf.buf, convWorkspace, convWorkspaceBytes);
+    trunk.apply(
+      &ctx, &scratch, batchSize, inputBuf, inputGlobalBuf, mask, trunkBuf.buf,
+      convWorkspace, convWorkspaceBytes, inputConsumedEvent
+    );
     std::unique_ptr<SizedBuf<void*>> wideHeadBuf;
     const half* wideHead = nullptr;
     if(requireExactNNLen && usingFP16 && usingNHWC && useWideHeadProjection) {
@@ -2768,8 +2999,19 @@ struct Sm89Forward::Impl {
       if(wideHeadProjection.apply(
         (const half*)trunkBuf.buf, (half*)wideHeadBuf->buf,
         batchSize, xySize, ctx.stream
-      ))
+      )) {
         wideHead = (const half*)wideHeadBuf->buf;
+        ctx.markTacticActive("cudaUseWideHeadProjection");
+      }
+      else
+        throw StringError("Selected SM89 wide-head CUTLASS tactic failed to launch");
+    }
+    if(outputConsumedEvent != nullptr) {
+      const unsigned int flags =
+        streamCaptureIsActive(ctx.stream) ? cudaEventWaitExternal : cudaEventWaitDefault;
+      CUDA_ERR("Sm89Forward",cudaStreamWaitEvent(
+        ctx.stream,outputConsumedEvent,flags
+      ));
     }
     policyHead.apply(&ctx, &scratch, batchSize, mask, maskFloat, maskSum, trunkBuf.buf, wideHead, policyPassBuf, policyBuf, convWorkspace, convWorkspaceBytes);
     valueHead.apply(&ctx, &scratch, batchSize, mask, maskSum, trunkBuf.buf, wideHead, valueBuf, scoreValueBuf, ownershipBuf, convWorkspace, convWorkspaceBytes);
@@ -2811,16 +3053,15 @@ Sm89Forward::Sm89Forward(
   bool useWideFFN,
   bool useFusedResidual,
   bool useRMSNormOpt,
+  int rmsNormRowsPerBlock,
   bool useFusedQKRoPE,
   bool usePrecomputedQKRoPE,
   bool useQKVRoPEGemm,
   bool useSplitQKVRoPEGemm,
   int plainQKVVariant,
   int ropeBatchGroup,
-  bool useFlashAttention,
-  bool useFlashAttentionBoth16,
+  int flashAttentionTactic,
   bool useDualGemmSwiGLU,
-  bool useDualGemmSwiGLUHalf2Tanh,
   bool useLinear2Gemm,
   bool useOutProjGemm,
   bool usePreConvGemm,
@@ -2832,38 +3073,53 @@ Sm89Forward::Sm89Forward(
   bool usePersistingL2Inner,
   float persistingL2InnerHitRatio,
   bool useScaleBiasSiluVec8,
+  bool useScaleBiasSiluVec8C384,
   bool useScaleBiasSiluVec4C384,
   bool useInitialConvFrontend,
   bool useInitialGlobalMatMulAdd,
-  bool useFusedPolicyP1,
+  int policyP1RowsPerBlock,
   bool useHeadBNHalfToFloat,
   bool useWideHeadProjection,
+  bool useExactMaskDownstreamElision,
   bool useExactMaskElision,
   bool useFusedValueTerminal,
   const string& dualFfnAotTactic,
   const string& linear2AotTactic,
+  const string& dualFfnCutlassTactic,
+  const string& linear2CutlassTactic,
+  const string& outProjCutlassTactic,
+  const string& preConvCutlassTactic,
+  const string& postConvCutlassTactic,
   int serverThreads,
   bool shareModelWeights
 )
   : impl(std::make_unique<Impl>(desc, maxBatchSize, nnXLen, nnYLen, inputsUseNHWC,
-      useFP16, useNHWC, stream, useWideQKV, useWideFFN, useFusedResidual, useRMSNormOpt,
+      useFP16, useNHWC, stream, useWideQKV, useWideFFN, useFusedResidual,
+      useRMSNormOpt, rmsNormRowsPerBlock,
       useFusedQKRoPE, usePrecomputedQKRoPE, useQKVRoPEGemm,
       useSplitQKVRoPEGemm,
       plainQKVVariant,
-      ropeBatchGroup, useFlashAttention, useFlashAttentionBoth16,
-      useDualGemmSwiGLU, useDualGemmSwiGLUHalf2Tanh, useLinear2Gemm,
+      ropeBatchGroup, flashAttentionTactic,
+      useDualGemmSwiGLU, useLinear2Gemm,
       useOutProjGemm, usePreConvGemm, usePostConvGemm, usePostConvBNSilu,
       useLinear2PostBNSilu,
       usePersistingL2Trunk,
       persistingL2TrunkHitRatio, usePersistingL2Inner,
       persistingL2InnerHitRatio, useScaleBiasSiluVec8,
+      useScaleBiasSiluVec8C384,
       useScaleBiasSiluVec4C384,
       useInitialConvFrontend, useInitialGlobalMatMulAdd,
-      useFusedPolicyP1, useHeadBNHalfToFloat, useWideHeadProjection,
+      policyP1RowsPerBlock, useHeadBNHalfToFloat, useWideHeadProjection,
+      useExactMaskDownstreamElision,
       useExactMaskElision,
       useFusedValueTerminal,
       dualFfnAotTactic,
       linear2AotTactic,
+      dualFfnCutlassTactic,
+      linear2CutlassTactic,
+      outProjCutlassTactic,
+      preConvCutlassTactic,
+      postConvCutlassTactic,
       serverThreads,
       shareModelWeights))
 {}
@@ -2882,13 +3138,21 @@ void Sm89Forward::apply(
   float* scoreValueBuf,
   void* ownershipBuf,
   void* workspaceBuf,
-  size_t workspaceBytes
+  size_t workspaceBytes,
+  cudaEvent_t inputConsumedEvent,
+  cudaEvent_t outputConsumedEvent
 ) {
   impl->apply(
     batchSize, requireExactNNLen,
     inputBuf, inputGlobalBuf, inputMetaBuf,
     policyPassBuf, policyBuf, valueBuf, scoreValueBuf, ownershipBuf,
-    workspaceBuf, workspaceBytes
+    workspaceBuf, workspaceBytes, inputConsumedEvent, outputConsumedEvent
+  );
+}
+
+vector<string> Sm89Forward::getActiveTactics() const {
+  return vector<string>(
+    impl->ctx.activeTactics.begin(), impl->ctx.activeTactics.end()
   );
 }
 

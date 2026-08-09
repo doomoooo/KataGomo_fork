@@ -242,8 +242,8 @@ def reuse_ffn_a_fragments(source: str) -> str:
 
 
 def find_candidate(space: dict, batch: int, family: str, candidate_id: str) -> dict:
-    if space.get("schema") != 1 or space.get("kind") != "portable-tactic-search-space":
-        raise ValueError("--space must be a portable tactic search space")
+    if space.get("schema") != 1 or space.get("kind") != "cuda-tactic-search-space":
+        raise ValueError("--space must be a cuda tactic search space")
     batch_space = next((item for item in space["batches"] if item["batch"] == batch), None)
     if batch_space is None:
         raise ValueError(f"B{batch} is outside the materialized space")

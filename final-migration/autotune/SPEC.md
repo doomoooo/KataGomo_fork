@@ -46,7 +46,8 @@ Supported mappings:
 
 | CUDA CC | workflow | default batches | streams |
 | --- | --- | --- | --- |
-| 8.9 | portable SM89, 20 families | 4-32 | 2 |
+| 8.9 | shared CUDA workflow, SM89 family catalog | 4-32 | 2 |
+| 12.0 | shared CUDA workflow, SM120 family catalog | 4-32 | 2 |
 | 12.0 | SM120 coordinate, 5 families | 4-32 | 2 |
 
 All AOT candidates for the selected batch domain are generated first and one
@@ -67,8 +68,35 @@ A release plan is data rather than compile-time state.  It binds at least:
 - every selected exact-batch component and its parameters;
 - discovery decision chain and long-gate evidence.
 
+Every scan starts from an explicit official-equivalent runtime baseline that
+sets every architecture tactic key to `false`, `disabled`, or its neutral
+scalar value. `keep-incumbent` therefore retains only earlier measured family
+winners and never a parser default. Plan apply carries that full baseline plus
+the selected changes and explicitly enables the chosen architecture backend;
+`auto` and implicit B13 winners are not valid runtime states.
+
 Unsupported components, incomplete batch coverage, binary mismatch or
 resource incompatibility are hard errors.  Discovery output is never labeled
 final.  `ready_for_scan_bypass` requires complete long-stable evidence;
 `production_ready` additionally requires the immutable 8192-row FP32
 certificate.  The latter must remain false when the golden is unavailable.
+
+The release-qualification `reference` phase may create that golden only by
+forcing `useFP16=false` and disabling both optimized architecture backends;
+its sidecar binds the binary, model, corpus, command and output SHA-256. The
+`accuracy` phase first requires complete long-gate coverage for B4-B32, then
+selects the batch with the highest stable physical `nnEval/s` and replays only
+that accumulated override against the same file. It pads the physical tail
+batch with repeated real inputs without serializing the padding, deletes the
+candidate dump after comparison, and emits only that certified batch in
+`best-tactic-plan.json`.
+Golden reuse additionally requires the current model and corpus hashes. Each
+comparison verifies KRNN exact-batch/tail-padding metadata and byte-identical
+targets and inputs before computing output tolerances.
+
+The 8192-row input corpus is not a hand-maintained workspace prerequisite.
+Release construction resolves the newest dated `.tgz` in the official
+`kata1/trainingdata` index, freezes its URL and SHA-256, safely extracts it, and
+uniformly samples exactly 8192 full 19x19 rows with seed 20260803. The sampled
+NPZ and full provenance manifest are carried in the tar and revalidated by
+`setup.sh`. Candidate inference output is never accepted as the FP32 reference.

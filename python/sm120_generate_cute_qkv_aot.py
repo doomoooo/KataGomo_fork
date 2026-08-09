@@ -41,7 +41,7 @@ except ModuleNotFoundError:  # imported as ``python.sm120_generate_cute_qkv_aot`
     from python.source_provenance import clean_source_revision
 
 
-CANDIDATE_ID = "qkv-m128-n128-k64-s2-cute-atom4x2-packed"
+CANDIDATE_ID = "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed"
 CUTLASS_COMMIT = "dcf215af68a2d08d305076c152a06f201728cd53"
 DENSE_GEMM_SHA256 = "613052799aff35d5564d49c8bbb4bbac2e22bc58cb3e27499c4c9c3ee95c6e03"
 SEQUENCE = 361
@@ -57,6 +57,22 @@ def sha256_file(path: pathlib.Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def git_output(root: pathlib.Path, *arguments: str) -> str:
+    if arguments == ("rev-parse", "HEAD"):
+        return clean_source_revision(root)[0]
+    if arguments == ("status", "--short"):
+        clean_source_revision(root)
+        return ""
+    completed = subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {detail}")
+    return completed.stdout.strip()
 
 
 def package_version(*names: str) -> str | None:
@@ -262,6 +278,7 @@ def main() -> None:
     parser.add_argument("--artifact-stem", default="sm120_qkv_cute_active")
     parser.add_argument("--bridge-path", type=pathlib.Path, required=True)
     parser.add_argument("--candidate-id", default=CANDIDATE_ID)
+    parser.add_argument("--atom-layout", choices=("2x2", "4x2"), default="4x2")
     parser.add_argument("--fat-symbol-token")
     parser.add_argument(
         "--cutlass-root", type=pathlib.Path,
@@ -280,8 +297,15 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.batch <= 32:
         parser.error("--batch must be in B1..B32")
-    if args.candidate_id != CANDIDATE_ID:
-        parser.error(f"only {CANDIDATE_ID} is supported")
+    expected_candidate_id = (
+        "wide_qkv-m128-n128-k64-s2-cute-atom" +
+        args.atom_layout + "-packed"
+    )
+    if args.candidate_id != expected_candidate_id:
+        parser.error(
+            "--candidate-id does not match --atom-layout: expected " +
+            expected_candidate_id
+        )
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.artifact_stem):
         parser.error("--artifact-stem must be a C identifier")
     if args.fat_symbol_token and not re.fullmatch(
@@ -323,6 +347,8 @@ def main() -> None:
         dense_path, output_dir,
     )
 
+    global ATOM_LAYOUT
+    ATOM_LAYOUT = (2, 2, 1) if args.atom_layout == "2x2" else (4, 2, 1)
     rows = args.batch * SEQUENCE
     device_id = args.device if args.device is not None else 0
     a = make_tensor(

@@ -8,7 +8,10 @@
   "historicalSources": {
     "export_ffn_aot_sm120.py": "f0d3bfe96d263d9a8e9b0cc756830928c6d39e8085f901f88b482c0884ce1466",
     "onnx_kernels.py": "6386d94cf2ded04728bb8139c1f35339e9c5969981e786b7d3e2b8685c29ba48",
-    "tune_ffn_swiglu.py": "56bef6f7dd36b2f3921e9cc25e067df1edfbbb6dce2e14843bf60487d7c35901"
+    "tune_ffn_swiglu.py": "1369b13904aa1e7075f954619ceccc696d9859cba33c6705c9459dce9c1efa0b"
+  },
+  "maintainedSourceEdits": {
+    "tune_ffn_swiglu.py": "Removed the development-only external GPU lock; frozen B1-B32 device sources and their hashes are unchanged."
   },
   "dependencies": {
     "pythonHistorical": "3.10.12",

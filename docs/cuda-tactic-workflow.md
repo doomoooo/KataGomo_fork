@@ -1,20 +1,24 @@
-# SM89 cross-batch tactic workflow
+# Unified SM89/SM120 cross-batch tactic workflow
 
-`python/portable_tactic_workflow.py` belongs to the `4090-opt` branch. Its
-scope is SM89 (RTX 4090/4080), exact 19x19 batches and the natural two-stream
+`python/cuda_tactic_workflow.py` is the single SM89/SM120 optimization workflow. Its
+scope is SM89 and SM120, exact 19x19 batches and the natural two-stream
 whole-graph topology. SM120 support and repository-wide integration are owned
 by final-migration.
 
 The workflow turns `/workspace/results/4090/HISTORY.md` and
 `/workspace/4090-optimization-portability.md` into a finite, reproducible
 search. B13 is neither an anchor nor a special case. Every requested batch
-starts from the accepted Stage68 history configuration and visits the same
-ordered optimization stages. Every stage still measures its explicit off
-control, an explicit keep-incumbent no-op, and local variants. A replacement
+starts from a complete explicit official-equivalent tactic baseline and
+visits the same ordered optimization stages. Every stage still measures its
+explicit off control, an explicit keep-incumbent no-op, and local variants. A replacement
 must exceed the freshly measured incumbent by at least 0.1%; otherwise the
 incumbent is carried into the next stage. This preserves interactions between
 already accepted optimizations while allowing any individual stage to be
 rejected for a different batch.
+
+The baseline covers every runtime tactic key, and generated plans carry it
+verbatim before applying measured winners. No `keep` result can inherit a
+parser default, and the runtime has no `auto`/B13-special winner selection.
 
 ## Search stages
 
@@ -50,12 +54,12 @@ space does not advertise unparsed AOT IDs or imaginary launch shapes.
 ## 1. Materialize B4–B32
 
 ```bash
-python3 python/portable_tactic_workflow.py space \
+python3 python/cuda_tactic_workflow.py space \
   --architecture sm89 --gpu-class rtx4090 --device 0 \
   --batches 4-32 --streams 2 \
   --output results/portable-sm89/history-space-b4-b32.json
 
-python3 python/portable_tactic_workflow.py generation-plan \
+python3 python/cuda_tactic_workflow.py generation-plan \
   --space results/portable-sm89/history-space-b4-b32.json \
   --phase full \
   --output results/portable-sm89/history-generation-b4-b32.json
@@ -89,7 +93,7 @@ After linking, build an auditable bundle. This checks all recorded file hashes
 and proves every generated extern-C launcher is present in `nm -a` output:
 
 ```bash
-python3 python/portable_tactic_workflow.py artifact-bundle \
+python3 python/cuda_tactic_workflow.py artifact-bundle \
   --space results/portable-sm89/history-space-b4-b32.json \
   --binary build-sm89-search/katago \
   --manifests results/portable-sm89/fat/dual-ffn/manifest.json \
@@ -105,7 +109,8 @@ metadata hashes, correctness evidence, compile commands, and linked symbols.
 
 ## 3. Complete discovery
 
-Discovery visits every candidate. For each batch it seeds all 20 families from
+Discovery visits every candidate. For each batch it seeds the target
+architecture's declared family catalog from
 the accepted Stage68 config, scans a family's off control and local variants,
 retains that family's whole-graph winner, then uses the accumulated winner
 config as the next family's base. B13 follows exactly the same path as every
@@ -129,7 +134,7 @@ removed the resulting multi-percent bimodal noise at little additional wall
 time relative to model startup.
 
 ```bash
-python3 python/portable_tactic_workflow.py scan \
+python3 python/cuda_tactic_workflow.py scan \
   --space results/portable-sm89/history-space-b4-b32.json \
   --artifact-bundle results/portable-sm89/artifact-bundle.json \
   --binary build-sm89-search/katago \
@@ -161,7 +166,7 @@ Only the fully accumulated joint winner is reported. The gate requires at
 least 1000 timed iterations, two repeats and at most 10% relative spread:
 
 ```bash
-python3 python/portable_tactic_workflow.py gate \
+python3 python/cuda_tactic_workflow.py gate \
   --space results/portable-sm89/history-space-b4-b32.json \
   --discovery results/portable-sm89/history-discovery-b4-b32.json \
   --artifact-bundle results/portable-sm89/artifact-bundle.json \
@@ -179,8 +184,23 @@ Replay each final per-batch config on the fixed 8192-row corpus, compare it to
 the established FP32 `.krnn` reference with
 `python/katago/train/compare_replay_krnn.py`, then attach the reports:
 
+The release SDK automates the complete identity-bound form and should be used
+for qualification:
+
 ```bash
-python3 python/portable_tactic_workflow.py certify \
+./run-autotune.sh --device 0 --phase reference  # once, official CUDA FP32
+./run-autotune.sh --device 0 --phase accuracy   # every final B4-B32 winner
+```
+
+It binds each report to the exact batch, selected overrides, candidate binary,
+model, corpus, candidate dump, and one shared FP32 reference SHA-256. The
+physical tail is padded to the selected exact batch, while only the 8,192 real
+rows are serialized. Candidate `.krnn` files are removed after comparison.
+The lower-level `certify` example below expects reports carrying that identity
+metadata; raw comparison JSON alone is intentionally insufficient.
+
+```bash
+python3 python/cuda_tactic_workflow.py certify \
   --gate results/portable-sm89/history-long-gate-b4-b32.json \
   --comparison 4=results/portable-sm89/replay-b4-vs-fp32.json \
   --comparison 5=results/portable-sm89/replay-b5-vs-fp32.json \
@@ -192,14 +212,14 @@ recorded policy/value/score/ownership FP32 envelope. A distributable plan then
 combines complete discovery coverage, the final long gate and certification:
 
 ```bash
-python3 python/portable_tactic_workflow.py plan \
+python3 python/cuda_tactic_workflow.py plan \
   --space results/portable-sm89/history-space-b4-b32.json \
   --results results/portable-sm89/history-discovery-b4-b32.json \
             results/portable-sm89/history-long-gate-certified.json \
   --batches 4-32 \
   --output results/portable-sm89/rtx4090-s2-b4-b32-plan.json
 
-python3 python/portable_tactic_workflow.py apply \
+python3 python/cuda_tactic_workflow.py apply \
   --plan results/portable-sm89/rtx4090-s2-b4-b32-plan.json \
   --batches 4-32 --output results/portable-sm89/receiver-overrides.json
 ```

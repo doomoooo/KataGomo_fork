@@ -8,6 +8,7 @@
 #include <cublas_v2.h>
 #include <cudnn.h>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,18 +44,33 @@ struct Sm89Ctx {
   cudaStream_t stream;
   Sm89DeviceCapabilities deviceCaps;
   int serverThreads;
+  int rmsNormRowsPerBlock;
   std::string dualFfnAotTactic;
   std::string linear2AotTactic;
+  std::string dualFfnCutlassTactic;
+  std::string linear2CutlassTactic;
+  std::string outProjCutlassTactic;
+  std::string preConvCutlassTactic;
+  std::string postConvCutlassTactic;
+  std::set<std::string> activeTactics;
 
   Sm89Ctx(
     cudaStream_t stream,
     int serverThreads,
+    int rmsNormRowsPerBlock,
     const std::string& dualFfnAotTactic,
-    const std::string& linear2AotTactic
+    const std::string& linear2AotTactic,
+    const std::string& dualFfnCutlassTactic,
+    const std::string& linear2CutlassTactic,
+    const std::string& outProjCutlassTactic,
+    const std::string& preConvCutlassTactic,
+    const std::string& postConvCutlassTactic
   );
   ~Sm89Ctx();
   Sm89Ctx(const Sm89Ctx&) = delete;
   Sm89Ctx& operator=(const Sm89Ctx&) = delete;
+
+  void markTacticActive(const std::string& marker);
 };
 
 struct Sm89Scratch {
@@ -89,16 +105,15 @@ class Sm89Forward {
     bool useWideFFN,
     bool useFusedResidual,
     bool useRMSNormOpt,
+    int rmsNormRowsPerBlock,
     bool useFusedQKRoPE,
     bool usePrecomputedQKRoPE,
     bool useQKVRoPEGemm,
     bool useSplitQKVRoPEGemm,
     int plainQKVVariant,
     int ropeBatchGroup,
-    bool useFlashAttention,
-    bool useFlashAttentionBoth16,
+    int flashAttentionTactic,
     bool useDualGemmSwiGLU,
-    bool useDualGemmSwiGLUHalf2Tanh,
     bool useLinear2Gemm,
     bool useOutProjGemm,
     bool usePreConvGemm,
@@ -110,16 +125,23 @@ class Sm89Forward {
     bool usePersistingL2Inner,
     float persistingL2InnerHitRatio,
     bool useScaleBiasSiluVec8,
+    bool useScaleBiasSiluVec8C384,
     bool useScaleBiasSiluVec4C384,
     bool useInitialConvFrontend,
     bool useInitialGlobalMatMulAdd,
-    bool useFusedPolicyP1,
+    int policyP1RowsPerBlock,
     bool useHeadBNHalfToFloat,
     bool useWideHeadProjection,
+    bool useExactMaskDownstreamElision,
     bool useExactMaskElision,
     bool useFusedValueTerminal,
     const std::string& dualFfnAotTactic,
     const std::string& linear2AotTactic,
+    const std::string& dualFfnCutlassTactic,
+    const std::string& linear2CutlassTactic,
+    const std::string& outProjCutlassTactic,
+    const std::string& preConvCutlassTactic,
+    const std::string& postConvCutlassTactic,
     int serverThreads,
     bool shareModelWeights
   );
@@ -142,8 +164,12 @@ class Sm89Forward {
     float* scoreValueBuf,
     void* ownershipBuf,
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    cudaEvent_t inputConsumedEvent = nullptr,
+    cudaEvent_t outputConsumedEvent = nullptr
   );
+
+  std::vector<std::string> getActiveTactics() const;
 
  private:
   struct Impl;

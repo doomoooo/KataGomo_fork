@@ -238,8 +238,11 @@ def reuse_ffn_a_fragments(source: str) -> str:
 
 
 def find_candidate(space: dict, batch: int, family: str, candidate_id: str) -> dict:
-    if space.get("schema") != 2:
-        raise ValueError("--space must be schema 2")
+    # The unified workflow emits the shared cuda-tactic-search-space schema.
+    # Keep the generator on that schema instead of carrying the old SM120-only
+    # schema number from the pre-migration generator.
+    if space.get("schema") != 1 or space.get("kind") != "cuda-tactic-search-space":
+        raise ValueError("--space must be the unified cuda-tactic-search-space schema")
     batch_space = next((item for item in space["batches"] if item["batch"] == batch), None)
     if batch_space is None:
         raise ValueError(f"B{batch} is outside the materialized space")
@@ -289,18 +292,19 @@ def append_wrapper(
     threads = int(candidate_value.get("threads", 128))
     block_m = int(candidate_value["m"])
     block_n = int(candidate_value["n"])
-    grid_x = (1152 if family in ("ffn", "qkv") else 384) // block_n
-    if family == "qkv" and 1152 % block_n:
+    grid_x = (1152 if family in ("dual_ffn", "wide_qkv") else 384) // block_n
+    if family == "wide_qkv" and 1152 % block_n:
         grid_x += 1
-    if family == "ffn" and 1152 % block_n:
+    if family == "dual_ffn" and 1152 % block_n:
         grid_x += 1
     if family == "linear2" and 384 % block_n:
         grid_x += 1
     grid_y = (m + block_m - 1) // block_m
     kernel_old = {
-        "ffn": "fused_ffn_kernel",
-        "qkv": "wide_qkv_kernel",
+        "dual_ffn": "fused_ffn_kernel",
+        "wide_qkv": "wide_qkv_kernel",
         "linear2": "residual_gemm_kernel",
+        "outproj": "residual_gemm_kernel",
     }[family]
     if symbol_token is not None:
         validate_symbol_token(symbol_token)
@@ -319,7 +323,7 @@ def append_wrapper(
         descriptors = f'''\nextern "C" int sm120_search_{family}_batch() {{ return {batch}; }}
 extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
 '''
-        if family == "qkv":
+        if family == "wide_qkv":
             # The common SM120 registry queries this ABI bit even for the
             # planar single-slot candidate.  CuTe supplies the same symbol in
             # its bridge; omitting it here only shows up at final link time.
@@ -332,7 +336,7 @@ extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
         if symbol_token is None
         else fat_launch_symbol(family, symbol_token)
     )
-    if family == "ffn":
+    if family == "dual_ffn":
         launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* linear_weights, const half* gate_weights,
   half* output, cudaStream_t stream) {{
@@ -344,7 +348,7 @@ extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
   return cudaPeekAtLastError();
 }}
 '''
-    elif family == "qkv":
+    elif family == "wide_qkv":
         launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* weights, half* output,
   cudaStream_t stream) {{
@@ -358,7 +362,8 @@ extern "C" const char* sm120_search_{family}_id() {{ return "{candidate_id}"; }}
     else:
         launcher = f'''extern "C" cudaError_t {launch_name}(
   const half* input, const half* weights, half* residual,
-  cudaStream_t stream) {{
+  int mat_batch_size, cudaStream_t stream) {{
+  (void)mat_batch_size;
 {attribute}  {kernel_new}<<<dim3({grid_x}, {grid_y}, 1), {threads}, {dynamic_smem}, stream>>>(
     reinterpret_cast<const half_t*>(input),
     reinterpret_cast<half_t*>(residual),
@@ -386,7 +391,10 @@ def restrict_generated_kernel_to_sm120(source: str, kernel_name: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--space", required=True)
-    parser.add_argument("--family", choices=("ffn", "qkv", "linear2"), required=True)
+    parser.add_argument(
+        "--family", choices=("dual_ffn", "wide_qkv", "linear2", "outproj"),
+        required=True,
+    )
     parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--batch", type=int, required=True)
     parser.add_argument("--device", type=int, required=True)
@@ -410,7 +418,7 @@ def main() -> None:
     candidate_value = find_candidate(space, args.batch, args.family, args.candidate_id)
     if candidate_value.get("implementation", "tilelang") != "tilelang":
         raise ValueError("this generator only handles TileLang candidates")
-    if args.family == "ffn" and candidate_value.get("swiglu") != "exp":
+    if args.family == "dual_ffn" and candidate_value.get("swiglu") != "exp":
         raise ValueError("historical tanh-half2 FFN uses its reproducible legacy generator")
 
     torch.cuda.set_device(args.device)
@@ -420,7 +428,7 @@ def main() -> None:
     started = time.time()
     correctness = {}
 
-    if args.family == "ffn":
+    if args.family == "dual_ffn":
         n, k = 1152, 384
         kernel = fused_ffn.compile(m=m, n=n, k=k, **tile)
         linear = (torch.randn(k, n, device="cuda") * 0.05).half()
@@ -430,7 +438,7 @@ def main() -> None:
         call = lambda: kernel(input_tensor, linear, gate, output)
         call()
         reference = torch.nn.functional.silu(input_tensor @ linear) * (input_tensor @ gate)
-    elif args.family == "qkv":
+    elif args.family == "wide_qkv":
         n, k, q_dim = 1152, 384, 384
         kernel = wide_qkv.compile(m=m, n=n, k=k, q_dim=q_dim, **tile)
         weights = (torch.randn(k, n, device="cuda") * 0.05).half()
@@ -439,8 +447,18 @@ def main() -> None:
         call = lambda: kernel(input_tensor, weights, output)
         call()
         reference = (input_tensor @ weights).reshape(m, 3, q_dim).permute(1, 0, 2)
-    else:
+    elif args.family == "linear2":
         n, k = 384, 1152
+        kernel = residual_gemm.compile(m=m, n=n, k=k, **tile)
+        weights = (torch.randn(k, n, device="cuda") * 0.05).half()
+        input_tensor = (torch.randn(m, k, device="cuda") * 0.15).half()
+        output = (torch.randn(m, n, device="cuda") * 0.15).half()
+        residual = output.clone()
+        call = lambda: kernel(input_tensor, weights, residual, output)
+        call()
+        reference = torch.addmm(residual, input_tensor, weights)
+    else:
+        n, k = 384, 384
         kernel = residual_gemm.compile(m=m, n=n, k=k, **tile)
         weights = (torch.randn(k, n, device="cuda") * 0.05).half()
         input_tensor = (torch.randn(m, k, device="cuda") * 0.15).half()
@@ -460,23 +478,24 @@ def main() -> None:
     s1_samples = event_bench(call, args.s1_warmup, args.s1_iterations)
 
     source = kernel.get_kernel_source()
-    if args.family == "ffn" and candidate_value.get("a_fragment_reuse"):
+    if args.family == "dual_ffn" and candidate_value.get("a_fragment_reuse"):
         source = reuse_ffn_a_fragments(source)
     source = restrict_generated_kernel_to_sm120(
         source,
         {
-            "ffn": "fused_ffn_kernel",
-            "qkv": "wide_qkv_kernel",
+            "dual_ffn": "fused_ffn_kernel",
+            "wide_qkv": "wide_qkv_kernel",
             "linear2": "residual_gemm_kernel",
+            "outproj": "residual_gemm_kernel",
         }[args.family],
     )
     block_m = int(candidate_value["m"])
     block_n = int(candidate_value["n"])
     block_k = int(candidate_value["k"])
     stages = int(candidate_value["stages"])
-    weight_count = 2 if args.family == "ffn" else 1
+    weight_count = 2 if args.family == "dual_ffn" else 1
     dynamic_smem = (block_m * block_k + weight_count * block_k * block_n) * 2 * stages
-    output_columns = 1152 if args.family in ("ffn", "qkv") else 384
+    output_columns = 1152 if args.family in ("dual_ffn", "wide_qkv") else 384
     grid_x = (output_columns + block_n - 1) // block_n
     grid_y = (m + block_m - 1) // block_m
     source = append_wrapper(

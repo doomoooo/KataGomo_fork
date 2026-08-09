@@ -13,8 +13,11 @@ LLVM_ROOT="${AUTOTUNE_TRITON_LLVM_ROOT:-${ENV_ROOT}/toolchains/triton-llvm}"
 JSON_ROOT="${AUTOTUNE_TRITON_JSON_ROOT:-${ENV_ROOT}/toolchains/triton-json}"
 FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-/workspace/third_party/flash-attention/csrc/cutlass}"
 MODEL="${AUTOTUNE_MODEL:-/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz}"
-CORPUS="${AUTOTUNE_CORPUS:-/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.npz}"
-CORPUS_MANIFEST="${AUTOTUNE_CORPUS_MANIFEST:-/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.manifest.json}"
+CORPUS="${AUTOTUNE_CORPUS:-}"
+CORPUS_MANIFEST="${AUTOTUNE_CORPUS_MANIFEST:-}"
+CORPUS_PYTHON="${AUTOTUNE_CORPUS_PYTHON:-${ENV_ROOT}/venv/bin/python}"
+CORPUS_OUTPUT_ROOT="${AUTOTUNE_CORPUS_OUTPUT_ROOT:-/workspace/trainingdata/accuracy}"
+TRAINING_DATA_CACHE="${AUTOTUNE_TRAINING_DATA_CACHE:-/workspace/trainingdata}"
 PYTHON_ARCHIVE="${AUTOTUNE_PYTHON_ARCHIVE:-${ENV_ROOT}/downloads/cpython-3.12.13+20260807-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz}"
 PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.12.13%2B20260807-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
 PYTHON_SHA256='506191be3ee7bd190a8834dcdc1b3bc70aab50608deccc711935aa007239cabd'
@@ -26,6 +29,24 @@ log() { printf '[autotune-package] %s\n' "$*"; }
 die() { printf '[autotune-package] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command missing: $1"; }
 for command_name in curl find git gzip python3 sha256sum tar; do need "${command_name}"; done
+
+if [[ -z "${CORPUS}" || -z "${CORPUS_MANIFEST}" ]]; then
+  [[ -z "${CORPUS}" && -z "${CORPUS_MANIFEST}" ]] \
+    || die "AUTOTUNE_CORPUS and AUTOTUNE_CORPUS_MANIFEST must be set together"
+  [[ -x "${CORPUS_PYTHON}" ]] || CORPUS_PYTHON="$(command -v python3)"
+  "${CORPUS_PYTHON}" -c 'import numpy' \
+    || die "accuracy-corpus Python lacks NumPy; run the environment setup first"
+  corpus_result="${ENV_ROOT}/accuracy-corpus/current.json"
+  log "resolving the latest public KataGo training archive and the fixed 8192-row corpus"
+  "${CORPUS_PYTHON}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
+    --repo "${REPO_ROOT}" --python "${CORPUS_PYTHON}" \
+    --output-dir "${CORPUS_OUTPUT_ROOT}" \
+    --work-dir "${ENV_ROOT}/accuracy-corpus" \
+    --archive-cache-dir "${TRAINING_DATA_CACHE}" \
+    --refresh-latest --result-json "${corpus_result}"
+  CORPUS="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["corpus"])' "${corpus_result}")"
+  CORPUS_MANIFEST="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest"])' "${corpus_result}")"
+fi
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
   || die "package only from a clean committed final-migration tree"
@@ -61,13 +82,15 @@ mkdir -p -- "${bundle}/payload/wheels" "${bundle}/patches" "${bundle}/metadata" 
 
 cp -- "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/run-autotune.sh" \
   "${SCRIPT_DIR}/autotune.py" "${SCRIPT_DIR}/detect_gpu.py" \
-  "${SCRIPT_DIR}/gpu-lock" "${REPO_ROOT}/python/build_parallelism.py" "${bundle}/"
+  "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
+  "${REPO_ROOT}/python/build_parallelism.py" "${bundle}/"
 cp -- "${SCRIPT_DIR}/README.md" "${SCRIPT_DIR}/SPEC.md" "${SCRIPT_DIR}/source-lock.tsv" \
   "${bundle}/metadata/"
 cp -- "${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch" \
   "${SCRIPT_DIR}/patches/flash-attention-sm120-both16.patch" "${bundle}/patches/"
 chmod 0755 "${bundle}/setup.sh" "${bundle}/run-autotune.sh" \
-  "${bundle}/autotune.py" "${bundle}/detect_gpu.py" "${bundle}/gpu-lock"
+  "${bundle}/autotune.py" "${bundle}/detect_gpu.py" \
+  "${bundle}/prepare_accuracy_corpus.py"
 
 revision_for() {
   awk -F '\t' -v name="$1" '$1 == name {print $2; exit}' "${SCRIPT_DIR}/source-lock.tsv"
@@ -142,11 +165,24 @@ tar --create --gzip --file "${bundle}/payload/toolchains.tar.gz" \
 asset_stage="${stage}/asset-stage/assets"
 mkdir -p -- "${asset_stage}"
 cp -- "${MODEL}" "${asset_stage}/b11c768h12nbt3tflrs-fson-silu.bin.gz"
-cp -- "${CORPUS}" "${asset_stage}/2026-08-01-19x19-8192-seed20260803-full19.npz"
-cp -- "${CORPUS_MANIFEST}" "${asset_stage}/2026-08-01-19x19-8192-seed20260803-full19.manifest.json"
+cp -- "${CORPUS}" "${asset_stage}/$(basename -- "${CORPUS}")"
+cp -- "${CORPUS_MANIFEST}" "${asset_stage}/$(basename -- "${CORPUS_MANIFEST}")"
 if [[ -n "${AUTOTUNE_FP32_GOLDEN:-}" ]]; then
   [[ -r "${AUTOTUNE_FP32_GOLDEN}" ]] || die "AUTOTUNE_FP32_GOLDEN is unreadable"
   cp -- "${AUTOTUNE_FP32_GOLDEN}" "${asset_stage}/replay-fixed-fp32-full19.krnn"
+  golden_metadata="${AUTOTUNE_FP32_GOLDEN%.krnn}.json"
+  [[ -r "${golden_metadata}" ]] \
+    || die "AUTOTUNE_FP32_GOLDEN requires its immutable .json sidecar"
+  mapfile -t golden_identity < <(python3 -c \
+    'import json,sys; d=json.load(open(sys.argv[1])); print(d["reference_sha256"]); print(d["model_sha256"]); print(d["corpus_sha256"])' \
+    "${golden_metadata}")
+  [[ "$(sha256sum "${AUTOTUNE_FP32_GOLDEN}" | awk '{print $1}')" == "${golden_identity[0]}" ]] \
+    || die "AUTOTUNE_FP32_GOLDEN differs from its sidecar"
+  [[ "$(sha256sum "${MODEL}" | awk '{print $1}')" == "${golden_identity[1]}" ]] \
+    || die "AUTOTUNE_FP32_GOLDEN was generated for a different model"
+  [[ "$(sha256sum "${CORPUS}" | awk '{print $1}')" == "${golden_identity[2]}" ]] \
+    || die "AUTOTUNE_FP32_GOLDEN was generated for a different corpus"
+  cp -- "${golden_metadata}" "${asset_stage}/replay-fixed-fp32-full19.json"
 fi
 tar --create --gzip --file "${bundle}/payload/assets.tar.gz" \
   --directory "${stage}/asset-stage" assets
@@ -174,6 +210,7 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
   printf 'cuda_toolkit=13.2\ncudnn_cuda13=9.25.0.15\n'
   printf 'model_sha256=%s\n' "$(sha256sum "${MODEL}" | awk '{print $1}')"
   printf 'corpus_sha256=%s\n' "$(sha256sum "${CORPUS}" | awk '{print $1}')"
+  "${CORPUS_PYTHON}" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("training_data_archive="+d["source_archive"]); print("training_data_archive_sha256="+d["source_archive_sha256"]); print("training_data_url="+d["source_archive_url"])' "${CORPUS_MANIFEST}"
 } > "${bundle}/metadata/release.txt"
 
 (

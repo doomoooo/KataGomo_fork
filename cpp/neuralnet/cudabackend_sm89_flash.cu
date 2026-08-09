@@ -79,6 +79,20 @@ Flash_fwd_params makeParams(
 
 } // namespace
 
+template<int BlockM, int BlockN, bool PackGQA, typename ElementAccum>
+void launchFlashTactic(
+  Flash_fwd_params& p, cudaStream_t stream
+) {
+  p.pack_gqa = PackGQA;
+  run_flash_fwd<
+    86, D, D, 1,
+    cutlass::half_t, cutlass::half_t,
+    false, false, false, false, false, false, false,
+    PackGQA, false, false,
+    ElementAccum, BlockM, BlockN, 4
+  >(p, stream);
+}
+
 size_t sm89FlashAttentionLseBytesD32(int batchSize) {
   return (size_t)batchSize * H * S * sizeof(float);
 }
@@ -95,30 +109,35 @@ bool sm89FlashAttentionD32(
   int numKVHeads,
   int qHeadDim,
   int vHeadDim,
-  bool useBoth16Accum,
+  int tactic,
   int numSms,
   cudaStream_t stream
 ) {
   if(batchSize < 1 || seqLen != S || numHeads != H || numKVHeads != H ||
      qHeadDim != D || vHeadDim != D || q == nullptr || k == nullptr ||
-     v == nullptr || output == nullptr || lse == nullptr || numSms <= 0)
+     v == nullptr || output == nullptr || lse == nullptr || numSms <= 0 ||
+     tactic < 1 || tactic > 5)
     return false;
 
   Flash_fwd_params p = makeParams(q, k, v, output, lse, batchSize, numSms);
-  if(useBoth16Accum) {
-    run_flash_fwd<
-      86, D, D, 1,
-      cutlass::half_t, cutlass::half_t,
-      false, false, false, false, false, false, false, false, false, false,
-      cutlass::half_t
-    >(p, stream);
-  }
-  else {
-    run_flash_fwd<
-      86, D, D, 1,
-      cutlass::half_t, cutlass::half_t,
-      false, false, false, false, false, false, false, false, false, false
-    >(p, stream);
+  switch(tactic) {
+  case 1:
+    launchFlashTactic<128,112,false,float>(p, stream);
+    break;
+  case 2:
+    launchFlashTactic<128,96,false,float>(p, stream);
+    break;
+  case 3:
+    launchFlashTactic<64,96,true,float>(p, stream);
+    break;
+  case 4:
+    launchFlashTactic<64,96,false,float>(p, stream);
+    break;
+  case 5:
+    launchFlashTactic<64,96,false,cutlass::half_t>(p, stream);
+    break;
+  default:
+    return false;
   }
   return cudaPeekAtLastError() == cudaSuccess;
 }

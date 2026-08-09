@@ -30,6 +30,7 @@ namespace MainCmds {
   int runsekitrainwritetests(const std::vector<std::string>& args);
   int runnnonmanyposestest(const std::vector<std::string>& args);
   int runnnbatchingtest(const std::vector<std::string>& args);
+  int runnngtpstresstest(const std::vector<std::string>& args);
   int runownershiptests(const std::vector<std::string>& args);
   int runtinynntests(const std::vector<std::string>& args);
   int runnnevalcanarytests(const std::vector<std::string>& args);

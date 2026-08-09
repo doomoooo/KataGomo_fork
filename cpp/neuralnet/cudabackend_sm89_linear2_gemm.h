@@ -4,16 +4,17 @@
 #include "../neuralnet/cudaincludes.h"
 
 #include <memory>
+#include <string>
 
 namespace Sm89Backend {
 
 #ifdef KATAGO_ENABLE_SM89_LINEAR2_GEMM
-class Sm89Linear2GemmB13 {
+class Sm89Linear2Gemm {
  public:
-  explicit Sm89Linear2GemmB13(const half* weights);
-  ~Sm89Linear2GemmB13();
-  Sm89Linear2GemmB13(const Sm89Linear2GemmB13&) = delete;
-  Sm89Linear2GemmB13& operator=(const Sm89Linear2GemmB13&) = delete;
+  Sm89Linear2Gemm(const half* weights, const std::string& tactic);
+  ~Sm89Linear2Gemm();
+  Sm89Linear2Gemm(const Sm89Linear2Gemm&) = delete;
+  Sm89Linear2Gemm& operator=(const Sm89Linear2Gemm&) = delete;
 
   bool applyAccumulate(
     const half* input,
@@ -30,16 +31,16 @@ class Sm89Linear2GemmB13 {
   std::unique_ptr<Impl> impl;
 };
 
-class Sm89Linear2BnGemmB13 {
+class Sm89Linear2BnGemm {
  public:
-  Sm89Linear2BnGemmB13(
+  Sm89Linear2BnGemm(
     const half* weights,
     const half* bnScale,
     const half* bnBias
   );
-  ~Sm89Linear2BnGemmB13();
-  Sm89Linear2BnGemmB13(const Sm89Linear2BnGemmB13&) = delete;
-  Sm89Linear2BnGemmB13& operator=(const Sm89Linear2BnGemmB13&) = delete;
+  ~Sm89Linear2BnGemm();
+  Sm89Linear2BnGemm(const Sm89Linear2BnGemm&) = delete;
+  Sm89Linear2BnGemm& operator=(const Sm89Linear2BnGemm&) = delete;
 
   bool applyAccumulateAndActivate(
     const half* input,
@@ -59,12 +60,12 @@ class Sm89Linear2BnGemmB13 {
 #endif
 
 #ifdef KATAGO_ENABLE_SM89_OUTPROJ_GEMM
-class Sm89OutProjGemmB13 {
+class Sm89OutProjGemm {
  public:
-  explicit Sm89OutProjGemmB13(const half* weights);
-  ~Sm89OutProjGemmB13();
-  Sm89OutProjGemmB13(const Sm89OutProjGemmB13&) = delete;
-  Sm89OutProjGemmB13& operator=(const Sm89OutProjGemmB13&) = delete;
+  Sm89OutProjGemm(const half* weights, const std::string& tactic);
+  ~Sm89OutProjGemm();
+  Sm89OutProjGemm(const Sm89OutProjGemm&) = delete;
+  Sm89OutProjGemm& operator=(const Sm89OutProjGemm&) = delete;
 
   bool applyAccumulate(
     const half* input,
@@ -83,12 +84,12 @@ class Sm89OutProjGemmB13 {
 #endif
 
 #ifdef KATAGO_ENABLE_SM89_PRECONV_GEMM
-class Sm89PreConvGemmB13 {
+class Sm89PreConvGemm {
  public:
-  explicit Sm89PreConvGemmB13(const half* weights);
-  ~Sm89PreConvGemmB13();
-  Sm89PreConvGemmB13(const Sm89PreConvGemmB13&) = delete;
-  Sm89PreConvGemmB13& operator=(const Sm89PreConvGemmB13&) = delete;
+  Sm89PreConvGemm(const half* weights, const std::string& tactic);
+  ~Sm89PreConvGemm();
+  Sm89PreConvGemm(const Sm89PreConvGemm&) = delete;
+  Sm89PreConvGemm& operator=(const Sm89PreConvGemm&) = delete;
 
   bool apply(
     const half* input,
@@ -107,12 +108,12 @@ class Sm89PreConvGemmB13 {
 #endif
 
 #ifdef KATAGO_ENABLE_SM89_POSTCONV_GEMM
-class Sm89PostConvGemmB13 {
+class Sm89PostConvGemm {
  public:
-  explicit Sm89PostConvGemmB13(const half* weights);
-  ~Sm89PostConvGemmB13();
-  Sm89PostConvGemmB13(const Sm89PostConvGemmB13&) = delete;
-  Sm89PostConvGemmB13& operator=(const Sm89PostConvGemmB13&) = delete;
+  Sm89PostConvGemm(const half* weights, const std::string& tactic);
+  ~Sm89PostConvGemm();
+  Sm89PostConvGemm(const Sm89PostConvGemm&) = delete;
+  Sm89PostConvGemm& operator=(const Sm89PostConvGemm&) = delete;
 
   bool applyAccumulate(
     const half* input,
@@ -129,16 +130,16 @@ class Sm89PostConvGemmB13 {
   std::unique_ptr<Impl> impl;
 };
 
-class Sm89PostConvBnGemmB13 {
+class Sm89PostConvBnGemm {
  public:
-  Sm89PostConvBnGemmB13(
+  Sm89PostConvBnGemm(
     const half* weights,
     const half* bnScale,
     const half* bnBias
   );
-  ~Sm89PostConvBnGemmB13();
-  Sm89PostConvBnGemmB13(const Sm89PostConvBnGemmB13&) = delete;
-  Sm89PostConvBnGemmB13& operator=(const Sm89PostConvBnGemmB13&) = delete;
+  ~Sm89PostConvBnGemm();
+  Sm89PostConvBnGemm(const Sm89PostConvBnGemm&) = delete;
+  Sm89PostConvBnGemm& operator=(const Sm89PostConvBnGemm&) = delete;
 
   bool applyAccumulateAndActivate(
     const half* input,

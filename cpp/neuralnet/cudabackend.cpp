@@ -40,6 +40,9 @@
 #include "../external/half-2.2.0/include/half.hpp"
 
 #include <optional>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 //------------------------
 #include "../core/using.h"
@@ -318,6 +321,9 @@ struct CudaHandles {
   // Set once we have logged that cudaDisableGraphSDPA actually suppressed an otherwise-usable SDPA path,
   // so the message is emitted only a single time per handle rather than on every attention block.
   bool loggedGraphSDPADisabled;
+  // Read by ConvLayer construction before Sm120Model exists.
+  // 0=disabled, 45=eng45/tile0/stages2, 47=retained eng47 knob plan.
+  int sm120InitialConvFrontendEngine;
   // Controls whether 1x1 NHWC convs run as a cuBLAS GEMM (vs cuDNN). Auto = matmul iff FP16.
   // True/False force the choice regardless of precision.
   enabled_t use1x1MatmulMode;
@@ -329,6 +335,10 @@ struct CudaHandles {
   void* sm120FFNSingleGemmContext;
   Sm120Backend::Sm120MatMulFn sm120MatMul;
   void* sm120MatMulContext;
+  Sm120Backend::Sm120Conv1x1Fn sm120Conv1x1;
+  void* sm120Conv1x1Context;
+  Sm120Backend::Sm120InitialGlobalFn sm120InitialGlobal;
+  void* sm120InitialGlobalContext;
   Sm120Backend::Sm120QKVStridedFn sm120QKVStrided;
   void* sm120QKVStridedContext;
   Sm120Backend::Sm120FusedResidualGemmFn sm120FusedResidualGemm;
@@ -341,8 +351,22 @@ struct CudaHandles {
   void* sm120SwiGLUContext;
   Sm120Backend::Sm120AffineSiluFn sm120AffineSilu;
   void* sm120AffineSiluContext;
+  Sm120Backend::Sm120PostConvBNSiluFn sm120PostConvBNSilu;
+  void* sm120PostConvBNSiluContext;
+  float* sm120ExactMaskSumBuf;
+  int sm120ExactMaskCapacity;
+  bool loggedSm120ExactMaskElision;
+  bool sm120UseHeadBNHalfToFloat;
+  bool loggedSm120HeadBNHalfToFloat;
+  bool sm120ShareModelWeights;
+  bool sm120SharedModelWeightsActive;
+  bool loggedSm120SharedModelWeights;
+  bool sm120UseFusedValueTerminal;
+  bool loggedSm120FusedValueTerminal;
   Sm120Backend::Sm120FusedPolicyP1Fn sm120FusedPolicyP1;
   void* sm120FusedPolicyP1Context;
+  Sm120Backend::Sm120WideHeadProjectionFn sm120WideHeadProjection;
+  void* sm120WideHeadProjectionContext;
   Sm120Backend::Sm120PersistingL2Fn sm120PersistingL2;
   void* sm120PersistingL2Context;
   Sm120Backend::Sm120PersistingL2Fn sm120PersistingL2Inner;
@@ -358,6 +382,7 @@ struct CudaHandles {
       isWarmup(false),
       cudaDisableGraphSDPA(false),
       loggedGraphSDPADisabled(false),
+      sm120InitialConvFrontendEngine(0),
       use1x1MatmulMode(enabled_t::Auto),
       sm120Attention(NULL),
       sm120AttentionContext(NULL),
@@ -365,6 +390,10 @@ struct CudaHandles {
       sm120FFNSingleGemmContext(NULL),
       sm120MatMul(NULL),
       sm120MatMulContext(NULL),
+      sm120Conv1x1(NULL),
+      sm120Conv1x1Context(NULL),
+      sm120InitialGlobal(NULL),
+      sm120InitialGlobalContext(NULL),
       sm120QKVStrided(NULL),
       sm120QKVStridedContext(NULL),
       sm120FusedResidualGemm(NULL),
@@ -377,8 +406,22 @@ struct CudaHandles {
       sm120SwiGLUContext(NULL),
       sm120AffineSilu(NULL),
       sm120AffineSiluContext(NULL),
+      sm120PostConvBNSilu(NULL),
+      sm120PostConvBNSiluContext(NULL),
+      sm120ExactMaskSumBuf(NULL),
+      sm120ExactMaskCapacity(0),
+      loggedSm120ExactMaskElision(false),
+      sm120UseHeadBNHalfToFloat(false),
+      loggedSm120HeadBNHalfToFloat(false),
+      sm120ShareModelWeights(false),
+      sm120SharedModelWeightsActive(false),
+      loggedSm120SharedModelWeights(false),
+      sm120UseFusedValueTerminal(false),
+      loggedSm120FusedValueTerminal(false),
       sm120FusedPolicyP1(NULL),
       sm120FusedPolicyP1Context(NULL),
+      sm120WideHeadProjection(NULL),
+      sm120WideHeadProjectionContext(NULL),
       sm120PersistingL2(NULL),
       sm120PersistingL2Context(NULL),
       sm120PersistingL2Inner(NULL),
@@ -617,6 +660,17 @@ struct ConvLayer {
   int matmulSpatialSize;
   void* matmulWeightBuf;
   bool usingFP16;
+  bool initialConvFrontendRequired;
+  // cuDNN frontend execution plans are shape-specific. Keep one plan per
+  // exact batch instead of hiding the historically successful frontend
+  // engine behind a B19 branch.
+  std::vector<size_t> initialConvFrontendWorkspaceBytes;
+  std::vector<int64_t> initialConvFrontendPlanIndexes;
+  std::vector<string> initialConvFrontendMarkers;
+  mutable std::vector<unsigned char> loggedInitialConvFrontend;
+#if KATAGO_CUDA_HAS_SDPA
+  std::vector<std::shared_ptr<cudnn_frontend::graph::Graph>> initialConvFrontendGraphs;
+#endif
 
   ConvLayer() = delete;
   ConvLayer(const ConvLayer&) = delete;
@@ -654,11 +708,19 @@ struct ConvLayer {
     testAssert(convYSize % 2 == 1);
 
     usingFP16 = useFP16;
+    initialConvFrontendRequired = false;
     filterBuf = NULL;
     matmulWeightBuf = NULL;
     filterDescriptor = NULL;
     convolutionDescriptor = NULL;
     convolutionAlgorithms = NULL;
+    initialConvFrontendWorkspaceBytes.clear();
+    initialConvFrontendPlanIndexes.clear();
+    initialConvFrontendMarkers.clear();
+    loggedInitialConvFrontend.clear();
+#if KATAGO_CUDA_HAS_SDPA
+    initialConvFrontendGraphs.clear();
+#endif
 
     // A 1x1 conv is a matmul, and cuBLAS is faster than cuDNN's conv in FP16 (tensor cores).
     // Benchmarked as slightly faster on convnets and neutral on transformers.
@@ -686,6 +748,13 @@ struct ConvLayer {
     inputDescriptors = manager->getTensorDesc4DByBatchSize(inChannels,useFP16,useNHWCIn);
     outputDescriptors = manager->getTensorDesc4DByBatchSize(outChannels,useFP16,useNHWCOut);
     int maxBatchSize = manager->maxBatchSize;
+    initialConvFrontendWorkspaceBytes.assign(maxBatchSize + 1,0);
+    initialConvFrontendPlanIndexes.assign(maxBatchSize + 1,-1);
+    initialConvFrontendMarkers.resize(maxBatchSize + 1);
+    loggedInitialConvFrontend.assign(maxBatchSize + 1,0);
+#if KATAGO_CUDA_HAS_SDPA
+    initialConvFrontendGraphs.resize(maxBatchSize + 1);
+#endif
 
     bool filterNHWC = useNHWCOut && dilationY == 1 && dilationX == 1;
 
@@ -797,6 +866,95 @@ struct ConvLayer {
     }
     else
       CudaUtils::mallocAndCopyToDevice(name,desc->weights,filterBuf,useFP16);
+
+    initialConvFrontendRequired =
+      cudaHandles->sm120InitialConvFrontendEngine != 0 &&
+      cudaHandles->majorComputeCapability == 12 &&
+      cudaHandles->minorComputeCapability == 0 &&
+      cudnnGetVersion() >= 92400 && useFP16 && useNHWCIn && useNHWCOut &&
+      manager->nnXLen == 19 && manager->nnYLen == 19 &&
+      inChannels == 22 && outChannels == 768 &&
+      convXSize == 3 && convYSize == 3 && dilationX == 1 && dilationY == 1;
+#if KATAGO_CUDA_HAS_SDPA
+    if(initialConvFrontendRequired) {
+      namespace fe = cudnn_frontend;
+      constexpr int64_t C = 22;
+      constexpr int64_t H = 19;
+      constexpr int64_t W = 19;
+      constexpr int64_t K = 768;
+      constexpr int64_t R = 3;
+      constexpr int64_t S = 3;
+      for(int batchSize = 1; batchSize <= maxBatchSize; batchSize++) {
+        const int64_t B = batchSize;
+        auto graph = std::make_shared<fe::graph::Graph>();
+        graph->set_io_data_type(fe::DataType_t::HALF)
+          .set_intermediate_data_type(fe::DataType_t::FLOAT)
+          .set_compute_data_type(fe::DataType_t::FLOAT);
+        auto x = graph->tensor(
+          fe::graph::Tensor_attributes()
+            .set_name("initial_conv_x").set_uid(1)
+            .set_dim({B,C,H,W}).set_stride({H*W*C,1,W*C,C}));
+        auto weight = graph->tensor(
+          fe::graph::Tensor_attributes()
+            .set_name("initial_conv_w").set_uid(2)
+            .set_dim({K,C,R,S}).set_stride({R*S*C,1,S*C,C}));
+        auto y = graph->conv_fprop(
+          x, weight,
+          fe::graph::Conv_fprop_attributes()
+            .set_name("initial_conv")
+            .set_padding({1,1}).set_stride({1,1}).set_dilation({1,1}));
+        y->set_output(true).set_uid(3)
+          .set_dim({B,K,H,W}).set_stride({H*W*K,1,W*K,K});
+
+        fe::error_t status = graph->validate();
+        if(!status.is_bad())
+          status = graph->build_operation_graph(cudaHandles->cudnn);
+        int64_t planIndex = -1;
+        string marker;
+        if(!status.is_bad() && cudaHandles->sm120InitialConvFrontendEngine == 45) {
+          status = graph->create_execution_plan(
+            45,{{fe::KnobType_t::TILE_SIZE,0},{fe::KnobType_t::STAGES,2}});
+          if(!status.is_bad())
+            status = graph->check_support(cudaHandles->cudnn);
+          if(!status.is_bad())
+            status = graph->build_plans(fe::BuildPlanPolicy_t::ALL);
+          if(!status.is_bad()) {
+            planIndex = 0;
+            marker = "SM120 backend: initial-conv frontend eng45/tile0/stages2 active";
+          }
+        }
+        else if(!status.is_bad() && cudaHandles->sm120InitialConvFrontendEngine == 47) {
+          static const string targetTag =
+            "eng47_k2=2_k6=1_k13=1_k14=0_k22=2";
+          status = graph->create_execution_plans({fe::HeurMode_t::A});
+          if(!status.is_bad()) {
+            const int64_t planCount = graph->get_execution_plan_count();
+            for(int64_t index = 0; index < planCount; index++) {
+              string tag;
+              fe::error_t nameStatus = graph->get_plan_name_at_index(index,tag);
+              if(!nameStatus.is_bad() && tag == targetTag) {
+                planIndex = index;
+                break;
+              }
+            }
+            if(planIndex >= 0)
+              status = graph->build_plan_at_index(cudaHandles->cudnn,planIndex);
+          }
+          if(!status.is_bad())
+            marker = "SM120 backend: initial-conv frontend eng47/k2=2/k6=1/k13=1/k14=0/k22=2 active";
+        }
+        int64_t workspace = 0;
+        if(!status.is_bad() && planIndex >= 0)
+          status = graph->get_workspace_size_plan_at_index(planIndex,workspace);
+        if(!status.is_bad() && planIndex >= 0) {
+          initialConvFrontendGraphs[batchSize] = graph;
+          initialConvFrontendWorkspaceBytes[batchSize] = (size_t)workspace;
+          initialConvFrontendPlanIndexes[batchSize] = planIndex;
+          initialConvFrontendMarkers[batchSize] = marker;
+        }
+      }
+    }
+#endif
   }
 
   ~ConvLayer() {
@@ -838,6 +996,12 @@ struct ConvLayer {
       &workspaceBytes
     ));
 #endif
+    if(
+      batchSize >= 0 &&
+      (size_t)batchSize < initialConvFrontendWorkspaceBytes.size()
+    )
+      workspaceBytes = std::max(
+        workspaceBytes,initialConvFrontendWorkspaceBytes[batchSize]);
     return workspaceBytes;
   }
 
@@ -855,6 +1019,13 @@ struct ConvLayer {
       // where tokens = batchSize * spatial. NHWC buffers are [tokens, C] row-major = [C, tokens] column-major
       // matching cuBLAS's expectation. Same as MatMulLayer.
       int tokens = batchSize * matmulSpatialSize;
+      if(cudaHandles->sm120Conv1x1 != NULL &&
+         cudaHandles->sm120Conv1x1(
+           cudaHandles->sm120Conv1x1Context,
+           matmulWeightBuf, inputBuf, outputBuf, tokens,
+           inChannels, outChannels, accumulate, usingFP16,
+           cudaHandles->stream))
+        return;
       if(!usingFP16) {
         const float alpha = 1.0f;
         const float beta = accumulate ? 1.0f : 0.0f;
@@ -877,6 +1048,34 @@ struct ConvLayer {
       }
       return;
     }
+#if KATAGO_CUDA_HAS_SDPA
+    if(
+      !accumulate && batchSize >= 0 &&
+      (size_t)batchSize < initialConvFrontendGraphs.size() &&
+      initialConvFrontendGraphs[batchSize] != NULL
+    ) {
+      std::unordered_map<int64_t,void*> tensorUidToPointer = {
+        {1,inputBuf}, {2,filterBuf}, {3,outputBuf},
+      };
+      cudnn_frontend::error_t status = initialConvFrontendGraphs[batchSize]->execute_plan_at_index(
+        cudaHandles->cudnn,tensorUidToPointer,workspaceBuf,
+        initialConvFrontendPlanIndexes[batchSize]);
+      if(status.is_bad())
+        throw StringError(
+          "SM120 initial-conv frontend execute failed: " +
+          status.get_message());
+      if(!loggedInitialConvFrontend[batchSize]) {
+        if(cudaHandles->logger != NULL)
+          cudaHandles->logger->write(initialConvFrontendMarkers[batchSize]);
+        loggedInitialConvFrontend[batchSize] = 1;
+      }
+      return;
+    }
+#endif
+    if(!accumulate && initialConvFrontendRequired)
+      throw StringError(
+        "SM120 initial-conv frontend plan is unavailable for batch " +
+        Global::intToString(batchSize));
     const float alpha = 1.0f;
     const float beta = accumulate ? 1.0f : 0.0f;
 #if CUDNN_MAJOR >= 8
@@ -1016,12 +1215,83 @@ struct BatchNormLayer {
 
 //---------------------------------------------------------------------------------
 
+struct SharedMatMulWeight {
+  void* ptr;
+  int device;
+
+  SharedMatMulWeight(void* ptr_, int device_) : ptr(ptr_), device(device_) {}
+  ~SharedMatMulWeight() {
+    if(ptr == NULL)
+      return;
+    int oldDevice = device;
+    if(cudaGetDevice(&oldDevice) == cudaSuccess && oldDevice != device)
+      cudaSetDevice(device);
+    cudaFree(ptr);
+    if(oldDevice != device)
+      cudaSetDevice(oldDevice);
+  }
+};
+
+struct SharedMatMulKey {
+  const MatMulLayerDesc* desc;
+  int device;
+  bool useFP16;
+
+  bool operator==(const SharedMatMulKey& other) const {
+    return desc == other.desc && device == other.device && useFP16 == other.useFP16;
+  }
+};
+
+struct SharedMatMulKeyHash {
+  size_t operator()(const SharedMatMulKey& key) const noexcept {
+    size_t hash = std::hash<const void*>()((const void*)key.desc);
+    hash ^= std::hash<int>()(key.device) + 0x9e3779b9U + (hash << 6) + (hash >> 2);
+    hash ^= std::hash<bool>()(key.useFP16) + 0x9e3779b9U + (hash << 6) + (hash >> 2);
+    return hash;
+  }
+};
+
+static std::shared_ptr<SharedMatMulWeight> getSharedMatMulWeight(
+  const MatMulLayerDesc* desc,
+  bool useFP16,
+  const string& name,
+  bool& cacheHit
+) {
+  cacheHit = false;
+  static std::mutex mutex;
+  static std::unordered_map<
+    SharedMatMulKey,
+    std::weak_ptr<SharedMatMulWeight>,
+    SharedMatMulKeyHash
+  > cache;
+
+  int device = 0;
+  CUDA_ERR(name.c_str(),cudaGetDevice(&device));
+  const SharedMatMulKey key{desc,device,useFP16};
+  std::lock_guard<std::mutex> lock(mutex);
+  auto found = cache.find(key);
+  if(found != cache.end()) {
+    std::shared_ptr<SharedMatMulWeight> existing = found->second.lock();
+    if(existing != nullptr) {
+      cacheHit = true;
+      return existing;
+    }
+  }
+
+  void* ptr = NULL;
+  CudaUtils::mallocAndCopyToDevice(name,desc->weights,ptr,useFP16);
+  auto weight = std::make_shared<SharedMatMulWeight>(ptr,device);
+  cache[key] = weight;
+  return weight;
+}
+
 struct MatMulLayer {
   const string name;
   const int inChannels;
   const int outChannels;
   const bool usingFP16;
   void* matBuf;
+  std::shared_ptr<SharedMatMulWeight> sharedWeight;
 
   MatMulLayer() = delete;
   MatMulLayer(const MatMulLayer&) = delete;
@@ -1035,21 +1305,26 @@ struct MatMulLayer {
     name(desc->name),
     inChannels(desc->inChannels),
     outChannels(desc->outChannels),
-    usingFP16(useFP16)
+    usingFP16(useFP16),
+    matBuf(NULL),
+    sharedWeight(nullptr)
   {
-    (void)cudaHandles;
-
     if(inChannels > 0 && outChannels > 0) {
       testAssert(desc->weights.size() == inChannels * outChannels);
-      CudaUtils::mallocAndCopyToDevice(name,desc->weights,matBuf,useFP16);
-    }
-    else {
-      matBuf = NULL;
+      if(cudaHandles->sm120ShareModelWeights) {
+        bool cacheHit = false;
+        sharedWeight = getSharedMatMulWeight(desc,useFP16,name,cacheHit);
+        matBuf = sharedWeight->ptr;
+        if(cacheHit)
+          cudaHandles->sm120SharedModelWeightsActive = true;
+      }
+      else
+        CudaUtils::mallocAndCopyToDevice(name,desc->weights,matBuf,useFP16);
     }
   }
 
   ~MatMulLayer() {
-    if(inChannels > 0 && outChannels > 0)
+    if(matBuf != NULL && sharedWeight == nullptr)
       cudaFree(matBuf);
   }
 
@@ -1478,7 +1753,7 @@ struct BlockStack {
     int batchSize
   ) const;
 
-  void apply(
+  bool apply(
     CudaHandles* cudaHandles,
     ScratchBuffers* scratch,
     int batchSize,
@@ -1487,7 +1762,8 @@ struct BlockStack {
     void* trunkBuf,
     void* trunkScratchBuf,
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    const BatchNormLayer* finalBN
   ) const;
 
 };
@@ -1537,7 +1813,7 @@ struct NestedBottleneckResidualBlock {
     return bytes;
   }
 
-  void apply(
+  bool apply(
     CudaHandles* cudaHandles,
     ScratchBuffers* scratch,
     int batchSize,
@@ -1546,12 +1822,15 @@ struct NestedBottleneckResidualBlock {
     void* maskBuf,
     float* maskSumBuf,
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    const BatchNormLayer* followingBN,
+    bool preBNReady
   ) const {
     SizedBuf<void*> mid(scratch->allocator, scratch->getBufSizeXY(normActConv1.outChannels));
     SizedBuf<void*> midScratch(scratch->allocator, scratch->getBufSizeXY(normActConv1.outChannels));
     assert(normActConv1.outChannels == normActConv2.inChannels);
-    normActConv1.norm.apply(cudaHandles,batchSize,trunkBuf,maskBuf,trunkScratchBuf);
+    if(!preBNReady)
+      normActConv1.norm.apply(cudaHandles,batchSize,trunkBuf,maskBuf,trunkScratchBuf);
 #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D(string("AFTER NORM "), trunkScratchBuf, batchSize, normActConv1.inChannels, normActConv1.nnXLen*normActConv1.nnYLen, normActConv1.usingNHWC, normActConv1.usingFP16);
 #endif
@@ -1572,7 +1851,8 @@ struct NestedBottleneckResidualBlock {
       mid.buf,
       midScratch.buf,
       workspaceBuf,
-      workspaceBytes
+      workspaceBytes,
+      NULL
     );
     normActConv2.norm.apply(cudaHandles,batchSize,mid.buf,maskBuf,midScratch.buf);
 #ifdef DEBUG_INTERMEDIATE_VALUES
@@ -1585,7 +1865,32 @@ struct NestedBottleneckResidualBlock {
         trunkBuf,
         scratch->getBufSizeXY(normActConv1.inChannels));
     }
-    normActConv2.conv.apply(cudaHandles,batchSize,true,midScratch.buf,trunkBuf,workspaceBuf,workspaceBytes);
+    bool usedPostConvBNSilu = false;
+    if(followingBN != NULL && cudaHandles->sm120PostConvBNSilu != NULL &&
+       normActConv2.conv.use1x1Matmul && normActConv2.conv.matmulWeightBuf != NULL &&
+       followingBN->numChannels == normActConv2.conv.outChannels) {
+      usedPostConvBNSilu = cudaHandles->sm120PostConvBNSilu(
+        cudaHandles->sm120PostConvBNSiluContext,
+        midScratch.buf,
+        normActConv2.conv.matmulWeightBuf,
+        trunkBuf,
+        trunkScratchBuf,
+        followingBN->mergedScaleBuf,
+        followingBN->mergedBiasBuf,
+        maskBuf,
+        batchSize,
+        normActConv2.nnXLen * normActConv2.nnYLen,
+        normActConv2.conv.inChannels,
+        normActConv2.conv.outChannels,
+        followingBN->activation,
+        normActConv2.usingFP16,
+        normActConv2.usingNHWC,
+        cudaHandles->stream);
+    }
+    if(!usedPostConvBNSilu)
+      normActConv2.conv.apply(
+        cudaHandles,batchSize,true,midScratch.buf,trunkBuf,workspaceBuf,workspaceBytes);
+    return usedPostConvBNSilu;
   }
 
 };
@@ -1938,6 +2243,7 @@ struct TransformerAttentionBlock {
     void* kBuf;
     void* vBuf;
     bool packedQKV = false;
+    bool qkvRopeApplied = false;
     if(cudaHandles->sm120QKVStrided != NULL) {
       qkvStorage.emplace(
         scratch->allocator,
@@ -1946,6 +2252,9 @@ struct TransformerAttentionBlock {
       kBuf = (char*)qBuf + (size_t)qTotalDim * matBatchSize * bytesPerElt;
       vBuf = (char*)kBuf + (size_t)kTotalDim * matBatchSize * bytesPerElt;
       const bool allowPackedOutput = useRope && learnableRope && maskBuf == NULL;
+      const float* qkvRopeFreqs =
+        useRope && learnableRope && numHeads == 12 && numKVHeads == 12 &&
+        qHeadDim == 32 && ropeNumPairs == 16 ? ropeFreqsBuf : NULL;
       bool usedQKVStrided = cudaHandles->sm120QKVStrided(
         cudaHandles->sm120QKVStridedContext,
         cudaHandles->cublas,
@@ -1957,6 +2266,8 @@ struct TransformerAttentionBlock {
         qBuf,
         allowPackedOutput,
         &packedQKV,
+        qkvRopeFreqs,
+        &qkvRopeApplied,
         matBatchSize,
         inChannels,
         qTotalDim,
@@ -1993,8 +2304,9 @@ struct TransformerAttentionBlock {
     // Step 3: Apply RoPE to Q and K
     // Q is [qTotalDim, seqLen*batchSize] column-major = [batchSize*seqLen, qTotalDim] row-major
     if(useRope) {
-      bool usedFusedQKRoPE = false;
-      if(learnableRope && cudaHandles->sm120FusedQKRoPE != NULL) {
+      bool usedFusedQKRoPE = qkvRopeApplied;
+      if(!usedFusedQKRoPE && learnableRope &&
+         cudaHandles->sm120FusedQKRoPE != NULL) {
         usedFusedQKRoPE = cudaHandles->sm120FusedQKRoPE(
           cudaHandles->sm120FusedQKRoPEContext,
           qBuf, kBuf, ropeFreqsBuf, batchSize, seqLen, numHeads, numKVHeads,
@@ -2501,7 +2813,7 @@ size_t BlockStack::requiredWorkspaceBytes(
   return bytes;
 }
 
-void BlockStack::apply(
+bool BlockStack::apply(
   CudaHandles* cudaHandles,
   ScratchBuffers* scratch,
   int batchSize,
@@ -2510,15 +2822,18 @@ void BlockStack::apply(
   void* trunkBuf,
   void* trunkScratchBuf,
   void* workspaceBuf,
-  size_t workspaceBytes
+  size_t workspaceBytes,
+  const BatchNormLayer* finalBN
 ) const {
 
+  bool preBNReady = false;
   for(int i = 0; i<blocks.size(); i++) {
 #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D("CUDA Blockstack block " + Global::intToString(i), trunkBuf, batchSize, trunkNumChannels, nnXLen*nnYLen, usingNHWC, usingFP16, maskBuf);
 #endif
 
     if(blocks[i].first == ORDINARY_BLOCK_KIND) {
+      preBNReady = false;
       ResidualBlock* block = (ResidualBlock*)blocks[i].second.get();
       block->apply(
         cudaHandles,
@@ -2532,6 +2847,7 @@ void BlockStack::apply(
       );
     }
     else if(blocks[i].first == GLOBAL_POOLING_BLOCK_KIND) {
+      preBNReady = false;
       GlobalPoolingResidualBlock* block = (GlobalPoolingResidualBlock*)blocks[i].second.get();
       block->apply(
         cudaHandles,
@@ -2547,7 +2863,17 @@ void BlockStack::apply(
     }
     else if(blocks[i].first == NESTED_BOTTLENECK_BLOCK_KIND) {
       NestedBottleneckResidualBlock* block = (NestedBottleneckResidualBlock*)blocks[i].second.get();
-      block->apply(
+      const BatchNormLayer* followingBN = NULL;
+      if(i + 1 < blocks.size() &&
+         blocks[i+1].first == NESTED_BOTTLENECK_BLOCK_KIND) {
+        NestedBottleneckResidualBlock* nextBlock =
+          (NestedBottleneckResidualBlock*)blocks[i+1].second.get();
+        followingBN = &nextBlock->normActConv1.norm;
+      }
+      else if(i + 1 == blocks.size()) {
+        followingBN = finalBN;
+      }
+      preBNReady = block->apply(
         cudaHandles,
         scratch,
         batchSize,
@@ -2556,10 +2882,13 @@ void BlockStack::apply(
         maskBuf,
         maskSumBuf,
         workspaceBuf,
-        workspaceBytes
+        workspaceBytes,
+        followingBN,
+        preBNReady
       );
     }
     else if(blocks[i].first == TRANSFORMER_ATTENTION_BLOCK_KIND) {
+      preBNReady = false;
       TransformerAttentionBlock* block = (TransformerAttentionBlock*)blocks[i].second.get();
       block->apply(
         cudaHandles,
@@ -2574,6 +2903,7 @@ void BlockStack::apply(
       );
     }
     else if(blocks[i].first == TRANSFORMER_FFN_BLOCK_KIND) {
+      preBNReady = false;
       TransformerFFNBlock* block = (TransformerFFNBlock*)blocks[i].second.get();
       block->apply(
         cudaHandles,
@@ -2591,6 +2921,7 @@ void BlockStack::apply(
       ASSERT_UNREACHABLE;
     }
   }
+  return preBNReady;
 }
 //------------------------------------------------------------------------------
 
@@ -2801,20 +3132,29 @@ struct Trunk {
     CudaUtils::debugPrint3D(string("After initial conv"), trunkScratch.buf, batchSize, trunkNumChannels, nnXLen*nnYLen, usingNHWC, usingFP16);
     #endif
 
-    //Feed the matmul into trunkBuf
-    initialMatMul->apply(cudaHandles,scratch,batchSize,inputGlobalBuf,trunkBuf,workspaceBuf,workspaceBytes);
-    //Then accumulate it into trunkScratch.buf, broadcasting during the process
-    if(!usingFP16) {
-      if(!usingNHWC)
-        customCudaAddNCBiasInplaceNCHW((float*)trunkScratch.buf,(const float*)trunkBuf,batchSize,trunkNumChannels,nnXLen*nnYLen, cudaHandles->stream);
-      else
-        customCudaAddNCBiasInplaceNHWC((float*)trunkScratch.buf,(const float*)trunkBuf,batchSize,nnXLen*nnYLen,trunkNumChannels, cudaHandles->stream);
-    }
-    else {
-      if(!usingNHWC)
-        customCudaAddNCBiasInplaceNCHW((half*)trunkScratch.buf,(const half*)trunkBuf,batchSize,trunkNumChannels,nnXLen*nnYLen, cudaHandles->stream);
-      else
-        customCudaAddNCBiasInplaceNHWC((half*)trunkScratch.buf,(const half*)trunkBuf,batchSize,nnXLen*nnYLen,trunkNumChannels, cudaHandles->stream);
+    const bool usedSm120InitialGlobal =
+      cudaHandles->sm120InitialGlobal != NULL &&
+      cudaHandles->sm120InitialGlobal(
+        cudaHandles->sm120InitialGlobalContext,
+        trunkScratch.buf, inputGlobalBuf, initialMatMul->matBuf,
+        batchSize, initialMatMul->inChannels, initialMatMul->outChannels,
+        usingFP16, usingNHWC, cudaHandles->stream);
+    if(!usedSm120InitialGlobal) {
+      //Feed the matmul into trunkBuf
+      initialMatMul->apply(cudaHandles,scratch,batchSize,inputGlobalBuf,trunkBuf,workspaceBuf,workspaceBytes);
+      //Then accumulate it into trunkScratch.buf, broadcasting during the process
+      if(!usingFP16) {
+        if(!usingNHWC)
+          customCudaAddNCBiasInplaceNCHW((float*)trunkScratch.buf,(const float*)trunkBuf,batchSize,trunkNumChannels,nnXLen*nnYLen, cudaHandles->stream);
+        else
+          customCudaAddNCBiasInplaceNHWC((float*)trunkScratch.buf,(const float*)trunkBuf,batchSize,nnXLen*nnYLen,trunkNumChannels, cudaHandles->stream);
+      }
+      else {
+        if(!usingNHWC)
+          customCudaAddNCBiasInplaceNCHW((half*)trunkScratch.buf,(const half*)trunkBuf,batchSize,trunkNumChannels,nnXLen*nnYLen, cudaHandles->stream);
+        else
+          customCudaAddNCBiasInplaceNHWC((half*)trunkScratch.buf,(const half*)trunkBuf,batchSize,nnXLen*nnYLen,trunkNumChannels, cudaHandles->stream);
+      }
     }
     CUDA_ERR(name.c_str(),cudaPeekAtLastError());
 
@@ -2842,7 +3182,7 @@ struct Trunk {
     }
 
     //Flip trunkBuf and trunkScratch.buf so that the result gets accumulated in trunkScratch.buf
-    blocks.apply(
+    bool trunkTipReady = blocks.apply(
       cudaHandles,
       scratch,
       batchSize,
@@ -2851,12 +3191,14 @@ struct Trunk {
       trunkScratch.buf,
       trunkBuf,
       workspaceBuf,
-      workspaceBytes
+      workspaceBytes,
+      trunkNormKind == TRUNK_NORM_KIND_STANDARD ? trunkTipBN.get() : NULL
     );
 
     //And now with the final norm port it from trunkScratch.buf to trunkBuf.
     if(trunkNormKind == TRUNK_NORM_KIND_STANDARD) {
-      trunkTipBN->apply(cudaHandles,batchSize,trunkScratch.buf,maskBuf,trunkBuf);
+      if(!trunkTipReady)
+        trunkTipBN->apply(cudaHandles,batchSize,trunkScratch.buf,maskBuf,trunkBuf);
     }
     else {
       trunkTipRMSNorm->apply(cudaHandles,scratch,batchSize,trunkScratch.buf,trunkBuf,maskBuf,maskSumBuf);
@@ -2988,6 +3330,10 @@ struct PolicyHead {
     float* maskFloatBuf,
     float* maskSumBuf,
     void* trunkBuf,
+    const half* wideHeadBuf,
+    int wideHeadRowStride,
+    int wideHeadP1Offset,
+    int wideHeadG1Offset,
     float* policyPassBuf,
     float* policyBuf,
     void* workspaceBuf,
@@ -3002,9 +3348,34 @@ struct PolicyHead {
     SizedBuf<void*> g1Bias(scratch->allocator, scratch->getBufSizeFloat(p1Channels));
     SizedBuf<void*> p1Pass(scratch->allocator, scratch->getBufSizeFloat(p1Channels));
 
-    p1Conv.apply(cudaHandles,batchSize,false,trunkBuf,p1Out.buf,workspaceBuf,workspaceBytes);
-    g1Conv.apply(cudaHandles,batchSize,false,trunkBuf,g1Out.buf,workspaceBuf,workspaceBytes);
-    g1BN.apply(cudaHandles,batchSize,g1Out.buf,maskBuf,g1Out2.buf);
+    const bool useWideP1 = wideHeadBuf != NULL && wideHeadP1Offset >= 0;
+    const bool useWideG1 = wideHeadBuf != NULL && wideHeadG1Offset >= 0;
+    if(!useWideP1)
+      p1Conv.apply(cudaHandles,batchSize,false,trunkBuf,p1Out.buf,workspaceBuf,workspaceBytes);
+    if(!useWideG1)
+      g1Conv.apply(cudaHandles,batchSize,false,trunkBuf,g1Out.buf,workspaceBuf,workspaceBytes);
+    bool usedHeadBNHalfToFloat = false;
+    if(usingFP16 && usingNHWC && maskBuf == NULL &&
+       cudaHandles->sm120UseHeadBNHalfToFloat) {
+      usedHeadBNHalfToFloat = Sm120Backend::launchHeadBNHalfToFloat(
+        useWideG1 ? wideHeadBuf : (const half*)g1Out.buf,
+        NULL,(float*)workspaceBuf,
+        (const half*)g1BN.mergedScaleBuf,(const half*)g1BN.mergedBiasBuf,
+        batchSize,nnXLen*nnYLen,g1Channels,
+        useWideG1 ? wideHeadRowStride : g1Channels,
+        useWideG1 ? wideHeadG1Offset : 0,
+        cudaHandles->stream);
+      if(usedHeadBNHalfToFloat && !cudaHandles->loggedSm120HeadBNHalfToFloat) {
+        if(cudaHandles->logger != NULL)
+          cudaHandles->logger->write(
+            "SM120 backend: head BN direct FP32 output active");
+        cudaHandles->loggedSm120HeadBNHalfToFloat = true;
+      }
+    }
+    if(useWideG1)
+      testAssert(usedHeadBNHalfToFloat);
+    if(!usedHeadBNHalfToFloat)
+      g1BN.apply(cudaHandles,batchSize,g1Out.buf,maskBuf,g1Out2.buf);
 
     if(!usingFP16) {
       if(!usingNHWC)
@@ -3014,8 +3385,10 @@ struct PolicyHead {
       CUDA_ERR(name.c_str(),cudaPeekAtLastError());
     }
     else {
-      customCudaCopyFromHalf((const half*)g1Out2.buf,(float*)workspaceBuf,batchSize*g1Channels*nnXLen*nnYLen, cudaHandles->stream);
-      CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+      if(!usedHeadBNHalfToFloat) {
+        customCudaCopyFromHalf((const half*)g1Out2.buf,(float*)workspaceBuf,batchSize*g1Channels*nnXLen*nnYLen, cudaHandles->stream);
+        CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+      }
       if(!usingNHWC)
         customCudaPoolRowsGPoolNCHW((const float*)workspaceBuf,(float*)g1Concat.buf,batchSize,g1Channels,nnXLen*nnYLen,maskFloatBuf,maskSumBuf, cudaHandles->stream);
       else
@@ -3039,15 +3412,19 @@ struct PolicyHead {
        cudaHandles->sm120FusedPolicyP1 != NULL) {
       usedFusedPolicyP1 = cudaHandles->sm120FusedPolicyP1(
         cudaHandles->sm120FusedPolicyP1Context,
-        p1Out.buf, (float*)p1Out2.buf, (const float*)g1Bias.buf,
+        useWideP1 ? wideHeadBuf : p1Out.buf,
+        (float*)p1Out2.buf, (const float*)g1Bias.buf,
         (const float*)p1BN.mergedScaleBuf, (const float*)p1BN.mergedBiasBuf,
-        batchSize, nnXLen * nnYLen, p1Channels, usingFP16, usingNHWC,
+        batchSize, nnXLen * nnYLen, p1Channels,
+        useWideP1 ? wideHeadRowStride : p1Channels,
+        useWideP1 ? wideHeadP1Offset : 0, usingFP16, usingNHWC,
         cudaHandles->stream);
     }
     if(usedFusedPolicyP1) {
       p1OutBufB = (float*)p1Out2.buf;
     }
     else {
+      testAssert(!useWideP1);
       if(!usingFP16) {
         p1OutBufA = (float*)p1Out.buf;
         p1OutBufB = (float*)p1Out2.buf;
@@ -3115,6 +3492,9 @@ struct ValueHead {
   const MatMulLayer sv3Mul;
   const MatBiasLayer sv3Bias;
   const ConvLayer vOwnershipConv;
+  bool fusedValueTerminalActive;
+  void* fusedValueTerminalWeights;
+  void* fusedValueTerminalBiases;
 
   ValueHead() = delete;
   ValueHead(const ValueHead&) = delete;
@@ -3148,12 +3528,50 @@ struct ValueHead {
     v3Bias(cudaHandles,&desc->v3Bias,false,ACTIVATION_IDENTITY),
     sv3Mul(cudaHandles,&desc->sv3Mul,false),
     sv3Bias(cudaHandles,&desc->sv3Bias,false,ACTIVATION_IDENTITY),
-    vOwnershipConv(cudaHandles,manager,&desc->vOwnershipConv,useFP16,useNHWC)
+    vOwnershipConv(cudaHandles,manager,&desc->vOwnershipConv,useFP16,useNHWC),
+    fusedValueTerminalActive(false),
+    fusedValueTerminalWeights(NULL),
+    fusedValueTerminalBiases(NULL)
   {
+    fusedValueTerminalActive =
+      cudaHandles->sm120UseFusedValueTerminal && modelVersion >= 9 &&
+      valueChannels == 3 && scoreValueChannels == 6 &&
+      desc->v3Mul.inChannels == desc->sv3Mul.inChannels;
+    if(fusedValueTerminalActive) {
+      const int inputChannels = desc->v3Mul.inChannels;
+      const int combinedChannels = valueChannels + scoreValueChannels;
+      vector<float> weights((size_t)inputChannels * combinedChannels);
+      for(int inputChannel = 0; inputChannel < inputChannels; inputChannel++) {
+        std::copy_n(
+          desc->v3Mul.weights.begin() + (size_t)inputChannel * valueChannels,
+          valueChannels,
+          weights.begin() + (size_t)inputChannel * combinedChannels);
+        std::copy_n(
+          desc->sv3Mul.weights.begin() +
+            (size_t)inputChannel * scoreValueChannels,
+          scoreValueChannels,
+          weights.begin() + (size_t)inputChannel * combinedChannels +
+            valueChannels);
+      }
+      vector<float> biases;
+      biases.reserve(combinedChannels);
+      biases.insert(
+        biases.end(),desc->v3Bias.weights.begin(),desc->v3Bias.weights.end());
+      biases.insert(
+        biases.end(),desc->sv3Bias.weights.begin(),desc->sv3Bias.weights.end());
+      CudaUtils::mallocAndCopyToDevice(
+        name + ":fusedTerminalWeights",weights,fusedValueTerminalWeights,false);
+      CudaUtils::mallocAndCopyToDevice(
+        name + ":fusedTerminalBiases",biases,fusedValueTerminalBiases,false);
+    }
   }
 
   ~ValueHead()
   {
+    if(fusedValueTerminalWeights != NULL)
+      cudaFree(fusedValueTerminalWeights);
+    if(fusedValueTerminalBiases != NULL)
+      cudaFree(fusedValueTerminalBiases);
   }
 
   size_t requiredWorkspaceBytes(
@@ -3190,6 +3608,9 @@ struct ValueHead {
     void* maskBuf,
     float* maskSumBuf,
     void* trunkBuf,
+    const half* wideHeadBuf,
+    int wideHeadRowStride,
+    int wideHeadV1Offset,
     float* valueBuf,
     float* scoreValueBuf,
     void* ownershipBuf,
@@ -3202,13 +3623,38 @@ struct ValueHead {
     SizedBuf<void*> v2Out(scratch->allocator, scratch->getBufSizeFloat(v2Channels));
     SizedBuf<void*> ownershipScratch(scratch->allocator, scratch->getBufSizeXYFloat(ownershipChannels));
 
-    v1Conv.apply(cudaHandles,batchSize,false,trunkBuf,v1Out.buf,workspaceBuf,workspaceBytes);
-    v1BN.apply(cudaHandles,batchSize,v1Out.buf,maskBuf,v1Out2.buf);
+    const bool useWideV1 = wideHeadBuf != NULL && wideHeadV1Offset >= 0;
+    if(!useWideV1)
+      v1Conv.apply(cudaHandles,batchSize,false,trunkBuf,v1Out.buf,workspaceBuf,workspaceBytes);
+    bool usedHeadBNHalfToFloat = false;
+    if(usingFP16 && usingNHWC && maskBuf == NULL &&
+       cudaHandles->sm120UseHeadBNHalfToFloat) {
+      usedHeadBNHalfToFloat = Sm120Backend::launchHeadBNHalfToFloat(
+        useWideV1 ? wideHeadBuf : (const half*)v1Out.buf,
+        (half*)v1Out2.buf,(float*)workspaceBuf,
+        (const half*)v1BN.mergedScaleBuf,(const half*)v1BN.mergedBiasBuf,
+        batchSize,nnXLen*nnYLen,v1Channels,
+        useWideV1 ? wideHeadRowStride : v1Channels,
+        useWideV1 ? wideHeadV1Offset : 0,
+        cudaHandles->stream);
+      if(usedHeadBNHalfToFloat && !cudaHandles->loggedSm120HeadBNHalfToFloat) {
+        if(cudaHandles->logger != NULL)
+          cudaHandles->logger->write(
+            "SM120 backend: head BN direct FP32 output active");
+        cudaHandles->loggedSm120HeadBNHalfToFloat = true;
+      }
+    }
+    if(useWideV1)
+      testAssert(usedHeadBNHalfToFloat);
+    if(!usedHeadBNHalfToFloat)
+      v1BN.apply(cudaHandles,batchSize,v1Out.buf,maskBuf,v1Out2.buf);
 
     void* bufToBePooled = v1Out2.buf;
     if(usingFP16) {
-      customCudaCopyFromHalf((const half*)v1Out2.buf,(float*)workspaceBuf,batchSize*v1Channels*nnXLen*nnYLen, cudaHandles->stream);
-      CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+      if(!usedHeadBNHalfToFloat) {
+        customCudaCopyFromHalf((const half*)v1Out2.buf,(float*)workspaceBuf,batchSize*v1Channels*nnXLen*nnYLen, cudaHandles->stream);
+        CUDA_ERR(name.c_str(),cudaPeekAtLastError());
+      }
       bufToBePooled = workspaceBuf;
     }
 
@@ -3220,11 +3666,37 @@ struct ValueHead {
 
     v2Mul.apply(cudaHandles,scratch,batchSize,v1Mean.buf,v2Out.buf,workspaceBuf,workspaceBytes);
     v2Bias.apply(cudaHandles,batchSize,v2Out.buf);
-    v3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,valueBuf,workspaceBuf,workspaceBytes);
-    v3Bias.apply(cudaHandles,batchSize,valueBuf);
+    bool usedFusedTerminal = false;
+    if(fusedValueTerminalActive) {
+      const int combinedChannels = valueChannels + scoreValueChannels;
+      SizedBuf<void*> combined(
+        scratch->allocator,scratch->getBufSizeFloat(combinedChannels));
+      const float alpha = 1.0f;
+      const float beta = 0.0f;
+      CUBLAS_ERR(name.c_str(),cublasSgemm(
+        cudaHandles->cublas,CUBLAS_OP_N,CUBLAS_OP_N,
+        combinedChannels,batchSize,v2Channels,
+        &alpha,(const float*)fusedValueTerminalWeights,combinedChannels,
+        (const float*)v2Out.buf,v2Channels,
+        &beta,(float*)combined.buf,combinedChannels));
+      usedFusedTerminal = Sm120Backend::launchSplitValueTerminal(
+        (const float*)combined.buf,(const float*)fusedValueTerminalBiases,
+        valueBuf,scoreValueBuf,batchSize,valueChannels,scoreValueChannels,
+        cudaHandles->stream);
+      if(usedFusedTerminal && !cudaHandles->loggedSm120FusedValueTerminal) {
+        if(cudaHandles->logger != NULL)
+          cudaHandles->logger->write(
+            "SM120 backend: fused value/score terminal active");
+        cudaHandles->loggedSm120FusedValueTerminal = true;
+      }
+    }
+    if(!usedFusedTerminal) {
+      v3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,valueBuf,workspaceBuf,workspaceBytes);
+      v3Bias.apply(cudaHandles,batchSize,valueBuf);
 
-    sv3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,scoreValueBuf,workspaceBuf,workspaceBytes);
-    sv3Bias.apply(cudaHandles,batchSize,scoreValueBuf);
+      sv3Mul.apply(cudaHandles,scratch,batchSize,v2Out.buf,scoreValueBuf,workspaceBuf,workspaceBytes);
+      sv3Bias.apply(cudaHandles,batchSize,scoreValueBuf);
+    }
 
     #ifdef DEBUG_INTERMEDIATE_VALUES
     CudaUtils::debugPrint3D(string("v1"), v1Out.buf, batchSize, v1Channels, nnXLen*nnYLen, usingNHWC, usingFP16);
@@ -3380,6 +3852,13 @@ struct Model {
     void* workspaceBuf,
     size_t workspaceBytes
   ) const {
+    if(cudaHandles->sm120SharedModelWeightsActive &&
+       !cudaHandles->loggedSm120SharedModelWeights) {
+      if(cudaHandles->logger != NULL)
+        cudaHandles->logger->write(
+          "SM120 backend: per-device model-weight sharing active");
+      cudaHandles->loggedSm120SharedModelWeights = true;
+    }
     SizedBuf<void*> mask(scratch->allocator, scratch->getBufSizeXY(1));
     SizedBuf<void*> maskFloat(scratch->allocator, scratch->getBufSizeXYFloat(1));
     SizedBuf<void*> maskSum(scratch->allocator, scratch->getBufSizeFloat(1));
@@ -3388,7 +3867,22 @@ struct Model {
     float* maskFloatBuf = (float*)maskFloat.buf;
     float* maskSumBuf = (float*)maskSum.buf;
 
-    if(!usingFP16) {
+    const bool useExactMaskElision =
+      requireExactNNLen && batchSize <= cudaHandles->sm120ExactMaskCapacity &&
+      nnXLen == 19 && nnYLen == 19 && usingFP16 && inputsUsingNHWC &&
+      cudaHandles->sm120ExactMaskSumBuf != NULL;
+    if(useExactMaskElision) {
+      maskBuf = NULL;
+      maskFloatBuf = NULL;
+      maskSumBuf = cudaHandles->sm120ExactMaskSumBuf;
+      if(!cudaHandles->loggedSm120ExactMaskElision) {
+        if(cudaHandles->logger != NULL)
+          cudaHandles->logger->write(
+            "SM120 backend: exact full-board mask preprocessing elided");
+        cudaHandles->loggedSm120ExactMaskElision = true;
+      }
+    }
+    else if(!usingFP16) {
       if(inputsUsingNHWC)
         customCudaChannel0ExtractNHWC((const float*)inputBuf, (float*)maskBuf, batchSize, nnXLen*nnYLen, numInputChannels, cudaHandles->stream);
       else
@@ -3403,7 +3897,8 @@ struct Model {
       CUDA_ERR("modelExtractMask",cudaPeekAtLastError());
     }
 
-    fillMaskFloatBufAndMaskSumBuf(cudaHandles,maskBuf,maskFloatBuf,maskSumBuf,usingFP16,batchSize,nnXLen,nnYLen);
+    if(!useExactMaskElision)
+      fillMaskFloatBufAndMaskSumBuf(cudaHandles,maskBuf,maskFloatBuf,maskSumBuf,usingFP16,batchSize,nnXLen,nnYLen);
 
     //Don't do any masking if we know the board is exactly the desired size
     if(requireExactNNLen) {
@@ -3438,6 +3933,25 @@ struct Model {
       workspaceBuf,
       workspaceBytes
     );
+    std::unique_ptr<SizedBuf<void*>> wideHead;
+    const half* wideHeadBuf = NULL;
+    int wideHeadRowStride = 0;
+    int wideHeadP1Offset = -1;
+    int wideHeadG1Offset = -1;
+    int wideHeadV1Offset = -1;
+    if(cudaHandles->sm120WideHeadProjection != NULL) {
+      wideHead = std::make_unique<SizedBuf<void*>>(
+        scratch->allocator, scratch->getBufSizeXY(384));
+      bool usedWideHead = cudaHandles->sm120WideHeadProjection(
+        cudaHandles->sm120WideHeadProjectionContext,
+        trunkBuf.buf, wideHead->buf, batchSize, nnXLen * nnYLen,
+        trunk->trunkNumChannels, 384, usingFP16, usingNHWC,
+        &wideHeadRowStride, &wideHeadP1Offset, &wideHeadG1Offset,
+        &wideHeadV1Offset,
+        cudaHandles->stream);
+      if(usedWideHead)
+        wideHeadBuf = (const half*)wideHead->buf;
+    }
     policyHead->apply(
       cudaHandles,
       scratch,
@@ -3446,6 +3960,10 @@ struct Model {
       maskFloatBuf,
       maskSumBuf,
       trunkBuf.buf,
+      wideHeadBuf,
+      wideHeadRowStride,
+      wideHeadP1Offset,
+      wideHeadG1Offset,
       policyPassBuf,
       policyBuf,
       workspaceBuf,
@@ -3458,6 +3976,9 @@ struct Model {
       maskBuf,
       maskSumBuf,
       trunkBuf.buf,
+      wideHeadBuf,
+      wideHeadRowStride,
+      wideHeadV1Offset,
       valueBuf,
       scoreValueBuf,
       ownershipBuf,
@@ -3658,6 +4179,7 @@ struct ComputeContext {
   enabled_t useNHWCMode;
   // If true, skip the cudnn graph SDPA path entirely and always use the custom attention kernel.
   bool cudaDisableGraphSDPA;
+  bool cudaEventPipelineUseGraph;
   // Whether 1x1 NHWC convs use the cuBLAS GEMM path. Auto = matmul iff FP16.
   enabled_t use1x1MatmulMode;
   // SM89-specific backend options; only used when a server thread is on a SM89 device.
@@ -3691,6 +4213,8 @@ ComputeContext* NeuralNet::createComputeContext(
     cfg.contains("cudaUseNHWC") ? cfg.getEnabled("cudaUseNHWC") : enabled_t::Auto;
   context->cudaDisableGraphSDPA =
     cfg.contains("cudaDisableGraphSDPA") ? cfg.getBool("cudaDisableGraphSDPA") : false;
+  context->cudaEventPipelineUseGraph =
+    cfg.contains("cudaEventPipelineUseGraph") ? cfg.getBool("cudaEventPipelineUseGraph") : false;
   context->use1x1MatmulMode =
     cfg.contains("cudaUse1x1Matmul") ? cfg.getEnabled("cudaUse1x1Matmul") : enabled_t::Auto;
   context->sm89Options = Sm89Backend::parseOptions(cfg);
@@ -3704,17 +4228,35 @@ void NeuralNet::freeComputeContext(ComputeContext* computeContext) {
 
 //------------------------------------------------------------------------------
 
+struct CudaComputeStream {
+  int gpuIdx;
+  cudaStream_t stream;
+};
+
 struct ComputeHandle {
   std::unique_ptr<CudaHandles> cudaHandles;
   std::unique_ptr<Model> model;
   std::unique_ptr<ScratchBuffers> scratch;
   std::unique_ptr<Buffers> buffers;
+  const int gpuIdx;
   const bool usingFP16;
   const int nnXLen;
   const int nnYLen;
   const bool requireExactNNLen;
   const bool inputsUseNHWC;
   const bool usingNHWC;
+  const bool eventPipelineUseGraph;
+  const int eventPipelineBatchSize;
+  bool eventPipelineEnabled;
+  cudaStream_t uploadStream;
+  cudaStream_t downloadStream;
+  cudaEvent_t inputReadyEvent;
+  cudaEvent_t inputConsumedEvent;
+  cudaEvent_t applyCompleteEvent;
+  cudaEvent_t outputConsumedEvent;
+  cudaEvent_t outputReadyEvent;
+  cudaGraph_t eventPipelineGraph;
+  cudaGraphExec_t eventPipelineGraphExec;
   // Set only on SM120 devices; routes apply() to the SM120-specific path.
   std::unique_ptr<Sm120Backend::Sm120Model> sm120Model;
   // Set only on SM89 devices; routes apply() to the SM89-specific path.
@@ -3723,6 +4265,7 @@ struct ComputeHandle {
   ComputeHandle(
     const ComputeContext* context,
     const LoadedModel* loadedModel,
+    int gpuIdx_,
     int majorComputeCapability,
     int minorComputeCapability,
     int maxBatchSize,
@@ -3732,16 +4275,48 @@ struct ComputeHandle {
     bool useNHWC,
     cudaStream_t stream
   ) :
+    gpuIdx(gpuIdx_),
     usingFP16(useFP16),
     nnXLen(context->nnXLen),
     nnYLen(context->nnYLen),
     requireExactNNLen(requireExactNNLen_),
     inputsUseNHWC(inputsUseNHWC_),
-    usingNHWC(useNHWC)
+    usingNHWC(useNHWC),
+    eventPipelineUseGraph(context->cudaEventPipelineUseGraph),
+    eventPipelineBatchSize(maxBatchSize),
+    eventPipelineEnabled(false),
+    uploadStream(NULL),
+    downloadStream(NULL),
+    inputReadyEvent(NULL),
+    inputConsumedEvent(NULL),
+    applyCompleteEvent(NULL),
+    outputConsumedEvent(NULL),
+    outputReadyEvent(NULL),
+    eventPipelineGraph(NULL),
+    eventPipelineGraphExec(NULL)
   {
     cudaHandles = std::make_unique<CudaHandles>(majorComputeCapability,minorComputeCapability,stream);
     // Must be set before building the model: ConvLayer reads it at construction to pick the 1x1 conv path.
     cudaHandles->use1x1MatmulMode = context->use1x1MatmulMode;
+    cudaHandles->sm120InitialConvFrontendEngine = 0;
+    cudaHandles->sm120ShareModelWeights =
+      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+      context->sm120Options.enabled && context->sm120Options.shareModelWeights;
+    cudaHandles->sm120UseFusedValueTerminal =
+      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+      context->sm120Options.enabled &&
+      context->sm120Options.useFusedValueTerminal;
+    cudaHandles->sm120UseHeadBNHalfToFloat =
+      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+      context->sm120Options.enabled && context->sm120Options.useHeadBNHalfToFloat;
+    if(Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
+       context->sm120Options.enabled) {
+      if(context->sm120Options.initialConvFrontendPlan == "eng45-tile0-stages2")
+        cudaHandles->sm120InitialConvFrontendEngine = 45;
+      else if(context->sm120Options.initialConvFrontendPlan ==
+              "eng47-k2-2-k6-1-k13-1-k14-0-k22-2")
+        cudaHandles->sm120InitialConvFrontendEngine = 47;
+    }
     model = std::make_unique<Model>(
       cudaHandles.get(), &(loadedModel->modelDesc), maxBatchSize,
       nnXLen, nnYLen, inputsUseNHWC, useFP16, useNHWC
@@ -3756,6 +4331,11 @@ struct ComputeHandle {
         maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
         context->sm120Options
       );
+      if(context->sm120Options.useExactMaskElision) {
+        cudaHandles->sm120ExactMaskSumBuf = sm120Model->getExactMaskSumBuf();
+        if(cudaHandles->sm120ExactMaskSumBuf != NULL)
+          cudaHandles->sm120ExactMaskCapacity = maxBatchSize;
+      }
       if(sm120Model->hasPersistingL2Trunk()) {
         cudaHandles->sm120PersistingL2 = &Sm120Backend::applyPersistingL2Window;
         cudaHandles->sm120PersistingL2Context = sm120Model.get();
@@ -3774,6 +4354,15 @@ struct ComputeHandle {
         cudaHandles->sm120MatMul = &Sm120Backend::applyMatMulLt;
         cudaHandles->sm120MatMulContext = sm120Model.get();
       }
+      if(context->sm120Options.outerProjectionDownTactic != "disabled" ||
+         context->sm120Options.outerProjectionUpTactic != "disabled") {
+        cudaHandles->sm120Conv1x1 = &Sm120Backend::applyConv1x1;
+        cudaHandles->sm120Conv1x1Context = sm120Model.get();
+      }
+      if(context->sm120Options.useInitialGlobalMatMulAdd) {
+        cudaHandles->sm120InitialGlobal = &Sm120Backend::applyInitialGlobal;
+        cudaHandles->sm120InitialGlobalContext = sm120Model.get();
+      }
       if(context->sm120Options.useQKVStrided ||
          (context->sm120Options.useWideQKV && context->sm120Options.useQKVGemmAot)) {
         cudaHandles->sm120QKVStrided = &Sm120Backend::applyQKVStrided;
@@ -3783,7 +4372,7 @@ struct ComputeHandle {
         cudaHandles->sm120FusedResidualGemm = &Sm120Backend::applyFusedResidualGemm;
         cudaHandles->sm120FusedResidualGemmContext = sm120Model.get();
       }
-      if(context->sm120Options.useRMSNorm384) {
+      if(context->sm120Options.rmsNorm384Tactic != "disabled") {
         cudaHandles->sm120RMSNorm = &Sm120Backend::applyRMSNorm;
         cudaHandles->sm120RMSNormContext = sm120Model.get();
       }
@@ -3795,13 +4384,24 @@ struct ComputeHandle {
         cudaHandles->sm120SwiGLU = &Sm120Backend::applySwiGLU;
         cudaHandles->sm120SwiGLUContext = sm120Model.get();
       }
-      if(context->sm120Options.useAffineSiluHalf2) {
+      if(context->sm120Options.affineSiluTactic != "disabled") {
         cudaHandles->sm120AffineSilu = &Sm120Backend::applyAffineSilu;
         cudaHandles->sm120AffineSiluContext = sm120Model.get();
+      }
+      if(context->sm120Options.usePostConvBNSilu) {
+        cudaHandles->sm120PostConvBNSilu = &Sm120Backend::applyPostConvBNSilu;
+        cudaHandles->sm120PostConvBNSiluContext = sm120Model.get();
       }
       if(context->sm120Options.useFusedPolicyP1) {
         cudaHandles->sm120FusedPolicyP1 = &Sm120Backend::applyFusedPolicyP1;
         cudaHandles->sm120FusedPolicyP1Context = sm120Model.get();
+      }
+      if(context->sm120Options.wideHeadProjectionTactic != "disabled" &&
+         context->sm120Options.useFusedPolicyP1 &&
+         context->sm120Options.useHeadBNHalfToFloat) {
+        cudaHandles->sm120WideHeadProjection =
+          &Sm120Backend::applyWideHeadProjection;
+        cudaHandles->sm120WideHeadProjectionContext = sm120Model.get();
       }
     }
     if(Sm89Backend::isSm89Arch(majorComputeCapability, minorComputeCapability) &&
@@ -3818,6 +4418,68 @@ struct ComputeHandle {
     CUDA_ERR("ComputeHandle", cudaStreamSynchronize(cudaHandles->stream));
   }
   ~ComputeHandle() {
+    // All following members own device resources, so destroy them with their
+    // device current even when the scheduler thread last touched another GPU.
+    (void)cudaSetDevice(gpuIdx);
+    if(eventPipelineGraphExec != NULL) {
+      cudaStreamSynchronize(cudaHandles->stream);
+      cudaGraphExecDestroy(eventPipelineGraphExec);
+    }
+    if(eventPipelineGraph != NULL)
+      cudaGraphDestroy(eventPipelineGraph);
+    if(eventPipelineEnabled) {
+      cudaEventSynchronize(outputReadyEvent);
+      cudaEventDestroy(outputReadyEvent);
+      cudaEventDestroy(outputConsumedEvent);
+      cudaEventDestroy(applyCompleteEvent);
+      cudaEventDestroy(inputConsumedEvent);
+      cudaEventDestroy(inputReadyEvent);
+      cudaStreamDestroy(downloadStream);
+      cudaStreamDestroy(uploadStream);
+    }
+  }
+
+  void makeCurrent(const char* opName) const {
+    int currentGpuIdx;
+    CUDA_ERR(opName,cudaGetDevice(&currentGpuIdx));
+    if(currentGpuIdx != gpuIdx)
+      CUDA_ERR(opName,cudaSetDevice(gpuIdx));
+  }
+
+  void enableEventPipeline() {
+    testAssert(!eventPipelineEnabled);
+    makeCurrent("enableEventPipeline");
+    try {
+      CUDA_ERR("enableEventPipeline",cudaStreamCreateWithFlags(&uploadStream,cudaStreamNonBlocking));
+      CUDA_ERR("enableEventPipeline",cudaStreamCreateWithFlags(&downloadStream,cudaStreamNonBlocking));
+      CUDA_ERR("enableEventPipeline",cudaEventCreateWithFlags(&inputReadyEvent,cudaEventDisableTiming));
+      CUDA_ERR("enableEventPipeline",cudaEventCreateWithFlags(&inputConsumedEvent,cudaEventDisableTiming));
+      CUDA_ERR("enableEventPipeline",cudaEventCreateWithFlags(&applyCompleteEvent,cudaEventDisableTiming));
+      CUDA_ERR("enableEventPipeline",cudaEventCreateWithFlags(&outputConsumedEvent,cudaEventDisableTiming));
+      CUDA_ERR("enableEventPipeline",cudaEventCreateWithFlags(&outputReadyEvent,cudaEventDisableTiming));
+      CUDA_ERR("enableEventPipeline",cudaEventRecord(inputConsumedEvent,cudaHandles->stream));
+      CUDA_ERR("enableEventPipeline",cudaEventRecord(outputConsumedEvent,cudaHandles->stream));
+      CUDA_ERR("enableEventPipeline",cudaEventRecord(outputReadyEvent,cudaHandles->stream));
+      CUDA_ERR("enableEventPipeline",cudaStreamSynchronize(cudaHandles->stream));
+    }
+    catch(...) {
+      if(outputReadyEvent != NULL) cudaEventDestroy(outputReadyEvent);
+      if(outputConsumedEvent != NULL) cudaEventDestroy(outputConsumedEvent);
+      if(applyCompleteEvent != NULL) cudaEventDestroy(applyCompleteEvent);
+      if(inputConsumedEvent != NULL) cudaEventDestroy(inputConsumedEvent);
+      if(inputReadyEvent != NULL) cudaEventDestroy(inputReadyEvent);
+      if(downloadStream != NULL) cudaStreamDestroy(downloadStream);
+      if(uploadStream != NULL) cudaStreamDestroy(uploadStream);
+      outputReadyEvent = NULL;
+      outputConsumedEvent = NULL;
+      applyCompleteEvent = NULL;
+      inputConsumedEvent = NULL;
+      inputReadyEvent = NULL;
+      downloadStream = NULL;
+      uploadStream = NULL;
+      throw;
+    }
+    eventPipelineEnabled = true;
   }
 
   void apply(
@@ -3838,9 +4500,13 @@ struct ComputeHandle {
     void* ownershipBuf,
 
     void* workspaceBuf,
-    size_t workspaceBytes
+    size_t workspaceBytes,
+    cudaEvent_t inputConsumedEvent_ = nullptr,
+    cudaEvent_t outputConsumedEvent_ = nullptr
   ) const {
     if(sm120Model != nullptr) {
+      if(outputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaStreamWaitEvent(cudaHandles_->stream,outputConsumedEvent_,0));
       sm120Model->apply(
         cudaHandles_, scratch_, batchSize, requireExactNNLen_,
         inputBuf, inputGlobalBuf, inputMetaBuf,
@@ -3848,6 +4514,8 @@ struct ComputeHandle {
         valueBuf, scoreValueBuf, ownershipBuf,
         workspaceBuf, workspaceBytes
       );
+      if(inputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaEventRecord(inputConsumedEvent_,cudaHandles_->stream));
     }
     else if(sm89Model != nullptr) {
       sm89Model->apply(
@@ -3855,10 +4523,13 @@ struct ComputeHandle {
         inputBuf, inputGlobalBuf, inputMetaBuf,
         policyPassBuf, policyBuf,
         valueBuf, scoreValueBuf, ownershipBuf,
-        workspaceBuf, workspaceBytes
+        workspaceBuf, workspaceBytes,
+        inputConsumedEvent_,outputConsumedEvent_
       );
     }
     else {
+      if(outputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaStreamWaitEvent(cudaHandles_->stream,outputConsumedEvent_,0));
       model->apply(
         cudaHandles_, scratch_, batchSize, requireExactNNLen_,
         inputBuf, inputGlobalBuf, inputMetaBuf,
@@ -3866,6 +4537,8 @@ struct ComputeHandle {
         valueBuf, scoreValueBuf, ownershipBuf,
         workspaceBuf, workspaceBytes
       );
+      if(inputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaEventRecord(inputConsumedEvent_,cudaHandles_->stream));
     }
   }
 
@@ -3878,15 +4551,23 @@ void* NeuralNet::createComputeStream(int gpuIdxForThisThread) {
   if(gpuIdxForThisThread == -1)
     gpuIdxForThisThread = 0;
   CUDA_ERR("createComputeStream",cudaSetDevice(gpuIdxForThisThread));
-  cudaStream_t stream;
-  CUDA_ERR("createComputeStream",cudaStreamCreateWithFlags(&stream,cudaStreamNonBlocking));
-  return reinterpret_cast<void*>(stream);
+  std::unique_ptr<CudaComputeStream> computeStream = std::make_unique<CudaComputeStream>();
+  computeStream->gpuIdx = gpuIdxForThisThread;
+  computeStream->stream = NULL;
+  CUDA_ERR("createComputeStream",cudaStreamCreateWithFlags(
+    &computeStream->stream,cudaStreamNonBlocking
+  ));
+  return computeStream.release();
 }
 
 void NeuralNet::freeComputeStream(void* computeStream) {
   if(computeStream == NULL)
     throw StringError("freeComputeStream: null CUDA stream");
-  CUDA_ERR("freeComputeStream",cudaStreamDestroy(reinterpret_cast<cudaStream_t>(computeStream)));
+  std::unique_ptr<CudaComputeStream> ownedStream(
+    reinterpret_cast<CudaComputeStream*>(computeStream)
+  );
+  CUDA_ERR("freeComputeStream",cudaSetDevice(ownedStream->gpuIdx));
+  CUDA_ERR("freeComputeStream",cudaStreamDestroy(ownedStream->stream));
 }
 
 ComputeHandle* NeuralNet::createComputeHandle(
@@ -3908,7 +4589,10 @@ ComputeHandle* NeuralNet::createComputeHandle(
 
   if(computeStream == NULL)
     throw StringError("CUDA backend requires an externally owned compute stream");
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(computeStream);
+  CudaComputeStream* ownedStream = reinterpret_cast<CudaComputeStream*>(computeStream);
+  if(ownedStream->gpuIdx != gpuIdxForThisThread)
+    throw StringError("CUDA backend compute stream device does not match compute handle device");
+  cudaStream_t stream = ownedStream->stream;
 
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop,gpuIdxForThisThread);
@@ -3976,7 +4660,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   }
 
   ComputeHandle* gpuHandle = new ComputeHandle(
-    context,loadedModel,prop.major,prop.minor,maxBatchSize,requireExactNNLen,inputsUseNHWC,useFP16,useNHWC,stream
+    context,loadedModel,gpuIdxForThisThread,prop.major,prop.minor,maxBatchSize,
+    requireExactNNLen,inputsUseNHWC,useFP16,useNHWC,stream
   );
   gpuHandle->cudaHandles->logger = logger;
   gpuHandle->cudaHandles->cudaDisableGraphSDPA = context->cudaDisableGraphSDPA;
@@ -4055,6 +4740,10 @@ struct InputBuffers {
   float* valueResults; //Host pointer
   float* scoreValueResults; //Host pointer
   float* ownershipResults; //Host pointer
+  bool usingPinnedMemory;
+  half* eventInputBuffer;
+  half* eventInputGlobalBuffer;
+  half* eventInputMetaBuffer;
 
   InputBuffers(const LoadedModel* loadedModel, int maxBatchSz, int nnXLen, int nnYLen) {
     const ModelDesc& m = loadedModel->modelDesc;
@@ -4105,9 +4794,71 @@ struct InputBuffers {
 
     scoreValueResults = new float[(size_t)maxBatchSize * m.numScoreValueChannels];
     ownershipResults = new float[(size_t)maxBatchSize * nnXLen * nnYLen * m.numOwnershipChannels];
+    usingPinnedMemory = false;
+    eventInputBuffer = NULL;
+    eventInputGlobalBuffer = NULL;
+    eventInputMetaBuffer = NULL;
   }
 
   ~InputBuffers() {
+    if(eventInputBuffer != NULL)
+      cudaFreeHost(eventInputBuffer);
+    if(eventInputGlobalBuffer != NULL)
+      cudaFreeHost(eventInputGlobalBuffer);
+    if(eventInputMetaBuffer != NULL)
+      cudaFreeHost(eventInputMetaBuffer);
+    if(usingPinnedMemory) {
+      cudaFreeHost(userInputBuffer);
+      cudaFreeHost(userInputGlobalBuffer);
+      if(userInputMetaBuffer != NULL)
+        cudaFreeHost(userInputMetaBuffer);
+      cudaFreeHost(policyPassResults);
+      cudaFreeHost(policyResults);
+      cudaFreeHost(valueResults);
+      cudaFreeHost(scoreValueResults);
+      cudaFreeHost(ownershipResults);
+    }
+    else {
+      delete[] userInputBuffer;
+      delete[] userInputGlobalBuffer;
+      if(userInputMetaBuffer != NULL)
+        delete[] userInputMetaBuffer;
+      delete[] policyPassResults;
+      delete[] policyResults;
+      delete[] valueResults;
+      delete[] scoreValueResults;
+      delete[] ownershipResults;
+    }
+  }
+
+  void enablePinnedMemory() {
+    testAssert(!usingPinnedMemory);
+    vector<float*> allocated;
+    auto allocate = [&allocated](size_t bytes) {
+      if(bytes == 0)
+        return (float*)NULL;
+      float* ptr = NULL;
+      cudaError_t error = cudaHostAlloc((void**)&ptr,bytes,cudaHostAllocPortable);
+      if(error != cudaSuccess) {
+        for(float* allocatedPtr : allocated)
+          cudaFreeHost(allocatedPtr);
+        throw StringError(
+          "enableEventGatedPipeline: cudaHostAlloc failed: " + string(cudaGetErrorString(error))
+        );
+      }
+      allocated.push_back(ptr);
+      return ptr;
+    };
+
+    float* newUserInputBuffer = allocate(userInputBufferBytes);
+    float* newUserInputGlobalBuffer = allocate(userInputGlobalBufferBytes);
+    float* newUserInputMetaBuffer = allocate(userInputMetaBufferBytes);
+    float* newPolicyPassResults = allocate(policyPassResultBufferBytes);
+    float* newPolicyResults = allocate(policyResultBufferBytes);
+    float* newValueResults = allocate(valueResultBufferBytes);
+    float* newScoreValueResults = allocate(scoreValueResultBufferBytes);
+    float* newOwnershipResults = allocate(ownershipResultBufferBytes);
+
     delete[] userInputBuffer;
     delete[] userInputGlobalBuffer;
     if(userInputMetaBuffer != NULL)
@@ -4117,6 +4868,43 @@ struct InputBuffers {
     delete[] valueResults;
     delete[] scoreValueResults;
     delete[] ownershipResults;
+
+    userInputBuffer = newUserInputBuffer;
+    userInputGlobalBuffer = newUserInputGlobalBuffer;
+    userInputMetaBuffer = newUserInputMetaBuffer;
+    policyPassResults = newPolicyPassResults;
+    policyResults = newPolicyResults;
+    valueResults = newValueResults;
+    scoreValueResults = newScoreValueResults;
+    ownershipResults = newOwnershipResults;
+    usingPinnedMemory = true;
+  }
+
+  void enablePinnedHalfInputs() {
+    testAssert(eventInputBuffer == NULL);
+    auto allocate = [](size_t numElts) {
+      if(numElts == 0)
+        return (half*)NULL;
+      half* ptr = NULL;
+      CUDA_ERR("enablePinnedHalfInputs",cudaHostAlloc(
+        (void**)&ptr,numElts*sizeof(half),cudaHostAllocPortable
+      ));
+      return ptr;
+    };
+    try {
+      eventInputBuffer = allocate(singleInputElts*maxBatchSize);
+      eventInputGlobalBuffer = allocate(singleInputGlobalElts*maxBatchSize);
+      eventInputMetaBuffer = allocate(singleInputMetaElts*maxBatchSize);
+    }
+    catch(...) {
+      if(eventInputBuffer != NULL) cudaFreeHost(eventInputBuffer);
+      if(eventInputGlobalBuffer != NULL) cudaFreeHost(eventInputGlobalBuffer);
+      if(eventInputMetaBuffer != NULL) cudaFreeHost(eventInputMetaBuffer);
+      eventInputBuffer = NULL;
+      eventInputGlobalBuffer = NULL;
+      eventInputMetaBuffer = NULL;
+      throw;
+    }
   }
 
   InputBuffers() = delete;
@@ -4144,7 +4932,280 @@ void NeuralNet::getRawNNOutputs(InputBuffers* inputBuffers, RawNNOutputs& out) {
   out.numOwnershipChannels = inputBuffers->singleOwnershipResultElts;
 }
 
+void NeuralNet::enableEventGatedPipeline(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers
+) {
+  testAssert(gpuHandle != NULL);
+  testAssert(inputBuffers != NULL);
+  gpuHandle->makeCurrent("enableEventGatedPipeline");
+  if(!gpuHandle->usingFP16)
+    throw StringError("Event-gated CUDA pipeline requires FP16 inputs");
+  if(gpuHandle->eventPipelineUseGraph && gpuHandle->sm89Model == nullptr)
+    throw StringError("cudaEventPipelineUseGraph currently requires the SM89 custom backend");
+  gpuHandle->enableEventPipeline();
+  inputBuffers->enablePinnedMemory();
+  inputBuffers->enablePinnedHalfInputs();
+  std::memset(
+    inputBuffers->eventInputBuffer,0,
+    inputBuffers->singleInputElts*inputBuffers->maxBatchSize*sizeof(half)
+  );
+  std::memset(
+    inputBuffers->eventInputGlobalBuffer,0,
+    inputBuffers->singleInputGlobalElts*inputBuffers->maxBatchSize*sizeof(half)
+  );
+  if(inputBuffers->eventInputMetaBuffer != NULL) {
+    std::memset(
+      inputBuffers->eventInputMetaBuffer,0,
+      inputBuffers->singleInputMetaElts*inputBuffers->maxBatchSize*sizeof(half)
+    );
+  }
+  CUDA_ERR("enableEventGatedPipeline",cudaEventRecord(
+    gpuHandle->inputReadyEvent,gpuHandle->uploadStream
+  ));
+  CUDA_ERR("enableEventGatedPipeline",cudaStreamSynchronize(gpuHandle->uploadStream));
+}
+
+static bool queryEventWithoutBlocking(const char* opName, cudaEvent_t event) {
+  cudaError_t error = cudaEventQuery(event);
+  if(error == cudaSuccess)
+    return true;
+  if(error == cudaErrorNotReady)
+    return false;
+  throw StringError(string(opName) + ": " + cudaGetErrorString(error));
+}
+
+bool NeuralNet::eventPipelineInputHostReusable(ComputeHandle* gpuHandle) {
+  testAssert(gpuHandle != NULL && gpuHandle->eventPipelineEnabled);
+  gpuHandle->makeCurrent("eventPipelineInputHostReusable");
+  return queryEventWithoutBlocking("eventPipelineInputHostReusable",gpuHandle->inputReadyEvent);
+}
+
 //---------------------------------------------------------------------------------------
+
+static void prepareHostInput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  NNResultBuf** inputBufs
+) {
+  assert(batchSize > 0 && batchSize <= inputBuffers->maxBatchSize);
+  const int nnXLen = gpuHandle->nnXLen;
+  const int nnYLen = gpuHandle->nnYLen;
+  const int modelVersion = gpuHandle->model->modelVersion;
+  const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
+  const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
+  const int numMetaFeatures = inputBuffers->singleInputMetaElts;
+  assert(numSpatialFeatures == gpuHandle->model->numInputChannels);
+  assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
+  assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
+
+  for(int nIdx = 0; nIdx < batchSize; nIdx++) {
+    float* rowSpatialInput = inputBuffers->userInputBuffer + inputBuffers->singleInputElts * nIdx;
+    float* rowGlobalInput = inputBuffers->userInputGlobalBuffer + inputBuffers->singleInputGlobalElts * nIdx;
+    float* rowMetaInput = numMetaFeatures > 0 ?
+      inputBuffers->userInputMetaBuffer + inputBuffers->singleInputMetaElts * nIdx : NULL;
+    const float* rowGlobal = inputBufs[nIdx]->rowGlobalBuf.data();
+    const float* rowSpatial = inputBufs[nIdx]->rowSpatialBuf.data();
+    const float* rowMeta = inputBufs[nIdx]->rowMetaBuf.data();
+    bool hasRowMeta = inputBufs[nIdx]->hasRowMeta;
+    std::copy(rowGlobal,rowGlobal+numGlobalFeatures,rowGlobalInput);
+    if(numMetaFeatures > 0) {
+      testAssert(rowMeta != NULL);
+      testAssert(hasRowMeta);
+      std::copy(rowMeta,rowMeta+numMetaFeatures,rowMetaInput);
+    }
+    else
+      testAssert(!hasRowMeta);
+    SymmetryHelpers::copyInputsWithSymmetry(
+      rowSpatial,rowSpatialInput,1,nnYLen,nnXLen,numSpatialFeatures,
+      gpuHandle->inputsUseNHWC,inputBufs[nIdx]->symmetry
+    );
+  }
+}
+
+static void finishHostOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  NNResultBuf** inputBufs,
+  vector<NNOutput*>& outputs
+);
+
+void NeuralNet::prepareEventPipelineInput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int numBatchEltsFilled,
+  NNResultBuf** inputBufs
+) {
+  testAssert(gpuHandle != NULL && gpuHandle->eventPipelineEnabled);
+  testAssert(inputBuffers != NULL && inputBuffers->eventInputBuffer != NULL);
+  gpuHandle->makeCurrent("launchEventPipelineInference");
+  testAssert(eventPipelineInputHostReusable(gpuHandle));
+  prepareHostInput(gpuHandle,inputBuffers,numBatchEltsFilled,inputBufs);
+
+  const size_t inputElts = inputBuffers->singleInputElts*numBatchEltsFilled;
+  const size_t globalElts = inputBuffers->singleInputGlobalElts*numBatchEltsFilled;
+  const size_t metaElts = inputBuffers->singleInputMetaElts*numBatchEltsFilled;
+  for(size_t i = 0; i < inputElts; i++)
+    inputBuffers->eventInputBuffer[i] = __float2half_rn(inputBuffers->userInputBuffer[i]);
+  for(size_t i = 0; i < globalElts; i++)
+    inputBuffers->eventInputGlobalBuffer[i] = __float2half_rn(inputBuffers->userInputGlobalBuffer[i]);
+  for(size_t i = 0; i < metaElts; i++)
+    inputBuffers->eventInputMetaBuffer[i] = __float2half_rn(inputBuffers->userInputMetaBuffer[i]);
+}
+
+void NeuralNet::launchEventPipelineInference(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int numBatchEltsFilled
+) {
+  testAssert(gpuHandle != NULL && gpuHandle->eventPipelineEnabled);
+  testAssert(inputBuffers != NULL && inputBuffers->eventInputBuffer != NULL);
+  // Submission runs on a persistent worker thread, whose current device is
+  // otherwise unrelated to the slot it owns. cuBLAS and CUDA stream/event
+  // operations must execute with this handle's device current.
+  gpuHandle->makeCurrent("launchEventPipelineInference");
+  testAssert(numBatchEltsFilled > 0 && numBatchEltsFilled <= inputBuffers->maxBatchSize);
+  Buffers* buffers = gpuHandle->buffers.get();
+  ScratchBuffers* scratch = gpuHandle->scratch.get();
+  const int batchSize = numBatchEltsFilled;
+
+  CUDA_ERR("launchEventPipelineInference",cudaStreamWaitEvent(
+    gpuHandle->uploadStream,gpuHandle->inputConsumedEvent,0
+  ));
+  CUDA_ERR("launchEventPipelineInference",cudaMemcpyAsync(
+    buffers->inputBuf,inputBuffers->eventInputBuffer,
+    inputBuffers->singleInputElts*batchSize*sizeof(half),
+    cudaMemcpyHostToDevice,gpuHandle->uploadStream
+  ));
+  CUDA_ERR("launchEventPipelineInference",cudaMemcpyAsync(
+    buffers->inputGlobalBuf,inputBuffers->eventInputGlobalBuffer,
+    inputBuffers->singleInputGlobalElts*batchSize*sizeof(half),
+    cudaMemcpyHostToDevice,gpuHandle->uploadStream
+  ));
+  if(inputBuffers->singleInputMetaElts > 0) {
+    CUDA_ERR("launchEventPipelineInference",cudaMemcpyAsync(
+      buffers->inputMetaBuf,inputBuffers->eventInputMetaBuffer,
+      inputBuffers->singleInputMetaElts*batchSize*sizeof(half),
+      cudaMemcpyHostToDevice,gpuHandle->uploadStream
+    ));
+  }
+  CUDA_ERR("launchEventPipelineInference",cudaEventRecord(
+    gpuHandle->inputReadyEvent,gpuHandle->uploadStream
+  ));
+
+  cudaStream_t computeStream = gpuHandle->cudaHandles->stream;
+  auto enqueueCompute = [&](bool useExternalEventNodes) {
+    CUDA_ERR("launchEventPipelineInference",cudaStreamWaitEvent(
+      computeStream,gpuHandle->inputReadyEvent,
+      useExternalEventNodes ? cudaEventWaitExternal : cudaEventWaitDefault
+    ));
+    gpuHandle->apply(
+      gpuHandle->cudaHandles.get(),scratch,batchSize,gpuHandle->requireExactNNLen,
+      buffers->inputBuf,buffers->inputGlobalBuf,buffers->inputMetaBuf,
+      buffers->policyPassBuf,buffers->policyBuf,
+      buffers->valueBuf,buffers->scoreValueBuf,buffers->ownershipBuf,
+      buffers->workspaceBuf,buffers->workspaceBytes,
+      gpuHandle->inputConsumedEvent,gpuHandle->outputConsumedEvent
+    );
+    CUDA_ERR("launchEventPipelineInference",cudaEventRecordWithFlags(
+      gpuHandle->applyCompleteEvent,computeStream,
+      useExternalEventNodes ? cudaEventRecordExternal : cudaEventRecordDefault
+    ));
+  };
+
+  if(gpuHandle->eventPipelineUseGraph) {
+    if(batchSize != gpuHandle->eventPipelineBatchSize)
+      throw StringError("cudaEventPipelineUseGraph requires fixed max-batch launches");
+    if(gpuHandle->eventPipelineGraphExec == NULL) {
+      CUDA_ERR("launchEventPipelineInference",cudaStreamBeginCapture(
+        computeStream,cudaStreamCaptureModeThreadLocal
+      ));
+      try {
+        enqueueCompute(true);
+        CUDA_ERR("launchEventPipelineInference",cudaStreamEndCapture(
+          computeStream,&gpuHandle->eventPipelineGraph
+        ));
+      }
+      catch(...) {
+        cudaGraph_t discardedGraph = NULL;
+        cudaStreamEndCapture(computeStream,&discardedGraph);
+        if(discardedGraph != NULL)
+          cudaGraphDestroy(discardedGraph);
+        throw;
+      }
+      CUDA_ERR("launchEventPipelineInference",cudaGraphInstantiate(
+        &gpuHandle->eventPipelineGraphExec,gpuHandle->eventPipelineGraph,NULL,NULL,0
+      ));
+    }
+    CUDA_ERR("launchEventPipelineInference",cudaGraphLaunch(
+      gpuHandle->eventPipelineGraphExec,computeStream
+    ));
+  }
+  else
+    enqueueCompute(false);
+}
+
+void NeuralNet::enqueueEventPipelineOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int numBatchEltsFilled
+) {
+  testAssert(gpuHandle != NULL && gpuHandle->eventPipelineEnabled);
+  testAssert(inputBuffers != NULL && inputBuffers->usingPinnedMemory);
+  gpuHandle->makeCurrent("enqueueEventPipelineOutput");
+  testAssert(numBatchEltsFilled > 0 && numBatchEltsFilled <= inputBuffers->maxBatchSize);
+  Buffers* buffers = gpuHandle->buffers.get();
+  const int batchSize = numBatchEltsFilled;
+  cudaStream_t stream = gpuHandle->downloadStream;
+  CUDA_ERR("enqueueEventPipelineOutput",cudaStreamWaitEvent(
+    stream,gpuHandle->applyCompleteEvent,0
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaMemcpyAsync(
+    inputBuffers->policyPassResults,buffers->policyPassBuf,
+    inputBuffers->singlePolicyPassResultBytes*batchSize,cudaMemcpyDeviceToHost,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaMemcpyAsync(
+    inputBuffers->policyResults,buffers->policyBuf,
+    inputBuffers->singlePolicyResultBytes*batchSize,cudaMemcpyDeviceToHost,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaMemcpyAsync(
+    inputBuffers->valueResults,buffers->valueBuf,
+    inputBuffers->singleValueResultBytes*batchSize,cudaMemcpyDeviceToHost,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaMemcpyAsync(
+    inputBuffers->scoreValueResults,buffers->scoreValueBuf,
+    inputBuffers->singleScoreValueResultBytes*batchSize,cudaMemcpyDeviceToHost,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaMemcpyAsync(
+    inputBuffers->ownershipResults,buffers->ownershipBuf,
+    inputBuffers->singleOwnershipResultBytes*batchSize,cudaMemcpyDeviceToHost,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaEventRecord(
+    gpuHandle->outputConsumedEvent,stream
+  ));
+  CUDA_ERR("enqueueEventPipelineOutput",cudaEventRecord(
+    gpuHandle->outputReadyEvent,stream
+  ));
+}
+
+bool NeuralNet::eventPipelineOutputReady(ComputeHandle* gpuHandle) {
+  testAssert(gpuHandle != NULL && gpuHandle->eventPipelineEnabled);
+  gpuHandle->makeCurrent("eventPipelineOutputReady");
+  return queryEventWithoutBlocking("eventPipelineOutputReady",gpuHandle->outputReadyEvent);
+}
+
+void NeuralNet::finishEventPipelineOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int numBatchEltsFilled,
+  NNResultBuf** inputBufs,
+  vector<NNOutput*>& outputs
+) {
+  testAssert(eventPipelineOutputReady(gpuHandle));
+  finishHostOutput(gpuHandle,inputBuffers,numBatchEltsFilled,inputBufs,outputs);
+}
 
 
 void NeuralNet::getOutput(
@@ -4157,38 +5218,14 @@ void NeuralNet::getOutput(
   assert(numBatchEltsFilled <= inputBuffers->maxBatchSize);
   assert(numBatchEltsFilled > 0);
   const int batchSize = numBatchEltsFilled;
+#ifndef NDEBUG
   const int nnXLen = gpuHandle->nnXLen;
   const int nnYLen = gpuHandle->nnYLen;
   const int modelVersion = gpuHandle->model->modelVersion;
-
-  const int numSpatialFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
-  const int numGlobalFeatures = NNModelVersion::getNumGlobalFeatures(modelVersion);
-  const int numMetaFeatures = inputBuffers->singleInputMetaElts;
-  assert(numSpatialFeatures == gpuHandle->model->numInputChannels);
-  assert(numSpatialFeatures * nnXLen * nnYLen == inputBuffers->singleInputElts);
-  assert(numGlobalFeatures == inputBuffers->singleInputGlobalElts);
   const int numPolicyChannels = gpuHandle->model->numPolicyChannels;
-
-  for(int nIdx = 0; nIdx<batchSize; nIdx++) {
-    float* rowSpatialInput = inputBuffers->userInputBuffer + (inputBuffers->singleInputElts * nIdx);
-    float* rowGlobalInput = inputBuffers->userInputGlobalBuffer + (inputBuffers->singleInputGlobalElts * nIdx);
-    float* rowMetaInput = inputBuffers->userInputMetaBuffer + (inputBuffers->singleInputMetaElts * nIdx);
-
-    const float* rowGlobal = inputBufs[nIdx]->rowGlobalBuf.data();
-    const float* rowSpatial = inputBufs[nIdx]->rowSpatialBuf.data();
-    const float* rowMeta = inputBufs[nIdx]->rowMetaBuf.data();
-    bool hasRowMeta = inputBufs[nIdx]->hasRowMeta;
-    std::copy(rowGlobal,rowGlobal+numGlobalFeatures,rowGlobalInput);
-    if(numMetaFeatures > 0) {
-      testAssert(rowMeta != NULL);
-      testAssert(hasRowMeta);
-      std::copy(rowMeta,rowMeta+numMetaFeatures,rowMetaInput);
-    }
-    else {
-      testAssert(!hasRowMeta);
-    }
-    SymmetryHelpers::copyInputsWithSymmetry(rowSpatial, rowSpatialInput, 1, nnYLen, nnXLen, numSpatialFeatures, gpuHandle->inputsUseNHWC, inputBufs[nIdx]->symmetry);
-  }
+#endif
+  const int numMetaFeatures = inputBuffers->singleInputMetaElts;
+  prepareHostInput(gpuHandle,inputBuffers,batchSize,inputBufs);
 
   Buffers* buffers = gpuHandle->buffers.get();
   ScratchBuffers* scratch = gpuHandle->scratch.get();
@@ -4283,6 +5320,22 @@ void NeuralNet::getOutput(
   CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->scoreValueResults, buffers->scoreValueBuf, inputBuffers->singleScoreValueResultBytes*batchSize, cudaMemcpyDeviceToHost, cudaHandles->stream));
   CUDA_ERR("getOutput",cudaMemcpyAsync(inputBuffers->ownershipResults, buffers->ownershipBuf, inputBuffers->singleOwnershipResultBytes*batchSize, cudaMemcpyDeviceToHost, cudaHandles->stream));
   CUDA_ERR("getOutput",cudaStreamSynchronize(cudaHandles->stream));
+
+  finishHostOutput(gpuHandle,inputBuffers,batchSize,inputBufs,outputs);
+}
+
+static void finishHostOutput(
+  ComputeHandle* gpuHandle,
+  InputBuffers* inputBuffers,
+  int batchSize,
+  NNResultBuf** inputBufs,
+  vector<NNOutput*>& outputs
+) {
+  assert(batchSize > 0 && batchSize <= inputBuffers->maxBatchSize);
+  const int nnXLen = gpuHandle->nnXLen;
+  const int nnYLen = gpuHandle->nnYLen;
+  const int modelVersion = gpuHandle->model->modelVersion;
+  const int numPolicyChannels = gpuHandle->model->numPolicyChannels;
 
   assert(outputs.size() == batchSize);
 

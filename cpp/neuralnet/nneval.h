@@ -17,6 +17,8 @@
 #include "../search/mutexpool.h"
 
 class NNEvaluator;
+struct NNResultBuf;
+struct EventPipelineSchedulerState;
 
 struct NNEvalBenchmarkResult {
   int batchSize;
@@ -30,6 +32,32 @@ struct NNEvalBenchmarkResult {
   double combinedNNEvalsPerSec;
   double actualWallSeconds;
   double actualWallPerForwardMs;
+};
+
+// Coordinates evaluator workers so that partial batches launch only while their
+// GPU has no other inference in flight. Full batches may overlap across workers.
+class NNBatchingDispatcher {
+ public:
+  NNBatchingDispatcher(bool enabled, const std::vector<int>& gpuIdxByServerThread);
+
+  bool waitForBatch(
+    ThreadSafeQueue<NNResultBuf*>& queue,
+    std::vector<NNResultBuf*>& resultBufs,
+    int maxBatchSize,
+    const std::atomic<int>& currentBatchSize,
+    int serverThreadIdx
+  );
+  void completeBatch(int serverThreadIdx);
+  void notify();
+  // Only call while no evaluator server threads are running.
+  void resetGpuIdxByServerThread(const std::vector<int>& gpuIdxByServerThread);
+
+ private:
+  const bool enabled;
+  std::vector<int> gpuIdxByServerThread;
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::vector<bool> serverThreadHasActiveBatch;
 };
 
 class NNCacheTable {
@@ -171,6 +199,9 @@ class NNEvaluator {
     bool skipCache,
     bool includeOwnerMap
   );
+  // Queue already-prepared feature tensors through the ordinary evaluator
+  // scheduler and return raw heads for the offline FP32 stress guard.
+  void evaluatePreparedRaw(NNResultBuf& buf, bool includeOwnerMap);
   void evaluate(
     const Board& board,
     const BoardHistory& history,
@@ -223,6 +254,8 @@ class NNEvaluator {
   // Some stats
   uint64_t numRowsProcessed() const;
   uint64_t numBatchesProcessed() const;
+  std::vector<uint64_t> numRowsProcessedByServerThread() const;
+  std::vector<uint64_t> numBatchesProcessedByServerThread() const;
   double averageProcessedBatchSize() const;
   uint64_t numCacheHits() const;
 
@@ -261,6 +294,9 @@ class NNEvaluator {
   const bool debugSkipNeuralNet;
   const bool disableWarmup;
   const bool warmupOnlyMaxBatchSize;
+  const bool batchAwareDispatch;
+  const bool cudaAsyncInferPipeline;
+  const bool cudaEventPipelineUseGraph;
 
   ComputeContext* computeContext;
   LoadedModel* loadedModel;
@@ -276,6 +312,7 @@ class NNEvaluator {
 
   int numServerThreadsEverSpawned;
   std::vector<std::thread*> serverThreads;
+  EventPipelineSchedulerState* eventPipelineSchedulerState;
 
   const int maxBatchSize;
 
@@ -293,6 +330,8 @@ class NNEvaluator {
   std::condition_variable mainThreadWaitingForSpawn; // Condvar for waiting until server threads are spawned
 
   std::vector<int> serverThreadsIsUsingFP16;
+  std::vector<uint64_t> m_numRowsProcessedByServerThread;
+  std::vector<uint64_t> m_numBatchesProcessedByServerThread;
 
   int numOngoingEvals; // Current number of ongoing evals.
   int numWaitingEvals; // Current number of things waiting for finish.
@@ -309,6 +348,7 @@ class NNEvaluator {
 
   // Queued up requests
   ThreadSafeQueue<NNResultBuf*> queryQueue;
+  NNBatchingDispatcher batchingDispatcher;
 
   // Fill buf.row{Spatial,Global,Meta}Buf from a position. Shared by evaluate() and warmup.
   void fillRowBufs(
@@ -329,6 +369,9 @@ class NNEvaluator {
  public:
   // Helper, for internal use only
   void serve(NNServerBuf& buf, Rand& rand, int gpuIdxForThisThread, int serverThreadIdx);
+#ifdef USE_CUDA_BACKEND
+  void serveEventPipelineScheduler(const std::string& randSeedThisThread);
+#endif
 };
 
 #endif  // NEURALNET_NNEVAL_H_

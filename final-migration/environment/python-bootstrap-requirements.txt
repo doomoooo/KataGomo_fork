@@ -10,6 +10,7 @@ onnx2torch
 packaging
 pillow
 psutil
+pytest
 PyYAML
 torch
 torch-c-dlpack-ext

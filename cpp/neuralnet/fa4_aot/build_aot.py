@@ -237,14 +237,16 @@ std::once_flag loadOnce;
 
 {exports}(
   void* q, void* k, void* v, void* output,
-  int batch, int seq, int heads, int dim, float scale, cudaStream_t stream
+  int batch, int seq, int heads, int dim, float scale, bool packedQKV,
+  cudaStream_t stream
 ) {{
   if(batch != {B} || seq != {S} || heads != {H} || dim != {D})
     return cudaErrorInvalidValue;
   std::call_once(loadOnce, []() {{ {SYMBOL_PREFIX}_Kernel_Module_Load(&module); }});
-  {SYMBOL_PREFIX}_Tensor_mQ_t tq = {{q, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
-  {SYMBOL_PREFIX}_Tensor_mK_t tk = {{k, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
-  {SYMBOL_PREFIX}_Tensor_mV_t tv = {{v, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
+  const int64_t rowStride = (packedQKV ? 3 : 1) * heads * dim;
+  {SYMBOL_PREFIX}_Tensor_mQ_t tq = {{q, {{batch, seq, heads, dim}}, {{seq * rowStride, rowStride, dim}}}};
+  {SYMBOL_PREFIX}_Tensor_mK_t tk = {{k, {{batch, seq, heads, dim}}, {{seq * rowStride, rowStride, dim}}}};
+  {SYMBOL_PREFIX}_Tensor_mV_t tv = {{v, {{batch, seq, heads, dim}}, {{seq * rowStride, rowStride, dim}}}};
   {SYMBOL_PREFIX}_Tensor_mO_t to = {{output, {{batch, seq, heads, dim}}, {{seq * heads * dim, heads * dim, dim}}}};
   int32_t status = cute_dsl_{SYMBOL_PREFIX}_wrapper(
     &module, &tq, &tk, &tv, &to, scale, stream);

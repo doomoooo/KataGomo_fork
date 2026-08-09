@@ -26,10 +26,10 @@ from collections.abc import Iterable
 
 try:
     from sm120_fat_scan import launch_symbol, symbol_token, write_registry
-    from sm120_run_tactic_search import parse_int_set
+    from cuda_tactic_workflow import parse_int_set
 except ModuleNotFoundError:
     from python.sm120_fat_scan import launch_symbol, symbol_token, write_registry
-    from python.sm120_run_tactic_search import parse_int_set
+    from python.cuda_tactic_workflow import parse_int_set
 
 try:
     from build_parallelism import conservative_build_jobs
@@ -37,8 +37,10 @@ except ModuleNotFoundError:
     from python.build_parallelism import conservative_build_jobs
 
 
-FAT_FAMILIES = ("ffn", "qkv", "linear2", "fa4")
-TILELANG_FAMILIES = ("ffn", "qkv", "linear2")
+FAT_FAMILIES = (
+    "dual_ffn", "wide_qkv", "qkv_rope", "linear2", "outproj", "fa4",
+)
+TILELANG_FAMILIES = ("dual_ffn", "wide_qkv", "linear2", "outproj")
 
 
 def utc_now() -> str:
@@ -266,6 +268,7 @@ def prepare_cute_qkv(
         "--fat-symbol-token", token,
         "--device", str(args.device),
         "--cutlass-root", str(args.cutlass_root),
+        "--atom-layout", str(request["candidate"].get("copy_atom", "4x2")),
     ]
     max_clusters = request["candidate"].get("max_active_clusters")
     if max_clusters is not None:
@@ -273,6 +276,75 @@ def prepare_cute_qkv(
     run_logged(command, logs / f"qkv-cute-{token}")
     if not reusable_generated(metadata, request, files):
         raise RuntimeError(f"CuTe QKV generator emitted invalid artifacts for {token}")
+    return generated_entry(request, metadata, files, command)
+
+
+def prepare_cute_qkv_rope(
+    args: argparse.Namespace, request: dict, output_dir: pathlib.Path,
+    logs: pathlib.Path,
+) -> dict:
+    token = request["symbol_token"]
+    directory = output_dir / "qkv-rope-cute" / token
+    bridge = directory / f"{token}.cpp"
+    header = directory / f"{token}.h"
+    obj = directory / f"{token}.o"
+    metadata = directory / f"{token}.json"
+    files = {"source": bridge, "header": header, "object": obj}
+    if reusable_generated(metadata, request, files):
+        return generated_entry(request, metadata, files, None)
+    command = [
+        args.generator_python,
+        str(args.repo / "python/sm120_generate_cute_qkv_rope_aot.py"),
+        "--batch", str(request["batch"]),
+        "--space", str(args.space),
+        "--output-dir", str(directory),
+        "--artifact-stem", token,
+        "--bridge-path", str(bridge),
+        "--candidate-id", request["candidate_id"],
+        "--launch-symbol", request["launch_symbol"],
+        "--fat-symbol-token", token,
+        "--device", str(args.device),
+        "--cutlass-root", str(args.cutlass_root),
+    ]
+    run_logged(command, logs / f"qkv-rope-cute-{token}")
+    if not reusable_generated(metadata, request, files):
+        raise RuntimeError(
+            f"CuTe QKV+RoPE generator emitted invalid artifacts for {token}"
+        )
+    return generated_entry(request, metadata, files, command)
+
+
+def prepare_cute_ffn(
+    args: argparse.Namespace, request: dict, output_dir: pathlib.Path,
+    logs: pathlib.Path,
+) -> dict:
+    token = request["symbol_token"]
+    directory = output_dir / "ffn-cute" / token
+    bridge = directory / f"{token}.cpp"
+    header = directory / f"{token}.h"
+    obj = directory / f"{token}.o"
+    metadata = directory / f"{token}.json"
+    files = {"source": bridge, "header": header, "object": obj}
+    if reusable_generated(metadata, request, files):
+        return generated_entry(request, metadata, files, None)
+    command = [
+        args.generator_python,
+        str(args.repo / "python/sm120_generate_cute_fused_ffn_aot.py"),
+        "--batch", str(request["batch"]),
+        "--space", str(args.space),
+        "--output-dir", str(directory),
+        "--artifact-stem", token,
+        "--bridge-path", str(bridge),
+        "--candidate-id", request["candidate_id"],
+        "--launch-symbol", request["launch_symbol"],
+        "--fat-symbol-token", token,
+        "--max-active-clusters",
+        str(request["candidate"]["max_active_clusters"]),
+        "--cutlass-root", str(args.cutlass_root),
+    ]
+    run_logged(command, logs / f"ffn-cute-{token}")
+    if not reusable_generated(metadata, request, files):
+        raise RuntimeError(f"CuTe FFN generator emitted invalid artifacts for {token}")
     return generated_entry(request, metadata, files, command)
 
 
@@ -305,8 +377,17 @@ def prepare_fa4(
         "--tile-n", str(candidate["tile_n"]),
         "--num-stages", str(candidate["num_stages"]),
     ]
+    accumulator_env = {
+        "fp32": {"FA4_QK_ACC": "fp32", "FA4_PV_ACC": "fp32"},
+        "qk16": {"FA4_QK_ACC": "fp16", "FA4_PV_ACC": "fp32"},
+        "pv16": {"FA4_QK_ACC": "fp32", "FA4_PV_ACC": "fp16"},
+        "both16": {"FA4_QK_ACC": "fp16", "FA4_PV_ACC": "fp16"},
+    }
+    accumulation = candidate["accumulation"]
+    if accumulation not in accumulator_env:
+        raise ValueError(f"unknown FA4 accumulation mode: {accumulation}")
     env = dict(os.environ)
-    env.update({"FA4_QK_ACC": "fp16", "FA4_PV_ACC": "fp16"})
+    env.update(accumulator_env[accumulation])
     run_logged(command, logs / f"fa4-{token}", env=env)
     if not reusable_generated(metadata, request, files):
         raise RuntimeError(f"FA4 generator emitted invalid artifacts for {token}")
@@ -347,7 +428,11 @@ def build_commands(
         for family in TILELANG_FAMILIES
     }
     qkv_cute = [
-        item for item in by_family["qkv"] if item["implementation"] == "cute"
+        item for item in by_family["wide_qkv"] if item["implementation"] == "cute"
+    ]
+    qkv_rope_cute = by_family["qkv_rope"]
+    ffn_cute = [
+        item for item in by_family["dual_ffn"] if item["implementation"] == "cute"
     ]
     fa4 = by_family["fa4"]
     configure = [
@@ -355,14 +440,21 @@ def build_commands(
         "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
         "-DKATAGO_CUDA_ARCHITECTURES=120",
         *args.cmake_arg,
-        f"-DSM120_SEARCH_FFN_FAT_SOURCES={cmake_list(tile_sources['ffn'])}",
-        f"-DSM120_SEARCH_QKV_FAT_SOURCES={cmake_list(tile_sources['qkv'])}",
+        f"-DSM120_SEARCH_FFN_FAT_SOURCES={cmake_list(tile_sources['dual_ffn'])}",
+        f"-DSM120_SEARCH_QKV_FAT_SOURCES={cmake_list(tile_sources['wide_qkv'])}",
         f"-DSM120_SEARCH_LINEAR2_FAT_SOURCES={cmake_list(tile_sources['linear2'])}",
-        f"-DSM120_SEARCH_FFN_FAT_REGISTRY_SOURCE={registries['ffn']}",
-        f"-DSM120_SEARCH_QKV_FAT_REGISTRY_SOURCE={registries['qkv']}",
+        f"-DSM120_SEARCH_OUTPROJ_FAT_SOURCES={cmake_list(tile_sources['outproj'])}",
+        f"-DSM120_SEARCH_FFN_FAT_REGISTRY_SOURCE={registries['dual_ffn']}",
+        f"-DSM120_SEARCH_QKV_FAT_REGISTRY_SOURCE={registries['wide_qkv']}",
         f"-DSM120_SEARCH_LINEAR2_FAT_REGISTRY_SOURCE={registries['linear2']}",
+        f"-DSM120_SEARCH_OUTPROJ_FAT_REGISTRY_SOURCE={registries['outproj']}",
         f"-DSM120_SEARCH_QKV_FAT_BRIDGE_SOURCES={cmake_list(item['source'] for item in qkv_cute)}",
         f"-DSM120_SEARCH_QKV_FAT_OBJECTS={cmake_list(item['object'] for item in qkv_cute)}",
+        f"-DSM120_SEARCH_QKV_ROPE_FAT_REGISTRY_SOURCE={registries['qkv_rope']}",
+        f"-DSM120_SEARCH_QKV_ROPE_FAT_BRIDGE_SOURCES={cmake_list(item['source'] for item in qkv_rope_cute)}",
+        f"-DSM120_SEARCH_QKV_ROPE_FAT_OBJECTS={cmake_list(item['object'] for item in qkv_rope_cute)}",
+        f"-DSM120_SEARCH_FFN_FAT_BRIDGE_SOURCES={cmake_list(item['source'] for item in ffn_cute)}",
+        f"-DSM120_SEARCH_FFN_FAT_OBJECTS={cmake_list(item['object'] for item in ffn_cute)}",
         f"-DSM120_SEARCH_FA4_FAT_SOURCES={cmake_list(item['source'] for item in fa4)}",
         f"-DSM120_SEARCH_FA4_FAT_OBJECTS={cmake_list(item['object'] for item in fa4)}",
         f"-DSM120_SEARCH_FA4_FAT_REGISTRY_SOURCE={registries['fa4']}",
@@ -439,10 +531,17 @@ def main() -> None:
     parser.add_argument("--generator-python", default=sys.executable)
     parser.add_argument("--fa4-python", default=sys.executable)
     parser.add_argument("--cutlass-root", type=pathlib.Path, required=True)
-    parser.add_argument("--tilelang-ffn-manifest", type=pathlib.Path, required=True)
-    parser.add_argument("--tilelang-qkv-manifest", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--tilelang-dual-ffn-manifest", type=pathlib.Path, required=True
+    )
+    parser.add_argument(
+        "--tilelang-wide-qkv-manifest", type=pathlib.Path, required=True
+    )
     parser.add_argument(
         "--tilelang-linear2-manifest", type=pathlib.Path, required=True,
+    )
+    parser.add_argument(
+        "--tilelang-outproj-manifest", type=pathlib.Path, required=True,
     )
     args = parser.parse_args()
     args.repo = args.repo.resolve()
@@ -460,21 +559,30 @@ def main() -> None:
 
     entries = []
     for family, manifest_path in (
-        ("ffn", args.tilelang_ffn_manifest),
-        ("qkv", args.tilelang_qkv_manifest),
+        ("dual_ffn", args.tilelang_dual_ffn_manifest),
+        ("wide_qkv", args.tilelang_wide_qkv_manifest),
         ("linear2", args.tilelang_linear2_manifest),
+        ("outproj", args.tilelang_outproj_manifest),
     ):
         entries.extend(load_tilelang_entries(
             manifest_path.resolve(), family, space, batches,
         ))
     for request in requests_for(
-        space, batches, "ffn", {"historical_tilelang"},
+        space, batches, "dual_ffn", {"historical_tilelang"},
     ):
         entries.append(prepare_historical_ffn(args, request, output_dir, logs))
         print(f"prepared historical FFN B{request['batch']}", flush=True)
-    for request in requests_for(space, batches, "qkv", {"cute"}):
+    for request in requests_for(space, batches, "dual_ffn", {"cute"}):
+        entries.append(prepare_cute_ffn(args, request, output_dir, logs))
+        print(f"prepared CuTe FFN B{request['batch']}", flush=True)
+    for request in requests_for(space, batches, "wide_qkv", {"cute"}):
         entries.append(prepare_cute_qkv(args, request, output_dir, logs))
         print(f"prepared CuTe QKV B{request['batch']}", flush=True)
+    for request in requests_for(space, batches, "qkv_rope", {"cute"}):
+        entries.append(prepare_cute_qkv_rope(
+            args, request, output_dir, logs,
+        ))
+        print(f"prepared CuTe QKV+RoPE B{request['batch']}", flush=True)
     for request in requests_for(space, batches, "fa4", {"fa4_cute"}):
         entries.append(prepare_fa4(args, request, output_dir, logs))
         print(f"prepared FA4 {request['candidate_id']}", flush=True)

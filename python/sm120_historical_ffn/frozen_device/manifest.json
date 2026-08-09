@@ -449,7 +449,7 @@
       "sha256": "50be69b56a3e2bdf22c5bc6c0022b7c7d72b9b532ca13a595e63687e9ef75d9a"
     }
   ],
-  "candidateId": "ffn-m128-n64-k32-s2-mb3-tanh-half2",
+  "candidateId": "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2",
   "generatorDependencies": {
     "historicalTilelangPackageTreeSha256": "f20f03fdf1f9924f6d1540aac7202035be8ff2839f3e3d72b28783bd11e879e0",
     "matchesHistoricalTilelangPackageTree": true,

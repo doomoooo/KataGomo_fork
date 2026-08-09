@@ -160,7 +160,10 @@ def write_checkpoint(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--space", required=True)
-    parser.add_argument("--family", choices=("ffn", "qkv", "linear2"), required=True)
+    parser.add_argument(
+        "--family", choices=("dual_ffn", "wide_qkv", "linear2", "outproj"),
+        required=True,
+    )
     parser.add_argument("--batches", default="1-32")
     parser.add_argument("--candidate-ids", default="")
     parser.add_argument("--device", type=int, required=True)

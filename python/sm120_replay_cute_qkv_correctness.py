@@ -13,12 +13,12 @@ import subprocess
 import sys
 
 try:
-    from sm120_run_tactic_search import parse_int_set, sha256_file, utc_now
+    from cuda_tactic_workflow import parse_int_set, sha256_file, utc_now
 except ModuleNotFoundError:  # imported as ``python.sm120_replay...`` in tests
-    from python.sm120_run_tactic_search import parse_int_set, sha256_file, utc_now
+    from python.cuda_tactic_workflow import parse_int_set, sha256_file, utc_now
 
 
-CANDIDATE_ID = "qkv-m128-n128-k64-s2-cute-atom4x2-packed"
+CANDIDATE_ID = "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed"
 
 
 def write_json(path: pathlib.Path, payload: dict) -> None:

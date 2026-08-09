@@ -113,8 +113,9 @@ namespace NeuralNet {
   // Compute Handle -----------------------------------------------------------------
 
   // Create an execution stream owned by the caller and borrowed by a ComputeHandle.
-  // CUDA returns an opaque cudaStream_t and requires it to be passed to createComputeHandle.
-  // Backends without an explicit stream return NULL. Free the ComputeHandle before its stream.
+  // CUDA returns an opaque device-aware stream wrapper and requires it to be
+  // passed to createComputeHandle. Backends without an explicit stream return
+  // NULL. Free the ComputeHandle before its stream.
   void* createComputeStream(int gpuIdxForThisThread);
   void freeComputeStream(void* computeStream);
 
@@ -174,6 +175,37 @@ namespace NeuralNet {
     NNResultBuf** inputBufs,
     std::vector<NNOutput*>& outputs
   );
+
+#ifdef USE_CUDA_BACKEND
+  // Opt-in single-device-slot pipeline. CPU packing and postprocessing stay on
+  // the scheduler thread, while H2D/D2H run on dedicated copy streams.
+  void enableEventGatedPipeline(ComputeHandle* computeHandle, InputBuffers* buffers);
+  bool eventPipelineInputHostReusable(ComputeHandle* computeHandle);
+  void prepareEventPipelineInput(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int numBatchEltsFilled,
+    NNResultBuf** inputBufs
+  );
+  void launchEventPipelineInference(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int numBatchEltsFilled
+  );
+  void enqueueEventPipelineOutput(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int numBatchEltsFilled
+  );
+  bool eventPipelineOutputReady(ComputeHandle* computeHandle);
+  void finishEventPipelineOutput(
+    ComputeHandle* computeHandle,
+    InputBuffers* buffers,
+    int numBatchEltsFilled,
+    NNResultBuf** inputBufs,
+    std::vector<NNOutput*>& outputs
+  );
+#endif
 
   // After getOutput, expose the raw per-head result arrays (logits before any postprocessing)
   // for the most recent forward pass. Backends own the concrete InputBuffers layout, so they

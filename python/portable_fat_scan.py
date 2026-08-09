@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure helpers for exact-batch portable TileLang fat-scan bundles.
+"""Pure helpers for exact-batch SM89 TileLang fat-scan bundles.
 
 This module deliberately has no CUDA, torch, or TileLang imports.  It owns the
 stable symbol naming, request validation, generated registry text, and the
@@ -105,13 +105,13 @@ def select_tilelang_requests(
     batches: Iterable[int],
     candidate_ids: Iterable[str] = (),
 ) -> list[dict]:
-    """Select every exact (batch, tactic) request from a portable space."""
+    """Select every exact (batch, tactic) request from the unified space."""
     validate_family(family)
     if (
         space.get("schema") != 1
-        or space.get("kind") != "portable-tactic-search-space"
+        or space.get("kind") != "cuda-tactic-search-space"
     ):
-        raise ValueError("fat scan requires a portable-tactic-search-space")
+        raise ValueError("fat scan requires a cuda-tactic-search-space")
     requested_batches = sorted(set(int(value) for value in batches))
     if not requested_batches or requested_batches[0] < 1:
         raise ValueError("batch set must contain positive integers")
@@ -203,7 +203,7 @@ def render_registry(family: str, requests: Iterable[dict]) -> str:
         if abi["input_channels"] is not None:
             prefix += f', {abi["input_channels"]}'
         entries.append(
-            f'  {{{prefix}, {quoted_id}, false, '
+            f'  {{{prefix}, {quoted_id}, '
             f'{item["launch_symbol"]}}}'
         )
     entry_text = ",\n".join(entries)

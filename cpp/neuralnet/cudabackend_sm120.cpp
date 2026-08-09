@@ -3,8 +3,10 @@
 
 #include "../neuralnet/cudaincludes.h"
 #include "../neuralnet/cudaerrorcheck.h"
+#include "../neuralnet/cudautils.h"
 #include "../neuralnet/activations.h"
-#include "fa4_aot/fa4_sm120_b13.h"
+#include "sm120_aot/outer_projection.h"
+#include "sm120_aot/dual_ffn_shared_a.h"
 
 #include "../core/global.h"
 #include "../core/logger.h"
@@ -46,12 +48,6 @@ static void clearPersistingL2Window(cudaStream_t stream) {
   CUDA_ERR("Sm120PersistingL2", cudaStreamSetAttribute(
     stream, cudaStreamAttributeAccessPolicyWindow, &attr));
 }
-
-// CuTe DSL's exported wrapper keeps its CUDA library/kernel handles in
-// process-global generated state. Load it exactly once and keep it alive for
-// the process lifetime so replaynn can replace its warmup model safely.
-static fa4_Kernel_Module_t fa4Module = {};
-static once_flag fa4LoadOnce;
 
 struct Sm120Model::LtMatmulState {
   struct Plan {
@@ -260,75 +256,111 @@ static bool getBoolOpt(ConfigParser& cfg, const string& key, bool defaultValue) 
 Options parseOptions(ConfigParser& cfg) {
   Options o;
   o.enabled = getBoolOpt(cfg, "cudaSm120Backend", true);
-  o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm120", true);
+  o.useFlashAttention = getBoolOpt(cfg, "cudaUseFlashAttentionSm120", false);
+  o.fa4AotTacticExplicit = cfg.contains("cudaFlashAttentionAotTacticSm120");
   o.fa4AotTactic = cfg.contains("cudaFlashAttentionAotTacticSm120") ?
-    cfg.getString("cudaFlashAttentionAotTacticSm120") : "builtin-both16";
+    cfg.getString("cudaFlashAttentionAotTacticSm120") : "disabled";
   if(cfg.contains("cudaFlashAttentionSm120Accum"))
     o.flashAttentionAccum = cfg.getString("cudaFlashAttentionSm120Accum");
   if(o.flashAttentionAccum != "none" && o.flashAttentionAccum != "fp32" &&
      o.flashAttentionAccum != "qk16" && o.flashAttentionAccum != "pv16" &&
      o.flashAttentionAccum != "both16")
     throw StringError("cudaFlashAttentionSm120Accum must be one of none/fp32/qk16/pv16/both16");
-  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", true);
-  o.useWideQKVSingleStreamSchedule = getBoolOpt(cfg, "cudaUseWideQKVSingleStreamSchedule", false);
+  o.useWideQKV = getBoolOpt(cfg, "cudaUseWideQKV", false);
   o.useQKVStrided = getBoolOpt(cfg, "cudaUseQKVStridedSm120", false);
-  o.useQKVGemmAot = getBoolOpt(cfg, "cudaUseQKVGemmAot", true);
-  o.useQKVGemmRopeAot = getBoolOpt(cfg, "cudaUseQKVGemmRopeAot", false);
-  o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", true);
+  o.useQKVGemmAot = getBoolOpt(cfg, "cudaUseQKVGemmAot", false);
+  o.qkvRopeAotTacticExplicit = cfg.contains("cudaQKVRopeAotTacticSm120");
+  o.qkvRopeAotTactic = cfg.contains("cudaQKVRopeAotTacticSm120") ?
+    cfg.getString("cudaQKVRopeAotTacticSm120") : "disabled";
+  o.useFusedQKRoPE = getBoolOpt(cfg, "cudaUseFusedQKRoPE", false);
   o.useFusedQKRoPEHalf2 = getBoolOpt(cfg, "cudaUseFusedQKRoPEHalf2Sm120", false);
   o.useBatchSharedRoPE = getBoolOpt(cfg, "cudaUseBatchSharedRoPE", false);
-  o.useBatchSharedRoPEUnroll19 = getBoolOpt(cfg, "cudaUseBatchSharedRoPEUnroll19", true);
-  o.useBatchSharedRoPETwoWay = getBoolOpt(cfg, "cudaUseBatchSharedRoPETwoWay", false);
-  o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", true);
-  o.useFusedResidualGemm = getBoolOpt(cfg, "cudaUseFusedResidualGemmSm120", true);
+  o.useBatchSharedRoPEUnrolled =
+    getBoolOpt(cfg, "cudaUseBatchSharedRoPEUnrolledSm120", false);
+  o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", false);
+  o.useFusedResidualGemm = getBoolOpt(cfg, "cudaUseFusedResidualGemmSm120", false);
   o.useProjectionGemmLt = getBoolOpt(cfg, "cudaUseProjectionGemmLt", false);
-  o.useLinear2ResidualAot = getBoolOpt(cfg, "cudaUseLinear2ResidualAot", true);
-  o.useLinear2ResidualAotBalanced = getBoolOpt(cfg, "cudaUseLinear2ResidualAotBalanced", false);
+  o.useLinear2ResidualAot = getBoolOpt(cfg, "cudaUseLinear2ResidualAot", false);
   o.useOutProjectionResidualAot = getBoolOpt(cfg, "cudaUseOutProjectionResidualAot", false);
+  o.outProjectionAotTacticExplicit = cfg.contains("cudaOutProjectionAotTacticSm120");
   o.outProjectionAotTactic = cfg.contains("cudaOutProjectionAotTacticSm120") ?
     cfg.getString("cudaOutProjectionAotTacticSm120") :
-    "outproj-m128-n128-k32-s4-tilelang-64k";
-  o.useFusedFFN = getBoolOpt(cfg, "cudaUseFusedFFN", true);
-  o.useFusedFFNAReuse = getBoolOpt(cfg, "cudaUseFusedFFNAReuseSm120", false);
-  o.useFusedFFNSingleStreamSchedule = getBoolOpt(cfg, "cudaUseFusedFFNSingleStreamSchedule", false);
+    "disabled";
+  o.useFusedFFN = getBoolOpt(cfg, "cudaUseFusedFFN", false);
+  o.fusedFFNAotTacticExplicit = cfg.contains("cudaFusedFFNAotTacticSm120");
   o.fusedFFNAotTactic = cfg.contains("cudaFusedFFNAotTacticSm120") ?
     cfg.getString("cudaFusedFFNAotTacticSm120") :
-    o.useFusedFFNSingleStreamSchedule ? "ffn-m128-n64-k32-s3-single-stream-exp" :
-    o.useFusedFFNAReuse ? "ffn-m128-n64-k32-s2-mb3-areuse-exp" :
-    "ffn-m128-n64-k32-s2-mb3-exp";
+    "disabled";
   o.useWideFFNSingleGemm = getBoolOpt(cfg, "cudaUseWideFFNSingleGemm", false);
-  o.useFusedRMSNormFFN = getBoolOpt(cfg, "cudaUseFusedRMSNormFFN", false);
-  o.useRMSNorm384 = getBoolOpt(cfg, "cudaUseRMSNorm384Sm120", true);
-  o.useRMSNorm384Vec8 = getBoolOpt(cfg, "cudaUseRMSNorm384Vec8Sm120", false);
-  o.useRMSNorm384TwoWarp = getBoolOpt(cfg, "cudaUseRMSNorm384TwoWarpSm120", false);
-  o.useSwiGLU1152 = getBoolOpt(cfg, "cudaUseSwiGLU1152Sm120", true);
-  o.useAffineSiluHalf2 = getBoolOpt(cfg, "cudaUseAffineSiluHalf2Sm120", true);
-  o.useRMSNormQKVGemmAot = getBoolOpt(cfg, "cudaUseRMSNormQKVGemmAot", false);
-  o.useGraph = getBoolOpt(cfg, "cudaUseGraph", false);
+  o.rmsNorm384Tactic = cfg.contains("cudaRMSNormTacticSm120") ?
+    cfg.getString("cudaRMSNormTacticSm120") : "disabled";
+  if(o.rmsNorm384Tactic != "disabled" &&
+     o.rmsNorm384Tactic != "ordered-ept3" &&
+     o.rmsNorm384Tactic != "one-warp-exact" &&
+     o.rmsNorm384Tactic != "warp4-vec8")
+    throw StringError(
+      "cudaRMSNormTacticSm120 must be disabled, ordered-ept3, "
+      "one-warp-exact, or warp4-vec8");
+  o.useSwiGLU1152 = getBoolOpt(cfg, "cudaUseSwiGLU1152Sm120", false);
+  o.affineSiluTactic = cfg.contains("cudaAffineSiluTacticSm120") ?
+    cfg.getString("cudaAffineSiluTacticSm120") : "disabled";
+  if(o.affineSiluTactic != "disabled" &&
+     o.affineSiluTactic != "half2" &&
+     o.affineSiluTactic != "half2x3" &&
+     o.affineSiluTactic != "flat-vec8-c768")
+    throw StringError(
+      "cudaAffineSiluTacticSm120 must be disabled, half2, half2x3, "
+      "or flat-vec8-c768");
+  o.useExactMaskElision = getBoolOpt(cfg, "cudaUseExactMaskElisionSm120", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
   o.persistingL2Streams = cfg.contains("cudaPersistingL2StreamsSm120") ?
     cfg.getInt("cudaPersistingL2StreamsSm120", 1, 16) : 2;
   o.persistingL2HitRatio = cfg.contains("cudaPersistingL2HitRatioSm120") ?
     cfg.getDouble("cudaPersistingL2HitRatioSm120", 0.0, 1.0) : 1.0;
-  o.useOuterProjectionAot = getBoolOpt(cfg, "cudaUseOuterProjectionAot", true);
+  o.outerProjectionDownTactic = cfg.contains("cudaOuterProjectionDownTacticSm120") ?
+    cfg.getString("cudaOuterProjectionDownTacticSm120") : "disabled";
+  o.outerProjectionUpTactic = cfg.contains("cudaOuterProjectionUpTacticSm120") ?
+    cfg.getString("cudaOuterProjectionUpTacticSm120") : "disabled";
+  const auto checkOuterProjectionTactic = [](const string& key, const string& value) {
+    if(value != "disabled" && value != "warp64x64" && value != "warp64x32")
+      throw StringError(key + " must be disabled, warp64x64, or warp64x32");
+  };
+  checkOuterProjectionTactic(
+    "cudaOuterProjectionDownTacticSm120", o.outerProjectionDownTactic);
+  checkOuterProjectionTactic(
+    "cudaOuterProjectionUpTacticSm120", o.outerProjectionUpTactic);
+  o.usePostConvBNSilu = getBoolOpt(cfg, "cudaUsePostConvBNSiluSm120", false);
+  o.wideQKVAotTacticExplicit = cfg.contains("cudaWideQKVAotTacticSm120");
   o.wideQKVAotTactic = cfg.contains("cudaWideQKVAotTacticSm120") ?
     cfg.getString("cudaWideQKVAotTacticSm120") :
-    o.useWideQKVSingleStreamSchedule ? "qkv-m128-n128-k32-s3-tilelang-planar" :
-    "qkv-m128-n128-k64-s2-tilelang-planar";
+    "disabled";
+  o.linear2AotTacticExplicit = cfg.contains("cudaLinear2AotTacticSm120");
   o.linear2AotTactic = cfg.contains("cudaLinear2AotTacticSm120") ?
     cfg.getString("cudaLinear2AotTacticSm120") :
-    o.useLinear2ResidualAotBalanced ? "linear2-balanced-b13" :
-    "linear2-m128-n128-k32-s4-tilelang-64k";
-  o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", true);
-  o.shareWideQKVWeights = getBoolOpt(cfg, "cudaShareWideQKVWeights", false);
-  o.shareOuterProjectionWeights = getBoolOpt(cfg, "cudaShareOuterProjectionWeights", false);
-  o.useInitialConvFrontend = getBoolOpt(cfg, "cudaUseInitialConvFrontend", true);
-  o.useInitialConvBiasFrontend = getBoolOpt(cfg, "cudaUseInitialConvBiasFrontend", false);
-  o.useInitialGlobalMatMulAdd = getBoolOpt(cfg, "cudaUseInitialGlobalMatMulAdd", true);
+    "disabled";
+  o.shareModelWeights = getBoolOpt(cfg, "cudaShareModelWeights", false);
+  o.initialConvFrontendPlan = cfg.contains("cudaInitialConvFrontendPlanSm120") ?
+    cfg.getString("cudaInitialConvFrontendPlanSm120") : "disabled";
+  if(o.initialConvFrontendPlan != "disabled" &&
+     o.initialConvFrontendPlan != "eng45-tile0-stages2" &&
+     o.initialConvFrontendPlan != "eng47-k2-2-k6-1-k13-1-k14-0-k22-2")
+    throw StringError(
+      "cudaInitialConvFrontendPlanSm120 must be disabled, "
+      "eng45-tile0-stages2, or eng47-k2-2-k6-1-k13-1-k14-0-k22-2");
+  o.useInitialGlobalMatMulAdd = getBoolOpt(cfg, "cudaUseInitialGlobalMatMulAdd", false);
   o.useFusedPolicyP1 = getBoolOpt(cfg, "cudaUseFusedPolicyP1", false);
-  o.useHeadBNHalfToFloat = getBoolOpt(cfg, "cudaUseHeadBNHalfToFloat", true);
-  o.useWideHeadProjection = getBoolOpt(cfg, "cudaUseWideHeadProjection", true);
+  o.useHeadBNHalfToFloat = getBoolOpt(cfg, "cudaUseHeadBNHalfToFloat", false);
+  o.wideHeadProjectionTactic = cfg.contains("cudaWideHeadProjectionTacticSm120") ?
+    cfg.getString("cudaWideHeadProjectionTacticSm120") : "disabled";
+  if(o.wideHeadProjectionTactic != "disabled" &&
+     o.wideHeadProjectionTactic != "full-c384" &&
+     o.wideHeadProjectionTactic != "partial-c288-g1-v1")
+    throw StringError(
+      "cudaWideHeadProjectionTacticSm120 must be disabled, full-c384, "
+      "or partial-c288-g1-v1");
+  o.useFusedValueTerminal = getBoolOpt(
+    cfg, "cudaUseFusedValueTerminalSm120", false);
   return o;
 }
 
@@ -406,6 +438,46 @@ bool applyMatMulLt(
     matBatchSize, inChannels, outChannels, usingFP16);
 }
 
+bool applyConv1x1(
+  void* ctx,
+  const void* weights,
+  const void* input,
+  void* output,
+  int matBatchSize,
+  int inChannels,
+  int outChannels,
+  bool accumulate,
+  bool usingFP16,
+  cudaStream_t stream
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->conv1x1(
+    weights, input, output, matBatchSize, inChannels, outChannels,
+    accumulate, usingFP16, stream);
+}
+
+bool applyInitialGlobal(
+  void* ctx,
+  void* spatialBuf,
+  const void* globalInput,
+  const void* weights,
+  int batchSize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->initialGlobal(
+    spatialBuf, globalInput, weights, batchSize, inputChannels,
+    outputChannels, usingFP16, usingNHWC, stream);
+}
+
 bool applyQKVStrided(
   void* ctx,
   cublasHandle_t cublas,
@@ -417,6 +489,8 @@ bool applyQKVStrided(
   void* qkvBuf,
   bool allowPackedOutput,
   bool* packedOutput,
+  const float* ropeFreqs,
+  bool* ropeApplied,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -429,7 +503,7 @@ bool applyQKVStrided(
     return false;
   return self->qkvStrided(
     cublas, stream, qWeights, kWeights, vWeights, inputBuf, qkvBuf,
-    allowPackedOutput, packedOutput,
+    allowPackedOutput, packedOutput, ropeFreqs, ropeApplied,
     matBatchSize, numChannels, qDim, kDim, vDim, usingFP16);
 }
 
@@ -539,6 +613,33 @@ bool applyAffineSilu(
     activation, usingFP16, stream);
 }
 
+bool applyPostConvBNSilu(
+  void* ctx,
+  const void* input,
+  const void* weights,
+  void* residual,
+  void* activated,
+  const void* scale,
+  const void* bias,
+  const void* mask,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  int activation,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->postConvBNSilu(
+    input, weights, residual, activated, scale, bias, mask,
+    batchSize, xySize, inputChannels, outputChannels, activation,
+    usingFP16, usingNHWC, stream);
+}
+
 bool applyFusedPolicyP1(
   void* ctx,
   const void* input,
@@ -549,6 +650,8 @@ bool applyFusedPolicyP1(
   int batchSize,
   int xySize,
   int channels,
+  int inputStride,
+  int inputOffset,
   bool usingFP16,
   bool usingNHWC,
   cudaStream_t stream
@@ -558,7 +661,33 @@ bool applyFusedPolicyP1(
     return false;
   return self->fusedPolicyP1(
     input, output, globalBias, scale, bias, batchSize, xySize, channels,
+    inputStride, inputOffset,
     usingFP16, usingNHWC, stream);
+}
+
+bool applyWideHeadProjection(
+  void* ctx,
+  const void* input,
+  void* output,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  int* outputRowStride,
+  int* p1Offset,
+  int* g1Offset,
+  int* v1Offset,
+  cudaStream_t stream
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->wideHeadProjection(
+    input, output, batchSize, xySize, inputChannels, outputChannels,
+    usingFP16, usingNHWC, outputRowStride, p1Offset, g1Offset, v1Offset,
+    stream);
 }
 
 void applyPersistingL2Window(
@@ -598,21 +727,32 @@ Sm120Model::Sm120Model(
   options(options_),
   sm120NumSms(0),
   logger(NULL),
+  exactMaskSumBuf(NULL),
   loggedFallback(false),
   loggedFa4(false),
+  loggedFa4AtMaxBatch(false),
   loggedFusedFFN(false),
   loggedProjectionGemmLt(false),
+  loggedOuterProjectionDown(false),
+  loggedOuterProjectionUp(false),
+  loggedInitialGlobal(false),
   loggedWideFFNSingleGemm(false),
   loggedWideQKV(false),
   loggedQKVStrided(false),
+  loggedQKVRopeAot(false),
+  loggedLinear2Aot(false),
+  loggedOutProjectionAot(false),
   loggedFusedResidualGemm(false),
   loggedRMSNorm384(false),
   loggedFusedQKRoPE(false),
   loggedBatchSharedQKRoPE(false),
+  loggedBatchSharedQKRoPEAtMaxBatch(false),
   loggedFusedQKRoPEHalf2(false),
   loggedSwiGLU1152(false),
   loggedAffineSiluHalf2(false),
+  loggedPostConvBNSilu(false),
   loggedFusedPolicyP1(false),
+  loggedWideHeadProjection(false),
   loggedPersistingL2Trunk(false),
   loggedPersistingL2Inner(false),
   persistingL2TrunkActive(false),
@@ -633,9 +773,81 @@ Sm120Model::Sm120Model(
   sm120NumSms = deviceProp.multiProcessorCount;
   if(sm120NumSms <= 0)
     throw StringError("Sm120Model: CUDA reported no streaming multiprocessors");
+  if(options.useExactMaskElision && nnXLen == 19 && nnYLen == 19 &&
+     inputsUseNHWC && useFP16 && useNHWC && maxBatchSize > 0) {
+    std::vector<float> fullBoardMaskSums(maxBatchSize, 361.0f);
+    CUDA_ERR("Sm120ExactMaskSum", cudaMalloc(
+      (void**)&exactMaskSumBuf, fullBoardMaskSums.size() * sizeof(float)));
+    CUDA_ERR("Sm120ExactMaskSum", cudaMemcpy(
+      exactMaskSumBuf, fullBoardMaskSums.data(),
+      fullBoardMaskSums.size() * sizeof(float), cudaMemcpyHostToDevice));
+  }
+  wideHeadProjectionWeights = NULL;
+  wideHeadProjectionHandle = NULL;
+  dualFfnSharedAHandle = NULL;
+  if(options.fusedFFNAotTactic ==
+     "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2") {
+    dualFfnSharedAHandle = katago_create_dual_ffn_shared_a_sm120();
+    if(dualFfnSharedAHandle == NULL)
+      throw StringError("SM120 CUTLASS shared-A dual FFN handle creation failed");
+  }
+  wideHeadProjectionChannels = 0;
+  wideHeadP1Offset = -1;
+  wideHeadG1Offset = -1;
+  wideHeadV1Offset = -1;
+  if(options.wideHeadProjectionTactic != "disabled" &&
+     options.useFusedPolicyP1 &&
+     options.useHeadBNHalfToFloat && useFP16 && useNHWC &&
+     nnXLen == 19 && nnYLen == 19) {
+    const bool partial =
+      options.wideHeadProjectionTactic == "partial-c288-g1-v1";
+    const ConvLayerDesc* convs[3] = {
+      partial ? NULL : &desc->policyHead.p1Conv,
+      &desc->policyHead.g1Conv,
+      &desc->valueHead.v1Conv,
+    };
+    const int offsets[3] = {partial ? -1 : 0, partial ? 0 : 96,
+                            partial ? 96 : 192};
+    const int expectedOutChannels[3] = {96, 96, 192};
+    wideHeadProjectionChannels = partial ? 288 : 384;
+    wideHeadP1Offset = offsets[0];
+    wideHeadG1Offset = offsets[1];
+    wideHeadV1Offset = offsets[2];
+    bool compatible = true;
+    for(int i = 0; i < 3; i++) {
+      if(convs[i] == NULL)
+        continue;
+      const ConvLayerDesc& conv = *convs[i];
+      compatible = compatible &&
+        conv.convXSize == 1 && conv.convYSize == 1 &&
+        conv.inChannels == 768 && conv.outChannels == expectedOutChannels[i];
+    }
+    if(compatible) {
+      vector<float> weights((size_t)768 * wideHeadProjectionChannels);
+      for(int i = 0; i < 3; i++) {
+        if(convs[i] == NULL)
+          continue;
+        const ConvLayerDesc& conv = *convs[i];
+        for(int inputChannel = 0; inputChannel < 768; inputChannel++) {
+          for(int outputChannel = 0; outputChannel < conv.outChannels; outputChannel++) {
+            weights[(size_t)inputChannel * wideHeadProjectionChannels +
+                    offsets[i] + outputChannel] =
+              conv.weights[(size_t)outputChannel * 768 + inputChannel];
+          }
+        }
+      }
+      CudaUtils::mallocAndCopyToDevice(
+        "SM120 wide-head projection", weights, wideHeadProjectionWeights, true);
+      wideHeadProjectionHandle = katago_create_head_projection_sm120(
+        wideHeadProjectionWeights, wideHeadProjectionChannels, "warp64x64");
+      if(wideHeadProjectionHandle == NULL)
+        throw StringError("SM120 wide-head projection handle creation failed");
+    }
+  }
   fa4AotByBatch.resize(maxBatchSize + 1, nullptr);
   fusedFFNAotByBatch.resize(maxBatchSize + 1, nullptr);
   wideQKVAotByBatch.resize(maxBatchSize + 1, nullptr);
+  wideQKVRopeAotByBatch.resize(maxBatchSize + 1, nullptr);
   linear2AotByBatch.resize(maxBatchSize + 1, nullptr);
   outProjectionAotByBatch.resize(maxBatchSize + 1, nullptr);
   for(int batch = 1; batch <= maxBatchSize; batch++) {
@@ -651,6 +863,10 @@ Sm120Model::Sm120Model(
         batch, sm120NumSms, options.persistingL2Streams,
         options.wideQKVAotTactic.c_str());
     }
+    if(options.qkvRopeAotTactic != "disabled") {
+      wideQKVRopeAotByBatch[batch] = findWideQKVRopeAotTactic(
+        batch, options.qkvRopeAotTactic.c_str());
+    }
     if(options.useLinear2ResidualAot) {
       linear2AotByBatch[batch] = findResidualGemmAotTactic(
         batch, sm120NumSms, options.persistingL2Streams, 1152,
@@ -664,7 +880,8 @@ Sm120Model::Sm120Model(
   }
   if(options.useProjectionGemmLt)
     ltMatmulState = make_unique<LtMatmulState>();
-  if(options.usePersistingL2Trunk && nnXLen == 19 && nnYLen == 19 &&
+  if((options.usePersistingL2Trunk || options.usePersistingL2Inner) &&
+     nnXLen == 19 && nnYLen == 19 &&
      useFP16 && useNHWC && desc->trunk.trunkNumChannels == 768) {
     int l2Device = 0;
     int maxPersistingBytes = 0;
@@ -675,8 +892,11 @@ Sm120Model::Sm120Model(
     CUDA_ERR("Sm120PersistingL2", cudaDeviceGetAttribute(
       &maxWindowBytes, cudaDevAttrMaxAccessPolicyWindowSize, l2Device));
 
-    persistingL2TrunkWindowBytes =
-      (size_t)maxBatchSize * nnXLen * nnYLen * desc->trunk.trunkNumChannels * sizeof(half);
+    if(options.usePersistingL2Trunk) {
+      persistingL2TrunkWindowBytes =
+        (size_t)maxBatchSize * nnXLen * nnYLen *
+        desc->trunk.trunkNumChannels * sizeof(half);
+    }
     if(options.usePersistingL2Inner && desc->trunk.midNumChannels == 384) {
       persistingL2InnerWindowBytes =
         (size_t)maxBatchSize * nnXLen * nnYLen * desc->trunk.midNumChannels * sizeof(half);
@@ -684,7 +904,8 @@ Sm120Model::Sm120Model(
     const size_t windowsPerStream =
       persistingL2TrunkWindowBytes + persistingL2InnerWindowBytes;
     const size_t totalWindowBytes = (size_t)options.persistingL2Streams * windowsPerStream;
-    if(persistingL2TrunkWindowBytes <= (size_t)maxWindowBytes &&
+    if(totalWindowBytes > 0 &&
+       persistingL2TrunkWindowBytes <= (size_t)maxWindowBytes &&
        persistingL2InnerWindowBytes <= (size_t)maxWindowBytes &&
        maxPersistingBytes > 0) {
       persistingL2RequestedBytes = std::min((size_t)maxPersistingBytes, totalWindowBytes);
@@ -696,23 +917,40 @@ Sm120Model::Sm120Model(
         1.0f, (float)((double)persistingL2ActualBytes / (double)totalWindowBytes));
       persistingL2TrunkHitRatio = std::min(
         (float)options.persistingL2HitRatio, grantedHitRatio);
-      persistingL2TrunkActive = persistingL2TrunkHitRatio > 0.0f;
+      persistingL2TrunkActive =
+        persistingL2TrunkWindowBytes > 0 && persistingL2TrunkHitRatio > 0.0f;
       if(persistingL2InnerWindowBytes > 0) {
         persistingL2InnerHitRatio = persistingL2TrunkHitRatio;
-        persistingL2InnerActive = persistingL2TrunkActive;
+        persistingL2InnerActive = persistingL2InnerHitRatio > 0.0f;
       }
     }
   }
-  // Stage 0 scaffold: apply() delegates to the official model until stages land.
+  // The official traversal invokes the SM120 operator hooks owned above.
 }
 
 Sm120Model::~Sm120Model() {
+  if(dualFfnSharedAHandle != NULL)
+    katago_destroy_dual_ffn_shared_a_sm120(dualFfnSharedAHandle);
+  if(wideHeadProjectionHandle != NULL)
+    katago_destroy_outer_projection_down_sm120(wideHeadProjectionHandle);
+  if(wideHeadProjectionWeights != NULL)
+    cudaFree(wideHeadProjectionWeights);
+  if(exactMaskSumBuf != NULL)
+    cudaFree(exactMaskSumBuf);
+  for(const auto& entry: fusedFFNPairedWeights)
+    cudaFree(entry.second);
   for(const auto& entry: wideFFNSingleGemmWeights)
     cudaFree(entry.second);
   for(const auto& entry: wideQKVWeights)
     cudaFree(entry.second);
+  for(const auto& entry: qkvRopeTables)
+    cudaFree(entry.second);
   for(const auto& entry: qkvStridedWeights)
     cudaFree(entry.second);
+  for(const auto& entry: outerProjectionDownHandles)
+    katago_destroy_outer_projection_down_sm120(entry.second);
+  for(const auto& entry: outerProjectionUpHandles)
+    katago_destroy_outer_projection_up_sm120(entry.second);
 }
 
 void Sm120Model::setLogger(Logger* logger_) {
@@ -725,6 +963,10 @@ bool Sm120Model::hasPersistingL2Trunk() const {
 
 bool Sm120Model::hasPersistingL2Inner() const {
   return persistingL2InnerActive;
+}
+
+float* Sm120Model::getExactMaskSumBuf() const {
+  return exactMaskSumBuf;
 }
 
 void Sm120Model::apply(
@@ -764,12 +1006,12 @@ void Sm120Model::apply(
 
   if(!loggedFallback) {
     if(logger != NULL)
-      logger->write("SM120 backend: stage-0 official fallback active (rebuild scaffold)");
+      logger->write("SM120 backend: official forward adapter active");
     loggedFallback = true;
   }
 
-  // Stage 0: bit-identical delegation to the official backend. Once stage 1 lands, this becomes
-  // the SM120-specific forward path with per-stage fallback where shapes/precision are unsupported.
+  // Keep the official traversal; its operator boundaries dispatch to the
+  // SM120 hooks installed by ComputeHandle.
   officialApply(
     officialApplyContext,
     cudaHandles,
@@ -813,64 +1055,57 @@ bool Sm120Model::attention(
   (void)workspaceBuf;
   (void)workspaceBytes;
 
+  // Packed QKV has no compatible official fallback because Q/K/V share a
+  // token-interleaved allocation. Preserve the ordinary planar fallback, but
+  // make any packed-path contract violation explicit rather than reporting a
+  // generic failure later in cudabackend.cpp.
+  const bool exactTacticRequired =
+    options.fa4AotTacticExplicit && options.fa4AotTactic != "disabled";
+  const auto rejectUnsupportedPacked = [packedQKV,exactTacticRequired](const char* reason) {
+    if(packedQKV || exactTacticRequired)
+      throw StringError(string("SM120 backend: requested FA4 precondition failed: ") + reason);
+    return false;
+  };
+
   // Stage 1 gate: FP16, MHA (numKVHeads == numHeads), head dim 32, no mask
   // (full-board requireExactNNLen paths), 19x19 sequence length, and the FA4
   // switch on. Everything else falls back to the official attention path.
   if(!options.useFlashAttention)
-    return false;
-  if(options.flashAttentionAccum != "both16")
-    return false;
+    return rejectUnsupportedPacked("cudaUseFlashAttentionSm120 is disabled");
   if(!usingFP16)
-    return false;
+    return rejectUnsupportedPacked("inference is not FP16");
   if(maskBuf != NULL)
-    return false;
+    return rejectUnsupportedPacked("mask is present");
   if(numHeads != numKVHeads || qHeadDim != 32 || vHeadDim != 32 || seqLen != 361)
-    return false;
+    return rejectUnsupportedPacked("attention shape is not S361 MHA HxD32");
   if(batchSize < 1 || batchSize > maxBatchSize)
-    return false;
+    return rejectUnsupportedPacked("batch is outside the model capacity");
 
   const FA4AotTactic* searchTactic = fa4AotByBatch[batchSize];
   if(searchTactic != nullptr) {
     float scale = 1.0f / std::sqrt((float)qHeadDim);
     cudaError_t status = searchTactic->launch(
       qBuf, kBuf, vBuf, attnOutBuf, batchSize, seqLen, numHeads,
-      qHeadDim, scale, stream);
+      qHeadDim, scale, packedQKV, stream);
+    if(status != cudaSuccess && exactTacticRequired)
+      throw StringError(
+        "SM120 backend: requested FA4 AOT launch failed: " +
+        string(cudaGetErrorString(status)));
     if(status != cudaSuccess)
       return false;
-    if(!loggedFa4 && logger != NULL)
+    const bool shouldLogMaxBatch =
+      batchSize == maxBatchSize && !loggedFa4AtMaxBatch;
+    if((!loggedFa4 || shouldLogMaxBatch) && logger != NULL)
       logger->write("SM120 backend: FA4 AOT active, tactic=" + string(searchTactic->id));
     loggedFa4 = true;
+    if(batchSize == maxBatchSize)
+      loggedFa4AtMaxBatch = true;
     return true;
   }
-  if(options.fa4AotTactic != "builtin-both16")
-    return false;
-
-  call_once(fa4LoadOnce, []() { fa4_Kernel_Module_Load(&fa4Module); });
-
-  const int64_t qkvRowStride = packedQKV ? 3LL * numHeads * qHeadDim : numHeads * qHeadDim;
-  fa4_Tensor_mQ_t tq = {qBuf, {batchSize, seqLen, numHeads, qHeadDim}, {seqLen * qkvRowStride, qkvRowStride, qHeadDim}};
-  fa4_Tensor_mK_t tk = {kBuf, {batchSize, seqLen, numKVHeads, qHeadDim}, {seqLen * qkvRowStride, qkvRowStride, qHeadDim}};
-  fa4_Tensor_mV_t tv = {vBuf, {batchSize, seqLen, numKVHeads, vHeadDim}, {seqLen * qkvRowStride, qkvRowStride, vHeadDim}};
-  fa4_Tensor_mO_t to = {attnOutBuf, {batchSize, seqLen, numHeads, vHeadDim}, {seqLen * numHeads * vHeadDim, numHeads * vHeadDim, vHeadDim}};
-
-  float scale = 1.0f / std::sqrt((float)qHeadDim);
-  int32_t ret = cute_dsl_fa4_wrapper(&fa4Module, &tq, &tk, &tv, &to, scale, stream);
-
-  if(ret != 0) {
-    if(packedQKV)
-      throw StringError("SM120 backend: packed QKV requires FA4; FA4 AOT launch failed");
-    if(logger != NULL)
-      logger->write("SM120 backend: FA4 AOT attention launch failed, falling back to official path");
-    return false;
-  }
-  CUDA_ERR("Sm120Attention", cudaPeekAtLastError());
-
-  if(!loggedFa4) {
-    if(logger != NULL)
-      logger->write("SM120 backend: FA4 AOT attention active (FP16 QK/PV accumulation)");
-    loggedFa4 = true;
-  }
-  return true;
+  throw StringError(
+    "SM120 backend: selected FA4 tactic '" + options.fa4AotTactic +
+    "' is not registered for exact batch " + Global::intToString(batchSize)
+  );
 }
 
 bool Sm120Model::ffnSingleGemm(
@@ -894,12 +1129,62 @@ bool Sm120Model::ffnSingleGemm(
   if(batchSize < 1 || batchSize > maxBatchSize || numChannels != 384 || ffnChannels != 1152)
     return false;
 
+  auto getPairedWeights = [&]() -> void* {
+    auto existing = fusedFFNPairedWeights.find(linear1Weights);
+    if(existing != fusedFFNPairedWeights.end())
+      return existing->second;
+    void* pairedWeights = NULL;
+    constexpr int pairChannels = 64;
+    const size_t sourcePitch = (size_t)ffnChannels * sizeof(half);
+    const size_t pairedPitch = sourcePitch * 2;
+    const size_t chunkBytes = (size_t)pairChannels * sizeof(half);
+    CUDA_ERR("Sm120FusedFFNPairedWeights", cudaMalloc(
+      &pairedWeights, (size_t)2 * ffnChannels * numChannels * sizeof(half)));
+    for(int start = 0; start < ffnChannels; start += pairChannels) {
+      const size_t pairOffset = (size_t)2 * start * sizeof(half);
+      const size_t sourceOffset = (size_t)start * sizeof(half);
+      CUDA_ERR("Sm120FusedFFNPairedWeights", cudaMemcpy2DAsync(
+        (char*)pairedWeights + pairOffset, pairedPitch,
+        (const char*)linear1Weights + sourceOffset, sourcePitch,
+        chunkBytes, numChannels, cudaMemcpyDeviceToDevice, stream));
+      CUDA_ERR("Sm120FusedFFNPairedWeights", cudaMemcpy2DAsync(
+        (char*)pairedWeights + pairOffset + chunkBytes, pairedPitch,
+        (const char*)linearGateWeights + sourceOffset, sourcePitch,
+        chunkBytes, numChannels, cudaMemcpyDeviceToDevice, stream));
+    }
+    fusedFFNPairedWeights.emplace(linear1Weights, pairedWeights);
+    return pairedWeights;
+  };
+
   const FusedFFNAotTactic* ffnTactic = fusedFFNAotByBatch[batchSize];
+  if(dualFfnSharedAHandle != NULL) {
+    int status = katago_launch_dual_ffn_shared_a_sm120(
+      dualFfnSharedAHandle, inputBuf, linear1Weights, linearGateWeights,
+      ffnOutBuf, matBatchSize, stream);
+    if(status != 0)
+      throw StringError(
+        "SM120 CUTLASS shared-A dual FFN launch failed, status=" +
+        Global::intToString(status));
+    if(!loggedFusedFFN) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: CUTLASS shared-A dual FFN active, tactic=" +
+          options.fusedFFNAotTactic);
+      loggedFusedFFN = true;
+    }
+    return true;
+  }
   if(ffnTactic != nullptr) {
+    const half* firstWeights = (const half*)linear1Weights;
+    const half* secondWeights = (const half*)linearGateWeights;
+    if(ffnTactic->pairedWeights) {
+      firstWeights = (const half*)getPairedWeights();
+      secondWeights = NULL;
+    }
     CUDA_ERR("Sm120FusedFFNAot", ffnTactic->launch(
       (const half*)inputBuf,
-      (const half*)linear1Weights,
-      (const half*)linearGateWeights,
+      firstWeights,
+      secondWeights,
       (half*)ffnOutBuf,
       stream));
     if(!loggedFusedFFN) {
@@ -909,6 +1194,13 @@ bool Sm120Model::ffnSingleGemm(
     }
     return true;
   }
+
+  if(options.fusedFFNAotTacticExplicit &&
+     options.fusedFFNAotTactic != "disabled")
+    throw StringError(
+      "SM120 backend: requested fused FFN tactic '" +
+      options.fusedFFNAotTactic + "' is not registered for batch " +
+      Global::intToString(batchSize));
 
   if(!options.useWideFFNSingleGemm)
     return false;
@@ -968,8 +1260,7 @@ bool Sm120Model::matMulLt(
   (void)workspace;
   (void)workspaceBytes;
   if(!options.useProjectionGemmLt || ltMatmulState == NULL || !usingFP16 ||
-     nnXLen != 19 || nnYLen != 19 ||
-     (matBatchSize != 13 && matBatchSize != 13 * 361))
+     nnXLen != 19 || nnYLen != 19 || matBatchSize <= 0)
     return false;
 
   LtMatmulState::Plan* plan = ltMatmulState->getOrCreatePlan(
@@ -1008,6 +1299,114 @@ bool Sm120Model::matMulLt(
   return true;
 }
 
+bool Sm120Model::conv1x1(
+  const void* weights,
+  const void* input,
+  void* output,
+  int matBatchSize,
+  int inChannels,
+  int outChannels,
+  bool accumulate,
+  bool usingFP16,
+  cudaStream_t stream
+) {
+  if((options.outerProjectionDownTactic == "disabled" &&
+      options.outerProjectionUpTactic == "disabled") ||
+     !usingFP16 || weights == NULL ||
+     input == NULL || output == NULL || nnXLen != 19 || nnYLen != 19 ||
+     matBatchSize <= 0 || matBatchSize % 361 != 0)
+    return false;
+
+  void* handle = NULL;
+  int status = 0;
+  if(options.outerProjectionDownTactic != "disabled" &&
+     inChannels == 768 && outChannels == 384 && !accumulate) {
+    auto found = outerProjectionDownHandles.find(weights);
+    if(found == outerProjectionDownHandles.end()) {
+      handle = katago_create_outer_projection_down_sm120(
+        weights, options.outerProjectionDownTactic.c_str());
+      if(handle == NULL)
+        throw StringError("SM120 outer projection down AOT handle creation failed");
+      outerProjectionDownHandles.emplace(weights, handle);
+    }
+    else
+      handle = found->second;
+    status = katago_launch_outer_projection_down_sm120(
+      handle, input, output, matBatchSize, stream);
+    if(status != 0)
+      throw StringError(
+        "SM120 outer projection down AOT launch failed, status=" +
+        Global::intToString(status));
+    if(!loggedOuterProjectionDown) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=" +
+          options.outerProjectionDownTactic);
+      loggedOuterProjectionDown = true;
+    }
+    return true;
+  }
+
+  if(options.outerProjectionUpTactic != "disabled" &&
+     inChannels == 384 && outChannels == 768 && accumulate) {
+    auto found = outerProjectionUpHandles.find(weights);
+    if(found == outerProjectionUpHandles.end()) {
+      handle = katago_create_outer_projection_up_sm120(
+        weights, options.outerProjectionUpTactic.c_str());
+      if(handle == NULL)
+        throw StringError("SM120 outer projection up AOT handle creation failed");
+      outerProjectionUpHandles.emplace(weights, handle);
+    }
+    else
+      handle = found->second;
+    status = katago_launch_outer_projection_up_sm120(
+      handle, input, output, matBatchSize, stream);
+    if(status != 0)
+      throw StringError(
+        "SM120 outer projection up AOT launch failed, status=" +
+        Global::intToString(status));
+    if(!loggedOuterProjectionUp) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: C384->C768 outer projection+residual CUTLASS active, tactic=" +
+          options.outerProjectionUpTactic);
+      loggedOuterProjectionUp = true;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool Sm120Model::initialGlobal(
+  void* spatialBuf,
+  const void* globalInput,
+  const void* weights,
+  int batchSize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+) {
+  if(!options.useInitialGlobalMatMulAdd || !usingFP16 || !usingNHWC ||
+     spatialBuf == NULL || globalInput == NULL || weights == NULL ||
+     batchSize < 1 || batchSize > maxBatchSize ||
+     inputChannels != 19 || outputChannels != 768 ||
+     nnXLen != 19 || nnYLen != 19)
+    return false;
+  launchInitialGlobalMatMulAdd(
+    (half*)spatialBuf, (const half*)globalInput, (const half*)weights,
+    batchSize, stream);
+  CUDA_ERR("Sm120InitialGlobal", cudaPeekAtLastError());
+  if(!loggedInitialGlobal) {
+    if(logger != NULL)
+      logger->write(
+        "SM120 backend: fused global-feature matmul+broadcast add active");
+    loggedInitialGlobal = true;
+  }
+  return true;
+}
+
 bool Sm120Model::qkvStrided(
   cublasHandle_t cublas,
   cudaStream_t stream,
@@ -1018,6 +1417,8 @@ bool Sm120Model::qkvStrided(
   void* qkvBuf,
   bool allowPackedOutput,
   bool* packedOutput,
+  const float* ropeFreqs,
+  bool* ropeApplied,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -1025,9 +1426,10 @@ bool Sm120Model::qkvStrided(
   int vDim,
   bool usingFP16
 ) {
-  if(packedOutput == NULL)
+  if(packedOutput == NULL || ropeApplied == NULL)
     return false;
   *packedOutput = false;
+  *ropeApplied = false;
   if(!usingFP16)
     return false;
   if(nnXLen != 19 || nnYLen != 19 || matBatchSize % 361 != 0)
@@ -1039,10 +1441,32 @@ bool Sm120Model::qkvStrided(
     return false;
 
   const WideQKVAotTactic* qkvTactic = wideQKVAotByBatch[batchSize];
-  const bool packedPathReady = allowPackedOutput && options.useFusedQKRoPE &&
+  const WideQKVRopeAotTactic* qkvRopeTactic =
+    wideQKVRopeAotByBatch[batchSize];
+  const bool packedAttentionReady = allowPackedOutput &&
+    options.useFlashAttention && options.flashAttentionAccum == "both16";
+  const bool packedPathReady = packedAttentionReady && options.useFusedQKRoPE &&
     options.useBatchSharedRoPE && options.useFlashAttention &&
     options.flashAttentionAccum == "both16";
-  if(qkvTactic != nullptr && (!qkvTactic->packedOutput || packedPathReady)) {
+  const bool useQKVRopeAot =
+    qkvRopeTactic != nullptr && packedAttentionReady && ropeFreqs != NULL;
+  const bool useQKVAot =
+    qkvTactic != nullptr && (!qkvTactic->packedOutput || packedPathReady);
+  if(options.qkvRopeAotTacticExplicit &&
+     options.qkvRopeAotTactic != "disabled" && !useQKVRopeAot)
+    throw StringError(
+      "SM120 backend: requested packed QKV+RoPE tactic '" +
+      options.qkvRopeAotTactic +
+      "' is unavailable or its packed-attention preconditions are not met for batch " +
+      Global::intToString(batchSize));
+  if(options.wideQKVAotTacticExplicit &&
+     options.wideQKVAotTactic != "disabled" && !useQKVRopeAot && !useQKVAot)
+    throw StringError(
+      "SM120 backend: requested wide-QKV tactic '" +
+      options.wideQKVAotTactic +
+      "' is unavailable or its packed-attention preconditions are not met for batch " +
+      Global::intToString(batchSize));
+  if(useQKVRopeAot || useQKVAot) {
     void* weights = NULL;
     auto existing = wideQKVWeights.find(qWeights);
     if(existing != wideQKVWeights.end()) {
@@ -1068,13 +1492,44 @@ bool Sm120Model::qkvStrided(
       wideQKVWeights.emplace(qWeights, weights);
     }
 
-    CUDA_ERR("Sm120WideQKVAot", qkvTactic->launch(
-      (const half*)inputBuf, (const half*)weights, (half*)qkvBuf, stream));
-    *packedOutput = qkvTactic->packedOutput;
-    if(!loggedWideQKV) {
-      if(logger != NULL)
-        logger->write("SM120 backend: wide QKV AOT active, tactic=" + string(qkvTactic->id));
-      loggedWideQKV = true;
+    if(useQKVRopeAot) {
+      void* ropeTable = NULL;
+      auto existingTable = qkvRopeTables.find(ropeFreqs);
+      if(existingTable != qkvRopeTables.end())
+        ropeTable = existingTable->second;
+      else {
+        constexpr size_t tableHalves = 361 * 192 * 2;
+        CUDA_ERR("Sm120QKVRopeTable",cudaMalloc(
+          &ropeTable,tableHalves * sizeof(half)));
+        launchPrecomputeQKVRopeTable19Half(
+          ropeFreqs,(half*)ropeTable,stream);
+        CUDA_ERR("Sm120QKVRopeTable",cudaPeekAtLastError());
+        qkvRopeTables.emplace(ropeFreqs,ropeTable);
+      }
+      CUDA_ERR("Sm120WideQKVRopeAot",qkvRopeTactic->launch(
+        (const half*)inputBuf,(const half*)weights,(const half*)ropeTable,
+        (half*)qkvBuf,stream));
+      *packedOutput = true;
+      *ropeApplied = true;
+      if(!loggedQKVRopeAot) {
+        if(logger != NULL)
+          logger->write(
+            "SM120 backend: packed QKV+RoPE AOT active, tactic=" +
+            string(qkvRopeTactic->id));
+        loggedQKVRopeAot = true;
+      }
+    }
+    else {
+      CUDA_ERR("Sm120WideQKVAot", qkvTactic->launch(
+        (const half*)inputBuf, (const half*)weights, (half*)qkvBuf, stream));
+      *packedOutput = qkvTactic->packedOutput;
+      if(!loggedWideQKV) {
+        if(logger != NULL)
+          logger->write(
+            "SM120 backend: wide QKV AOT active, tactic=" +
+            string(qkvTactic->id));
+        loggedWideQKV = true;
+      }
     }
     return true;
   }
@@ -1144,17 +1599,55 @@ bool Sm120Model::fusedResidualGemm(
     inputChannels == 384 ? outProjectionAotByBatch[batchSize] : nullptr;
   if(outProjectionTactic != nullptr) {
     CUDA_ERR("Sm120OutProjectionResidual", outProjectionTactic->launch(
-      (const half*)inputBuf, (const half*)weights, (half*)trunkBuf, stream));
+      (const half*)inputBuf, (const half*)weights, (half*)trunkBuf,
+      matBatchSize, stream));
+    if(!loggedOutProjectionAot) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: out-projection residual AOT active, tactic=" +
+          string(outProjectionTactic->id));
+      loggedOutProjectionAot = true;
+    }
+    if(!loggedFusedResidualGemm) {
+      if(logger != NULL)
+        logger->write("SM120 backend: GEMM beta residual fusion active");
+      loggedFusedResidualGemm = true;
+    }
     return true;
   }
+  if(inputChannels == 384 && options.outProjectionAotTacticExplicit &&
+     options.outProjectionAotTactic != "disabled")
+    throw StringError(
+      "SM120 backend: requested out-projection tactic '" +
+      options.outProjectionAotTactic + "' is not registered for batch " +
+      Global::intToString(batchSize));
 
   const ResidualGemmAotTactic* linear2Tactic =
     inputChannels == 1152 ? linear2AotByBatch[batchSize] : nullptr;
   if(linear2Tactic != nullptr) {
     CUDA_ERR("Sm120Linear2Residual", linear2Tactic->launch(
-      (const half*)inputBuf, (const half*)weights, (half*)trunkBuf, stream));
+      (const half*)inputBuf, (const half*)weights, (half*)trunkBuf,
+      matBatchSize, stream));
+    if(!loggedLinear2Aot) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: linear2 residual AOT active, tactic=" +
+          string(linear2Tactic->id));
+      loggedLinear2Aot = true;
+    }
+    if(!loggedFusedResidualGemm) {
+      if(logger != NULL)
+        logger->write("SM120 backend: GEMM beta residual fusion active");
+      loggedFusedResidualGemm = true;
+    }
     return true;
   }
+  if(inputChannels == 1152 && options.linear2AotTacticExplicit &&
+     options.linear2AotTactic != "disabled")
+    throw StringError(
+      "SM120 backend: requested linear2 tactic '" +
+      options.linear2AotTactic + "' is not registered for batch " +
+      Global::intToString(batchSize));
 
   const half alpha = __float2half(1.0f);
   const half beta = __float2half(1.0f);
@@ -1186,20 +1679,20 @@ bool Sm120Model::rmsNorm(
   bool usingFP16,
   cudaStream_t stream
 ) {
-  if(!options.useRMSNorm384 || !usingFP16 || maskBuf != NULL)
+  if(options.rmsNorm384Tactic == "disabled" || !usingFP16 || maskBuf != NULL)
     return false;
   if(nnXLen != 19 || nnYLen != 19 || xySize != 361 || channels != 384)
     return false;
   if(batchSize < 1 || batchSize > maxBatchSize)
     return false;
 
-  if(options.useRMSNorm384Vec8) {
+  if(options.rmsNorm384Tactic == "warp4-vec8") {
     launchRMSNorm384Vec8(
       (const half*)inputBuf, (half*)outputBuf, (const half*)gammaBuf,
       (const half*)betaBuf, batchSize * xySize, epsilon, stream);
   }
-  else if(options.useRMSNorm384TwoWarp) {
-    launchRMSNorm384TwoWarp(
+  else if(options.rmsNorm384Tactic == "ordered-ept3") {
+    launchRMSNorm384OrderedEpt3(
       (const half*)inputBuf, (half*)outputBuf, (const half*)gammaBuf,
       (const half*)betaBuf, batchSize * xySize, epsilon, stream);
   }
@@ -1211,10 +1704,10 @@ bool Sm120Model::rmsNorm(
   CUDA_ERR("Sm120RMSNorm384", cudaPeekAtLastError());
   if(!loggedRMSNorm384) {
     if(logger != NULL)
-      logger->write(options.useRMSNorm384Vec8 ?
+      logger->write(options.rmsNorm384Tactic == "warp4-vec8" ?
         "SM120 backend: vec8 C384 RMSNorm active" :
-        (options.useRMSNorm384TwoWarp ?
-          "SM120 backend: two-warp C384 RMSNorm active" :
+        (options.rmsNorm384Tactic == "ordered-ept3" ?
+          "SM120 backend: ordered-EPT3 C384 RMSNorm active" :
           "SM120 backend: one-warp C384 RMSNorm active"));
     loggedRMSNorm384 = true;
   }
@@ -1246,16 +1739,31 @@ bool Sm120Model::fusedQKRoPE(
     return false;
 
   if(options.useBatchSharedRoPE) {
-    if(packedQKV)
-      launchBatchSharedPackedFusedQKRoPE19(
-        (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
+    if(packedQKV) {
+      if(options.useBatchSharedRoPEUnrolled)
+        launchBatchSharedPackedFusedQKRoPEUnrolled(
+          (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
+      else
+        launchBatchSharedPackedFusedQKRoPE19(
+          (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
+    }
     else
       launchBatchSharedFusedQKRoPE19(
         (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
     if(!loggedBatchSharedQKRoPE) {
       if(logger != NULL)
-        logger->write("SM120 backend: batch-shared fused Q/K RoPE active");
+        logger->write(
+          options.useBatchSharedRoPEUnrolled && packedQKV ?
+          "SM120 backend: unrolled packed batch-shared fused Q/K RoPE active" :
+          "SM120 backend: batch-shared fused Q/K RoPE active");
       loggedBatchSharedQKRoPE = true;
+    }
+    if(options.useBatchSharedRoPEUnrolled && packedQKV &&
+       !loggedBatchSharedQKRoPEAtMaxBatch) {
+      if(logger != NULL)
+        logger->write(
+          "SM120 backend: unrolled packed batch-shared fused Q/K RoPE active");
+      loggedBatchSharedQKRoPEAtMaxBatch = true;
     }
   }
   else if(options.useFusedQKRoPEHalf2) {
@@ -1321,7 +1829,7 @@ bool Sm120Model::affineSilu(
   bool usingFP16,
   cudaStream_t stream
 ) {
-  if(!options.useAffineSiluHalf2 || !usingFP16 || mask != NULL)
+  if(options.affineSiluTactic == "disabled" || !usingFP16 || mask != NULL)
     return false;
   if(nnXLen != 19 || nnYLen != 19 || xySize != 361)
     return false;
@@ -1329,15 +1837,72 @@ bool Sm120Model::affineSilu(
     return false;
   if(activation != ACTIVATION_SILU || batchSize < 1 || batchSize > maxBatchSize)
     return false;
+  if(options.affineSiluTactic == "flat-vec8-c768" && channels != 768)
+    return false;
 
-  launchAffineSiluHalf2(
-    (const half*)input, (half*)output, (const half*)scale, (const half*)bias,
-    batchSize * xySize, channels, stream);
+  if(options.affineSiluTactic == "flat-vec8-c768")
+    launchAffineSiluFlatVec8C768(
+      (const half*)input, (half*)output, (const half*)scale, (const half*)bias,
+      batchSize * xySize, stream);
+  else if(options.affineSiluTactic == "half2x3")
+    launchAffineSiluHalf2x3(
+      (const half*)input, (half*)output, (const half*)scale, (const half*)bias,
+      batchSize * xySize, channels, stream);
+  else
+    launchAffineSiluHalf2(
+      (const half*)input, (half*)output, (const half*)scale, (const half*)bias,
+      batchSize * xySize, channels, stream);
   CUDA_ERR("Sm120AffineSiluHalf2", cudaPeekAtLastError());
   if(!loggedAffineSiluHalf2) {
     if(logger != NULL)
-      logger->write("SM120 backend: half2 C384/C768 affine SiLU active");
+      logger->write(
+        options.affineSiluTactic == "flat-vec8-c768" ?
+        "SM120 backend: flat vec8 C768 affine SiLU active" :
+        options.affineSiluTactic == "half2x3" ?
+        "SM120 backend: half2x3 C384/C768 affine SiLU active" :
+        "SM120 backend: half2 C384/C768 affine SiLU active");
     loggedAffineSiluHalf2 = true;
+  }
+  return true;
+}
+
+bool Sm120Model::postConvBNSilu(
+  const void* input,
+  const void* weights,
+  void* residual,
+  void* activated,
+  const void* scale,
+  const void* bias,
+  const void* mask,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  int activation,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+) {
+  if(!options.usePostConvBNSilu || !usingFP16 || !usingNHWC || mask != NULL)
+    return false;
+  if(nnXLen != 19 || nnYLen != 19 || batchSize < 1 ||
+     batchSize > maxBatchSize || xySize != 361 ||
+     inputChannels != 384 || outputChannels != 768 ||
+     activation != ACTIVATION_SILU)
+    return false;
+  if(input == NULL || weights == NULL || residual == NULL || activated == NULL ||
+     scale == NULL || bias == NULL)
+    return false;
+
+  CUDA_ERR("Sm120PostConvBNSilu", launchPostConvResidualAffineSilu(
+    (const half*)input, (const half*)weights, (half*)residual,
+    (half*)activated, (const half*)scale, (const half*)bias,
+    batchSize * xySize, stream));
+  if(!loggedPostConvBNSilu) {
+    if(logger != NULL)
+      logger->write(
+        "SM120 backend: postConv residual + following C768 affine SiLU active");
+    loggedPostConvBNSilu = true;
   }
   return true;
 }
@@ -1351,6 +1916,8 @@ bool Sm120Model::fusedPolicyP1(
   int batchSize,
   int xySize,
   int channels,
+  int inputStride,
+  int inputOffset,
   bool usingFP16,
   bool usingNHWC,
   cudaStream_t stream
@@ -1358,16 +1925,61 @@ bool Sm120Model::fusedPolicyP1(
   if(!options.useFusedPolicyP1 || !usingFP16 || !usingNHWC)
     return false;
   if(batchSize < 1 || batchSize > maxBatchSize || nnXLen != 19 || nnYLen != 19 ||
-     xySize != 361 || channels != 96)
+     xySize != 361 || channels != 96 || inputStride < channels ||
+     inputOffset < 0 || inputOffset + channels > inputStride)
     return false;
 
   launchFusedPolicyP1(
-    (const half*)input, output, globalBias, scale, bias, batchSize, stream);
+    (const half*)input, output, globalBias, scale, bias, batchSize,
+    inputStride, inputOffset, stream);
   CUDA_ERR("Sm120FusedPolicyP1", cudaPeekAtLastError());
   if(!loggedFusedPolicyP1) {
     if(logger != NULL)
-      logger->write("SM120 backend: fixed-19x19 fused policy P1 active");
+      logger->write("SM120 backend: fused 19x19 policy P1 active");
     loggedFusedPolicyP1 = true;
+  }
+  return true;
+}
+
+bool Sm120Model::wideHeadProjection(
+  const void* input,
+  void* output,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  int* outputRowStride,
+  int* p1Offset,
+  int* g1Offset,
+  int* v1Offset,
+  cudaStream_t stream
+) {
+  if(wideHeadProjectionHandle == NULL || input == NULL || output == NULL ||
+     outputRowStride == NULL || p1Offset == NULL || g1Offset == NULL ||
+     v1Offset == NULL ||
+     !usingFP16 || !usingNHWC || batchSize < 1 || batchSize > maxBatchSize ||
+     xySize != 361 || inputChannels != 768 ||
+     outputChannels < wideHeadProjectionChannels)
+    return false;
+  int status = katago_launch_outer_projection_down_sm120(
+    wideHeadProjectionHandle, input, output, batchSize * xySize, stream);
+  if(status != 0)
+    throw StringError(
+      "SM120 wide-head projection launch failed, status=" +
+      Global::intToString(status));
+  *outputRowStride = wideHeadProjectionChannels;
+  *p1Offset = wideHeadP1Offset;
+  *g1Offset = wideHeadG1Offset;
+  *v1Offset = wideHeadV1Offset;
+  if(!loggedWideHeadProjection) {
+    if(logger != NULL)
+      logger->write(
+        wideHeadProjectionChannels == 288 ?
+        "SM120 backend: partial C288 no-split g1+v1 head active" :
+        "SM120 backend: full C384 no-split wide head projection active");
+    loggedWideHeadProjection = true;
   }
   return true;
 }
@@ -1377,7 +1989,7 @@ void Sm120Model::persistingL2Window(
   void* basePtr,
   size_t numBytes
 ) {
-  if(!persistingL2TrunkActive)
+  if(!persistingL2TrunkActive && !persistingL2InnerActive)
     return;
 
   if(basePtr == NULL) {

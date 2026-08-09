@@ -13,12 +13,21 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import struct
 from datetime import datetime, timezone
 
 import numpy as np
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def read_krnn(path):
@@ -105,6 +114,7 @@ def main():
     parser.add_argument("--reference", required=True)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--expected-candidate-batch", type=int, required=True)
     args = parser.parse_args()
 
     ref_meta, ref = read_krnn(args.reference)
@@ -113,6 +123,26 @@ def main():
         raise ValueError("reference/candidate row counts differ")
     if ref_meta["posLen"] != cand_meta["posLen"]:
         raise ValueError("reference/candidate posLen differ")
+    if int(cand_meta.get("maxBatchSize", -1)) != args.expected_candidate_batch:
+        raise ValueError(
+            "candidate KRNN maxBatchSize does not match the expected exact batch"
+        )
+    if cand_meta.get("fixedBatchTailPadding") is not True:
+        raise ValueError("candidate KRNN did not use fixed-batch tail padding")
+    if ref_meta.get("fixedBatchTailPadding") is not True:
+        raise ValueError("reference KRNN did not use fixed-batch tail padding")
+    if len(ref) != 12 or len(cand) != 12:
+        raise ValueError("reference/candidate KRNN section count is not 12")
+    # Sections 5..11 are the corpus targets and exact NN inputs. They must be
+    # byte-identical row by row; metric aggregation must never hide a corpus,
+    # row-order, request-reassembly, or tail-padding mismatch.
+    for section in range(5, 12):
+        if ref[section].shape != cand[section].shape or not np.array_equal(
+            ref[section].view(np.uint8), cand[section].view(np.uint8)
+        ):
+            raise ValueError(
+                f"reference/candidate target or input section {section} differs"
+            )
 
     n = int(ref_meta["numRows"])
     pos_len = int(ref_meta["posLen"])
@@ -145,8 +175,16 @@ def main():
         "createdUtc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "reference": args.reference,
         "candidate": args.candidate,
+        "referenceSha256": sha256_file(args.reference),
+        "candidateSha256": sha256_file(args.candidate),
         "referenceRevision": ref_meta.get("revision"),
         "candidateRevision": cand_meta.get("revision"),
+        "exactBatch": args.expected_candidate_batch,
+        "referenceMaxBatchSize": int(ref_meta.get("maxBatchSize", -1)),
+        "candidateMaxBatchSize": int(cand_meta["maxBatchSize"]),
+        "referenceFixedBatchTailPadding": True,
+        "candidateFixedBatchTailPadding": True,
+        "inputAndTargetSectionsByteExact": True,
         "corpus": ref_meta.get("corpus"),
         "numRows": n,
         "posLen": pos_len,

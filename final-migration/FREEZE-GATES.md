@@ -26,13 +26,40 @@ allowance. Its immutable snapshot is
 `b45a24c`. The supported domain is SM120 exact B4-B32 with two streams and the
 coordinate fat-binary workflow described in the same handover.
 
-## Backend gate — OUTSIDE THIS DELIVERY
+## Backend gate — OPEN (SM89 certified; SM120 plan pending)
 
-The current delivery packages the frozen optimizer and generates plans. General
-backend cleanup begins only after at least one resulting plan is validated
-end-to-end and its schema boundary is accepted.
+The unified SM89/SM120 backend, exact B4-B32 generators, runtime activation
+markers, and plan-apply mapping are now part of this delivery. Every
+historically positive, numerically valid route is enforced by the four-link
+closure contract in `python/cuda_tactic_history.py`. The remaining architecture
+gate is a production plan and serial 8,192-row full-FP32 hardware certificate
+on SM120.
 
-## Frontend gate — CLOSED
+An independent read-only comparison against the frozen SM89 and SM120 source
+trees completed on 2026-08-08 with no remaining four-link blocker. It
+materialized 3,738 SM89 coordinates across 20 families and 4,234 SM120
+coordinates across 23 families for exact B4-B32; all 62/64 positive-history
+records closed.
 
-Frontend scheduling changes are ported only after the plan-driven backend owns
-its stream/event/buffer contract and has a multi-GPU correctness harness.
+SM89 is certified on the remote RTX 4090 D. A single-device B12/S2 replay
+verified 8,192/8,192 results against the immutable FP32 reference at 3,035.87
+physical `nnEval/s`. A two-device, four-lane replay verified 8,192/8,192 at
+6,072.97 physical `nnEval/s`; every lane processed work and no external process
+used SM time during that measurement. A later 20-pass correctness stress
+verified 163,840/163,840 results, but its throughput is explicitly invalid
+because an external job began using the second GPU during the run.
+
+The existing RTX 5080 long gate predates the final positive-history union and
+is not eligible for migration: it is the known 2,586.58 `nnEval/s` B18 result
+from the incomplete search space. SM120 runtime certification must use a new
+unified-scan `best-tactic-plan.json`; the production loader correctly refuses
+the old non-production plan.
+
+## Frontend gate — OPEN (SM89 integrated and certified)
+
+The previously exercised scheduler is ported. It implements full-batch or
+device-idle gathering, fixed physical batch padding, independent persistent
+submission workers, pinned H2D/D2H, single-slot input/output-consumed event
+handshakes, and receiver-local multi-GPU routing. The SM89 single- and dual-GPU
+certificates above exercise this path. SM120 remains gated by its new
+production plan rather than by an implicit fallback or synthetic plan.

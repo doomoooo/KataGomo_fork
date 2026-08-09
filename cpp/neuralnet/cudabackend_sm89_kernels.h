@@ -15,12 +15,21 @@ void sm89MaskZeroNHWC(half* buf, const half* mask, int batchSize, int xySize, in
 // launch; false means the caller should use the official helper.
 bool sm89RMSNormNHWCHalf(
   const half* in, half* out, const half* gamma, const half* beta, const half* mask,
-  int nSize, int xySize, int cSize, float epsilon, cudaStream_t stream
+  int nSize, int xySize, int cSize, float epsilon, int rowsPerBlock,
+  cudaStream_t stream
 );
 
 // Exact-board C768 affine + SiLU path for 19x19. Each thread owns eight
 // contiguous half elements while preserving the official per-element arithmetic.
 bool sm89ScaleBiasSiluNHWCHalfVec8(
+  const half* in, half* out, const half* scale, const half* bias,
+  int nSize, int xySize, int cSize, cudaStream_t stream
+);
+
+// Exact-board C384 affine + SiLU vec8 route retained from Stage 34. This is
+// independently selectable from the C768 vec8 route so the scanner measures
+// its distinct launch geometry instead of coupling two shapes.
+bool sm89ScaleBiasSiluNHWCHalfVec8C384(
   const half* in, half* out, const half* scale, const half* bias,
   int nSize, int xySize, int cSize, cudaStream_t stream
 );
@@ -45,7 +54,8 @@ bool sm89FusedPolicyP1(
   const half* in, float* out, const float* globalBias,
   const float* scale, const float* bias,
   int nSize, int xySize, int cSize,
-  int inputRowStride, int inputChannelOffset, cudaStream_t stream
+  int inputRowStride, int inputChannelOffset, int rowsPerBlock,
+  cudaStream_t stream
 );
 
 // Reads a C96 or C192 slice from the exact wide C384 head projection and

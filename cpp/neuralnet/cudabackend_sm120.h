@@ -17,14 +17,10 @@
 // cudahelpers.cu, cudautils.cpp, ...) are NOT modified with SM120 branches; they only contain a
 // thin dispatch: ComputeHandle builds a Sm120Model on SM120 and routes apply() through it.
 //
-// Rebuild roadmap (from /workspace/cuda-optimization-history.md, final accepted config):
-//   0. scaffold: Sm120Model delegates to the official model (bit-identical)  [done]
-//   1. FA4 both16 attention (fixed S361/H12/D32, batch-selected AOT, shape fallback to official)
-//      [done: checked-in AOT artifact uses FP16 QK/PV accumulation]
-//   2. wide QKV CuTe AOT C384->QKV1152, batch-shared RoPE, fused residual epilogues
-//   3. TileLang fused FFN + linear2/out-projection AOT
-//   4. RMSNorm/silu/head custom kernels, initial-conv frontend, persisting-L2, weight sharing
-//   5. final batch/stream scan + full accuracy regression per stage
+// Sm120Model deliberately delegates the outer forward traversal to the
+// official Model. Operator hooks installed on CudaHandles replace the selected
+// boundaries with SM120 implementations. This keeps one model traversal and
+// one buffer layout while the exact-batch plan controls each CUDA tactic.
 
 struct CudaHandles;    // defined in cudabackend.cpp
 struct ScratchBuffers; // defined in cudabackend.cpp
@@ -34,6 +30,7 @@ namespace Sm120Backend {
 
 struct FusedFFNAotTactic;
 struct WideQKVAotTactic;
+struct WideQKVRopeAotTactic;
 struct ResidualGemmAotTactic;
 struct FA4AotTactic;
 
@@ -113,6 +110,32 @@ typedef bool (*Sm120MatMulFn)(
   bool usingFP16
 );
 
+typedef bool (*Sm120Conv1x1Fn)(
+  void* ctx,
+  const void* weights,
+  const void* input,
+  void* output,
+  int matBatchSize,
+  int inChannels,
+  int outChannels,
+  bool accumulate,
+  bool usingFP16,
+  cudaStream_t stream
+);
+
+typedef bool (*Sm120InitialGlobalFn)(
+  void* ctx,
+  void* spatialBuf,
+  const void* globalInput,
+  const void* weights,
+  int batchSize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+);
+
 typedef bool (*Sm120QKVStridedFn)(
   void* ctx,
   cublasHandle_t cublas,
@@ -124,6 +147,8 @@ typedef bool (*Sm120QKVStridedFn)(
   void* qkvBuf,
   bool allowPackedOutput,
   bool* packedOutput,
+  const float* ropeFreqs,
+  bool* ropeApplied,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -204,6 +229,25 @@ typedef bool (*Sm120AffineSiluFn)(
   cudaStream_t stream
 );
 
+typedef bool (*Sm120PostConvBNSiluFn)(
+  void* ctx,
+  const void* input,
+  const void* weights,
+  void* residual,
+  void* activated,
+  const void* scale,
+  const void* bias,
+  const void* mask,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  int activation,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+);
+
 typedef bool (*Sm120FusedPolicyP1Fn)(
   void* ctx,
   const void* input,
@@ -214,8 +258,27 @@ typedef bool (*Sm120FusedPolicyP1Fn)(
   int batchSize,
   int xySize,
   int channels,
+  int inputStride,
+  int inputOffset,
   bool usingFP16,
   bool usingNHWC,
+  cudaStream_t stream
+);
+
+typedef bool (*Sm120WideHeadProjectionFn)(
+  void* ctx,
+  const void* input,
+  void* output,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  int* outputRowStride,
+  int* p1Offset,
+  int* g1Offset,
+  int* v1Offset,
   cudaStream_t stream
 );
 
@@ -233,59 +296,87 @@ struct Options {
   // Master switch. When false, SM120 keeps the official backend path entirely (A/B control).
   bool enabled = true;
 
-  // Historical optimization switches, defaults = final accepted values from the 5080 history.
-  bool useFlashAttention = true;
-  std::string flashAttentionAccum = "both16"; // "none","fp32","qk16","pv16","both16"
-  std::string fa4AotTactic = "builtin-both16";
-  bool useWideQKV = true;
-  bool useWideQKVSingleStreamSchedule = false;
+  // The plan owns every optimization switch. Defaults are an explicit
+  // official-equivalent control state, never an implicit historical winner.
+  bool useFlashAttention = false;
+  std::string flashAttentionAccum = "none"; // "none","fp32","qk16","pv16","both16"
+  std::string fa4AotTactic = "disabled";
+  bool fa4AotTacticExplicit = false;
+  bool useWideQKV = false;
   bool useQKVStrided = false;
-  bool useQKVGemmAot = true;
-  bool useQKVGemmRopeAot = false;
-  bool useFusedQKRoPE = true;
+  bool useQKVGemmAot = false;
+  std::string qkvRopeAotTactic = "disabled";
+  bool qkvRopeAotTacticExplicit = false;
+  bool useFusedQKRoPE = false;
   bool useFusedQKRoPEHalf2 = false;
   bool useBatchSharedRoPE = false;
-  bool useBatchSharedRoPEUnroll19 = true;
-  bool useBatchSharedRoPETwoWay = false;
-  bool useFusedResidual = true;
-  bool useFusedResidualGemm = true;
+  bool useBatchSharedRoPEUnrolled = false;
+  bool useFusedResidual = false;
+  bool useFusedResidualGemm = false;
   bool useProjectionGemmLt = false;
-  bool useLinear2ResidualAot = true;
-  bool useLinear2ResidualAotBalanced = false;
+  bool useLinear2ResidualAot = false;
   bool useOutProjectionResidualAot = false;
-  std::string outProjectionAotTactic = "auto";
-  bool useFusedFFN = true;
-  bool useFusedFFNAReuse = false;
-  bool useFusedFFNSingleStreamSchedule = false;
-  std::string fusedFFNAotTactic = "auto";
+  std::string outProjectionAotTactic = "disabled";
+  bool outProjectionAotTacticExplicit = false;
+  bool useFusedFFN = false;
+  std::string fusedFFNAotTactic = "disabled";
+  bool fusedFFNAotTacticExplicit = false;
   bool useWideFFNSingleGemm = false;
-  bool useFusedRMSNormFFN = false;
-  bool useRMSNorm384 = true;
-  bool useRMSNorm384Vec8 = false;
-  bool useRMSNorm384TwoWarp = false;
-  bool useSwiGLU1152 = true;
-  bool useAffineSiluHalf2 = true;
-  bool useRMSNormQKVGemmAot = false;
-  bool useGraph = false;
+  // disabled, ordered-ept3, one-warp-exact, or warp4-vec8.
+  std::string rmsNorm384Tactic = "disabled";
+  bool useSwiGLU1152 = false;
+  // disabled, half2, half2x3, or flat-vec8-c768.
+  std::string affineSiluTactic = "disabled";
+  bool useExactMaskElision = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
   int persistingL2Streams = 2;
   double persistingL2HitRatio = 1.0;
-  bool useOuterProjectionAot = true;
-  std::string wideQKVAotTactic = "auto";
-  std::string linear2AotTactic = "auto";
-  bool shareModelWeights = true;
-  bool shareWideQKVWeights = false;
-  bool shareOuterProjectionWeights = false;
-  bool useInitialConvFrontend = true;
-  bool useInitialConvBiasFrontend = false;
-  bool useInitialGlobalMatMulAdd = true;
+  // disabled, warp64x64, or warp64x32.
+  std::string outerProjectionDownTactic = "disabled";
+  std::string outerProjectionUpTactic = "disabled";
+  bool usePostConvBNSilu = false;
+  std::string wideQKVAotTactic = "disabled";
+  bool wideQKVAotTacticExplicit = false;
+  std::string linear2AotTactic = "disabled";
+  bool linear2AotTacticExplicit = false;
+  bool shareModelWeights = false;
+  std::string initialConvFrontendPlan = "disabled";
+  bool useInitialGlobalMatMulAdd = false;
   bool useFusedPolicyP1 = false;
-  bool useHeadBNHalfToFloat = true;
-  bool useWideHeadProjection = true;
+  bool useHeadBNHalfToFloat = false;
+  // disabled, full-c384, or partial-c288-g1-v1.
+  std::string wideHeadProjectionTactic = "disabled";
+  bool useFusedValueTerminal = false;
 };
 
 bool isSm120Arch(int majorComputeCapability, int minorComputeCapability);
+
+// Retained head boundary used directly by the official forward adapter.
+bool launchHeadBNHalfToFloat(
+  const half* input,
+  half* halfOutput,
+  float* floatOutput,
+  const half* scale,
+  const half* bias,
+  int batchSize,
+  int xySize,
+  int channels,
+  int inputStride,
+  int inputOffset,
+  cudaStream_t stream
+);
+
+bool launchSplitValueTerminal(
+  const float* combined,
+  const float* bias,
+  float* value,
+  float* scoreValue,
+  int batchSize,
+  int valueChannels,
+  int scoreValueChannels,
+  cudaStream_t stream
+);
 
 // Reads all cuda*Sm120* / cuda* config keys relevant to the SM120 path. Unknown accum values throw.
 Options parseOptions(ConfigParser& cfg);
@@ -342,6 +433,32 @@ bool applyMatMulLt(
   bool usingFP16
 );
 
+bool applyConv1x1(
+  void* ctx,
+  const void* weights,
+  const void* input,
+  void* output,
+  int matBatchSize,
+  int inChannels,
+  int outChannels,
+  bool accumulate,
+  bool usingFP16,
+  cudaStream_t stream
+);
+
+bool applyInitialGlobal(
+  void* ctx,
+  void* spatialBuf,
+  const void* globalInput,
+  const void* weights,
+  int batchSize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+);
+
 bool applyQKVStrided(
   void* ctx,
   cublasHandle_t cublas,
@@ -353,6 +470,8 @@ bool applyQKVStrided(
   void* qkvBuf,
   bool allowPackedOutput,
   bool* packedOutput,
+  const float* ropeFreqs,
+  bool* ropeApplied,
   int matBatchSize,
   int numChannels,
   int qDim,
@@ -433,6 +552,25 @@ bool applyAffineSilu(
   cudaStream_t stream
 );
 
+bool applyPostConvBNSilu(
+  void* ctx,
+  const void* input,
+  const void* weights,
+  void* residual,
+  void* activated,
+  const void* scale,
+  const void* bias,
+  const void* mask,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  int activation,
+  bool usingFP16,
+  bool usingNHWC,
+  cudaStream_t stream
+);
+
 bool applyFusedPolicyP1(
   void* ctx,
   const void* input,
@@ -443,8 +581,27 @@ bool applyFusedPolicyP1(
   int batchSize,
   int xySize,
   int channels,
+  int inputStride,
+  int inputOffset,
   bool usingFP16,
   bool usingNHWC,
+  cudaStream_t stream
+);
+
+bool applyWideHeadProjection(
+  void* ctx,
+  const void* input,
+  void* output,
+  int batchSize,
+  int xySize,
+  int inputChannels,
+  int outputChannels,
+  bool usingFP16,
+  bool usingNHWC,
+  int* outputRowStride,
+  int* p1Offset,
+  int* g1Offset,
+  int* v1Offset,
   cudaStream_t stream
 );
 
@@ -455,8 +612,8 @@ void applyPersistingL2Window(
   size_t numBytes
 );
 
-// The SM120 model implementation. The official model is kept alive by the caller and is used as
-// the correctness fallback until each stage of the rebuild lands.
+// SM120 operator owner and official-forward adapter. Plan-explicit AOT routes
+// are strict: they must execute or throw rather than silently fall back.
 class Sm120Model {
  public:
   Sm120Model(
@@ -477,6 +634,7 @@ class Sm120Model {
   void setLogger(Logger* logger);
   bool hasPersistingL2Trunk() const;
   bool hasPersistingL2Inner() const;
+  float* getExactMaskSumBuf() const;
 
   // Mirrors Model::apply exactly so ComputeHandle can dispatch without touching the official
   // getOutput/benchmarkOutput paths.
@@ -550,6 +708,30 @@ class Sm120Model {
     bool usingFP16
   );
 
+  bool conv1x1(
+    const void* weights,
+    const void* input,
+    void* output,
+    int matBatchSize,
+    int inChannels,
+    int outChannels,
+    bool accumulate,
+    bool usingFP16,
+    cudaStream_t stream
+  );
+
+  bool initialGlobal(
+    void* spatialBuf,
+    const void* globalInput,
+    const void* weights,
+    int batchSize,
+    int inputChannels,
+    int outputChannels,
+    bool usingFP16,
+    bool usingNHWC,
+    cudaStream_t stream
+  );
+
   bool qkvStrided(
     cublasHandle_t cublas,
     cudaStream_t stream,
@@ -560,6 +742,8 @@ class Sm120Model {
     void* qkvBuf,
     bool allowPackedOutput,
     bool* packedOutput,
+    const float* ropeFreqs,
+    bool* ropeApplied,
     int matBatchSize,
     int numChannels,
     int qDim,
@@ -635,6 +819,24 @@ class Sm120Model {
     cudaStream_t stream
   );
 
+  bool postConvBNSilu(
+    const void* input,
+    const void* weights,
+    void* residual,
+    void* activated,
+    const void* scale,
+    const void* bias,
+    const void* mask,
+    int batchSize,
+    int xySize,
+    int inputChannels,
+    int outputChannels,
+    int activation,
+    bool usingFP16,
+    bool usingNHWC,
+    cudaStream_t stream
+  );
+
   bool fusedPolicyP1(
     const void* input,
     float* output,
@@ -644,8 +846,26 @@ class Sm120Model {
     int batchSize,
     int xySize,
     int channels,
+    int inputStride,
+    int inputOffset,
     bool usingFP16,
     bool usingNHWC,
+    cudaStream_t stream
+  );
+
+  bool wideHeadProjection(
+    const void* input,
+    void* output,
+    int batchSize,
+    int xySize,
+    int inputChannels,
+    int outputChannels,
+    bool usingFP16,
+    bool usingNHWC,
+    int* outputRowStride,
+    int* p1Offset,
+    int* g1Offset,
+    int* v1Offset,
     cudaStream_t stream
   );
 
@@ -669,21 +889,32 @@ class Sm120Model {
   Options options;
   int sm120NumSms;
   Logger* logger;
+  float* exactMaskSumBuf;
   bool loggedFallback;
   bool loggedFa4;
+  bool loggedFa4AtMaxBatch;
   bool loggedFusedFFN;
   bool loggedProjectionGemmLt;
+  bool loggedOuterProjectionDown;
+  bool loggedOuterProjectionUp;
+  bool loggedInitialGlobal;
   bool loggedWideFFNSingleGemm;
   bool loggedWideQKV;
   bool loggedQKVStrided;
+  bool loggedQKVRopeAot;
+  bool loggedLinear2Aot;
+  bool loggedOutProjectionAot;
   bool loggedFusedResidualGemm;
   bool loggedRMSNorm384;
   bool loggedFusedQKRoPE;
   bool loggedBatchSharedQKRoPE;
+  bool loggedBatchSharedQKRoPEAtMaxBatch;
   bool loggedFusedQKRoPEHalf2;
   bool loggedSwiGLU1152;
   bool loggedAffineSiluHalf2;
+  bool loggedPostConvBNSilu;
   bool loggedFusedPolicyP1;
+  bool loggedWideHeadProjection;
   bool loggedPersistingL2Trunk;
   bool loggedPersistingL2Inner;
   bool persistingL2TrunkActive;
@@ -697,16 +928,26 @@ class Sm120Model {
   std::vector<const FusedFFNAotTactic*> fusedFFNAotByBatch;
   std::vector<const FA4AotTactic*> fa4AotByBatch;
   std::vector<const WideQKVAotTactic*> wideQKVAotByBatch;
+  std::vector<const WideQKVRopeAotTactic*> wideQKVRopeAotByBatch;
   std::vector<const ResidualGemmAotTactic*> linear2AotByBatch;
   std::vector<const ResidualGemmAotTactic*> outProjectionAotByBatch;
   std::unordered_map<const void*, void*> wideFFNSingleGemmWeights;
+  std::unordered_map<const void*, void*> fusedFFNPairedWeights;
   std::unordered_map<const void*, void*> wideQKVWeights;
+  std::unordered_map<const float*, void*> qkvRopeTables;
   std::unordered_map<const void*, void*> qkvStridedWeights;
+  std::unordered_map<const void*, void*> outerProjectionDownHandles;
+  std::unordered_map<const void*, void*> outerProjectionUpHandles;
+  void* wideHeadProjectionWeights;
+  void* wideHeadProjectionHandle;
+  void* dualFfnSharedAHandle;
+  int wideHeadProjectionChannels;
+  int wideHeadP1Offset;
+  int wideHeadG1Offset;
+  int wideHeadV1Offset;
   struct LtMatmulState;
   std::unique_ptr<LtMatmulState> ltMatmulState;
 
-  // TODO(rebuild): device weight buffers, AOT kernel handles, per-GPU shared-weight caches,
-  // scratch/workspace plan.
 };
 
 } // namespace Sm120Backend

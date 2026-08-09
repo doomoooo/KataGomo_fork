@@ -98,18 +98,20 @@ class RoPEOutputTileIterator : public BaseIterator {
 
   struct Params : public Base::Params {
     const float* freqs;
+    const float2* cosSinTable;
     int totalRows;
 
     CUTLASS_HOST_DEVICE
-    Params() : Base::Params(), freqs(nullptr), totalRows(0) {}
+    Params() : Base::Params(), freqs(nullptr), cosSinTable(nullptr), totalRows(0) {}
 
     CUTLASS_HOST_DEVICE
     explicit Params(Layout const& layout)
-      : Base::Params(layout), freqs(nullptr), totalRows(0) {}
+      : Base::Params(layout), freqs(nullptr), cosSinTable(nullptr), totalRows(0) {}
   };
 
  private:
   const float* freqs;
+  const float2* cosSinTable;
   int totalRows;
 
  public:
@@ -122,12 +124,13 @@ class RoPEOutputTileIterator : public BaseIterator {
     TensorCoord threadblockOffset = TensorCoord(),
     int const* indices = nullptr
   ) : Base(params, pointer, extent, threadIdx, threadblockOffset, indices),
-      freqs(params.freqs), totalRows(params.totalRows) {}
+      freqs(params.freqs), cosSinTable(params.cosSinTable),
+      totalRows(params.totalRows) {}
 
   CUTLASS_DEVICE
   void store_with_byte_offset(Fragment const& fragment, int64_t byteOffset) const {
     Fragment transformed = fragment;
-    if(freqs != nullptr && int(blockIdx.z) < 2) {
+    if((freqs != nullptr || cosSinTable != nullptr) && int(blockIdx.z) < 2) {
       AccessType* accesses = reinterpret_cast<AccessType*>(&transformed);
       int startRow = Base::thread_start_row();
       int startColumn = Base::thread_start_column();
@@ -156,12 +159,23 @@ class RoPEOutputTileIterator : public BaseIterator {
                 CUTLASS_PRAGMA_UNROLL
                 for(int element = 0; element < kElementsPerAccess; element += 2) {
                   int channel = outputColumn + element;
-                  int x = xy % 19;
-                  int y = xy / 19;
                   int hp = channel / 2;
-                  float angle = x * freqs[2 * hp] + y * freqs[2 * hp + 1];
-                  float sinValue, cosValue;
-                  __sincosf(angle, &sinValue, &cosValue);
+                  float sinValue;
+                  float cosValue;
+                  if(cosSinTable != nullptr) {
+                    // Model-lifetime table layout is [xy][head * pairs + pair].
+                    // With the fixed 12xD32 shape, channel / 2 is exactly that
+                    // flattened head-pair coordinate.
+                    float2 cosSin = cosSinTable[(size_t)xy * (Channels / 2) + hp];
+                    cosValue = cosSin.x;
+                    sinValue = cosSin.y;
+                  }
+                  else {
+                    int x = xy % 19;
+                    int y = xy / 19;
+                    float angle = x * freqs[2 * hp] + y * freqs[2 * hp + 1];
+                    __sincosf(angle, &sinValue, &cosValue);
+                  }
                   float v0 = static_cast<float>(access[element]);
                   float v1 = static_cast<float>(access[element + 1]);
                   access[element] = Element(v0 * cosValue - v1 * sinValue);
@@ -202,9 +216,10 @@ using RopeKernel = cutlass::gemm::kernel::GemmBatched<Mma, RopeEpilogue, Swizzle
 
 } // namespace
 
-struct Sm89QKVRoPEGemmB13::Impl {
+struct Sm89QKVRoPEGemm::Impl {
   const half* weights;
   const float* freqs;
+  const float2* cosSinTable;
   typename RopeKernel::Params params;
   typename PlainFp32Kernel::Params plainFp32Params;
   typename PlainHalfKernel::Params plainHalfParams;
@@ -212,8 +227,10 @@ struct Sm89QKVRoPEGemmB13::Impl {
   int plainVariant;
   bool initialized;
 
-  Impl(const half* weights_, const float* freqs_, bool splitRoPE_, int plainVariant_)
-    : weights(weights_), freqs(freqs_), splitRoPE(splitRoPE_),
+  Impl(
+    const half* weights_, const float* freqs_, const float2* cosSinTable_,
+    bool splitRoPE_, int plainVariant_)
+    : weights(weights_), freqs(freqs_), cosSinTable(cosSinTable_), splitRoPE(splitRoPE_),
       plainVariant(plainVariant_), initialized(true) {
     int smemSize = splitRoPE
       ? (plainVariant == 1
@@ -259,6 +276,7 @@ struct Sm89QKVRoPEGemmB13::Impl {
       typename OutputOp::Params(1.0f, 0.0f),
       GemmBatch);
     params.params_D.freqs = freqs;
+    params.params_D.cosSinTable = cosSinTable;
     params.params_D.totalRows = tokens;
 
     typename DefaultIterator::TensorRef plainFp32NullOutput(nullptr, matrixLayout);
@@ -329,16 +347,18 @@ struct Sm89QKVRoPEGemmB13::Impl {
   }
 };
 
-Sm89QKVRoPEGemmB13::Sm89QKVRoPEGemmB13(
+Sm89QKVRoPEGemm::Sm89QKVRoPEGemm(
   const half* weights,
   const float* freqs,
+  const float2* cosSinTable,
   bool splitRoPE,
   int plainVariant
-) : impl(std::make_unique<Impl>(weights, freqs, splitRoPE, plainVariant)) {}
+) : impl(std::make_unique<Impl>(
+      weights, freqs, cosSinTable, splitRoPE, plainVariant)) {}
 
-Sm89QKVRoPEGemmB13::~Sm89QKVRoPEGemmB13() = default;
+Sm89QKVRoPEGemm::~Sm89QKVRoPEGemm() = default;
 
-bool Sm89QKVRoPEGemmB13::apply(
+bool Sm89QKVRoPEGemm::apply(
   const half* input,
   half* output,
   int batchSize,

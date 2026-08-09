@@ -80,6 +80,49 @@ bool sm89ScaleBiasSiluNHWCHalfVec8(
   return true;
 }
 
+__global__ void sm89ScaleBiasSiluNHWCHalfVec8C384Kernel(
+  const half* __restrict__ in,
+  half* __restrict__ out,
+  const half* __restrict__ scale,
+  const half* __restrict__ bias,
+  int totalVecs
+) {
+  constexpr int cVecs = 384 / 8;
+  int vecIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(vecIdx >= totalVecs)
+    return;
+  int cVec = vecIdx % cVecs;
+  Sm89Half8 x;
+  Sm89Half8 s;
+  Sm89Half8 b;
+  Sm89Half8 y;
+  x.packed = reinterpret_cast<const uint4*>(in)[vecIdx];
+  s.packed = reinterpret_cast<const uint4*>(scale)[cVec];
+  b.packed = reinterpret_cast<const uint4*>(bias)[cVec];
+#pragma unroll
+  for(int i = 0; i < 8; i++) {
+    half a = __hfma(x.values[i], s.values[i], b.values[i]);
+    y.values[i] = sm89SiluHalf(a);
+  }
+  reinterpret_cast<uint4*>(out)[vecIdx] = y.packed;
+}
+
+bool sm89ScaleBiasSiluNHWCHalfVec8C384(
+  const half* in, half* out, const half* scale, const half* bias,
+  int nSize, int xySize, int cSize, cudaStream_t stream
+) {
+  if(nSize < 1 || xySize != 19 * 19 || cSize != 384)
+    return false;
+  constexpr int blockSize = 256;
+  const int totalVecs = nSize * xySize * (384 / 8);
+  const int gridSize = (totalVecs + blockSize - 1) / blockSize;
+  sm89ScaleBiasSiluNHWCHalfVec8C384Kernel<<<gridSize,blockSize,0,stream>>>(
+    in, out, scale, bias, totalVecs
+  );
+  CUDA_ERR("sm89ScaleBiasSiluNHWCHalfVec8C384",cudaPeekAtLastError());
+  return true;
+}
+
 union __align__(8) Sm89Half4 {
   uint2 packed;
   half values[4];
@@ -206,11 +249,13 @@ bool sm89FusedPolicyP1(
   const half* in, float* out, const float* globalBias,
   const float* scale, const float* bias,
   int nSize, int xySize, int cSize,
-  int inputRowStride, int inputChannelOffset, cudaStream_t stream
+  int inputRowStride, int inputChannelOffset, int rowsPerBlock,
+  cudaStream_t stream
 ) {
-  if(nSize < 1 || xySize != 19 * 19 || cSize != 96)
+  if(nSize < 1 || xySize != 19 * 19 || cSize != 96 ||
+     (rowsPerBlock != 1 && rowsPerBlock != 5))
     return false;
-  dim3 block(96, 5);
+  dim3 block(96, rowsPerBlock);
   dim3 grid((xySize + block.y - 1) / block.y, nSize);
   if(inputRowStride == 96 && inputChannelOffset == 0)
     sm89FusedPolicyP1Kernel<96,0><<<grid,block,0,stream>>>(in,out,globalBias,scale,bias,nSize);
@@ -376,12 +421,13 @@ bool sm89SplitValueTerminal(
   return true;
 }
 
+template<int RowsPerBlock>
 __global__ void sm89RMSNormNHWCHalfKernel(
   const half* __restrict__ in, half* __restrict__ out,
   const half* __restrict__ gamma, const half* __restrict__ beta, const half* __restrict__ mask,
   int totalRows, int xySize, int cSize, float epsilon
 ) {
-  int row = blockIdx.x * 4 + (threadIdx.x >> 5);
+  int row = blockIdx.x * RowsPerBlock + (threadIdx.x >> 5);
   int lane = threadIdx.x & 31;
   if(row >= totalRows)
     return;
@@ -423,15 +469,19 @@ __global__ void sm89RMSNormNHWCHalfKernel(
 
 bool sm89RMSNormNHWCHalf(
   const half* in, half* out, const half* gamma, const half* beta, const half* mask,
-  int nSize, int xySize, int cSize, float epsilon, cudaStream_t stream
+  int nSize, int xySize, int cSize, float epsilon, int rowsPerBlock,
+  cudaStream_t stream
 ) {
-  if(cSize != 384)
+  if(cSize != 384 || (rowsPerBlock != 4 && rowsPerBlock != 8))
     return false;
   int totalRows = nSize * xySize;
-  int blocks = (totalRows + 3) / 4;
-  sm89RMSNormNHWCHalfKernel<<<blocks, 128, 0, stream>>>(
-    in, out, gamma, beta, mask, totalRows, xySize, cSize, epsilon
-  );
+  int blocks = (totalRows + rowsPerBlock - 1) / rowsPerBlock;
+  if(rowsPerBlock == 8)
+    sm89RMSNormNHWCHalfKernel<8><<<blocks, 256, 0, stream>>>(
+      in, out, gamma, beta, mask, totalRows, xySize, cSize, epsilon);
+  else
+    sm89RMSNormNHWCHalfKernel<4><<<blocks, 128, 0, stream>>>(
+      in, out, gamma, beta, mask, totalRows, xySize, cSize, epsilon);
   CUDA_ERR("sm89RMSNormNHWCHalf",cudaPeekAtLastError());
   return true;
 }
@@ -655,25 +705,48 @@ bool sm89ApplyRoPEQKHalfBatchGrouped(
   int numPairs = qHeadDim / 2;
   int totalHP = numHeads * numPairs;
   int threads = ((totalHP + 31) / 32) * 32;
+#define KATAGO_SM89_ROPE_BATCH_GROUP_CASE(group) \
+  case group: \
+    launchSm89ApplyRoPEQKHalfBatchGrouped<group>( \
+      qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim, \
+      numPairs,nnXLen,threads,stream); \
+    break
   switch(batchGroup) {
-  case 2:
-    launchSm89ApplyRoPEQKHalfBatchGrouped<2>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
-    break;
-  case 3:
-    launchSm89ApplyRoPEQKHalfBatchGrouped<3>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
-    break;
-  case 4:
-    launchSm89ApplyRoPEQKHalfBatchGrouped<4>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
-    break;
-  case 7:
-    launchSm89ApplyRoPEQKHalfBatchGrouped<7>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
-    break;
-  case 13:
-    launchSm89ApplyRoPEQKHalfBatchGrouped<13>(qBuf,kBuf,freqs,batchSize,seqLen,numHeads,numKVHeads,qHeadDim,numPairs,nnXLen,threads,stream);
-    break;
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(2);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(3);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(4);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(5);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(6);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(7);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(8);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(9);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(10);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(11);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(12);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(13);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(14);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(15);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(16);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(17);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(18);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(19);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(20);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(21);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(22);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(23);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(24);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(25);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(26);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(27);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(28);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(29);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(30);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(31);
+  KATAGO_SM89_ROPE_BATCH_GROUP_CASE(32);
   default:
     return false;
   }
+#undef KATAGO_SM89_ROPE_BATCH_GROUP_CASE
   CUDA_ERR("sm89ApplyRoPEQKHalfBatchGrouped",cudaPeekAtLastError());
   return true;
 }

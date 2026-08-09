@@ -31,6 +31,58 @@ class ScopedComputeStream {
 
 //-------------------------------------------------------------------------------------
 
+struct EventPipelineSchedulerState {
+  struct BatchState {
+    vector<NNResultBuf*> requests;
+    vector<NNOutput*> outputs;
+  };
+  struct SlotState {
+    int slotIdx = -1;
+    int gpuIdx = -1;
+    void* computeStream = NULL;
+    ComputeHandle* gpuHandle = NULL;
+    NNServerBuf* serverBuf = NULL;
+    BatchState* front = NULL;
+    BatchState* next = NULL;
+    BatchState* submitting = NULL;
+    bool usingFP16 = false;
+    struct SubmitWorker {
+      mutex taskMutex;
+      condition_variable taskCondition;
+      thread* workerThread = NULL;
+      bool stop = false;
+      bool hasTask = false;
+      atomic<bool> taskDone{false};
+      int batchSize = 0;
+      exception_ptr error;
+    };
+    unique_ptr<SubmitWorker> submitWorker;
+  };
+
+  Rand rand;
+  vector<SlotState> slots;
+  BatchState* filling = NULL;
+  int fillingSlotIdx = -1;
+  int rrCursor = 0;
+  bool startupFailed = false;
+  string startupFailureMessage;
+
+  explicit EventPipelineSchedulerState(const string& seed) : rand(seed) {}
+};
+
+static bool parseCudaAsyncInferPipeline(ConfigParser& cfg) {
+  if(!cfg.contains("cudaAsyncInferPipeline"))
+    return false;
+  bool enabled = cfg.getBool("cudaAsyncInferPipeline");
+#ifndef USE_CUDA_BACKEND
+  if(enabled)
+    throw StringError("cudaAsyncInferPipeline requires the CUDA backend");
+#endif
+  return enabled;
+}
+
+//-------------------------------------------------------------------------------------
+
 NNResultBuf::NNResultBuf()
   : clientWaitingForResult(),
     resultMutex(),
@@ -66,6 +118,99 @@ NNServerBuf::~NNServerBuf() {
   if(inputBuffers != NULL)
     NeuralNet::freeInputBuffers(inputBuffers);
   inputBuffers = NULL;
+}
+
+//-------------------------------------------------------------------------------------
+
+NNBatchingDispatcher::NNBatchingDispatcher(
+  bool enabled_, const vector<int>& gpuIdxByServerThread_
+)
+  : enabled(enabled_),
+    gpuIdxByServerThread(gpuIdxByServerThread_),
+    mutex(),
+    condition(),
+    serverThreadHasActiveBatch(gpuIdxByServerThread_.size(),false)
+{}
+
+bool NNBatchingDispatcher::waitForBatch(
+  ThreadSafeQueue<NNResultBuf*>& queue,
+  vector<NNResultBuf*>& resultBufs,
+  int maxBatchSize,
+  const atomic<int>& currentBatchSize,
+  int serverThreadIdx
+) {
+  testAssert(serverThreadIdx >= 0 && serverThreadIdx < (int)gpuIdxByServerThread.size());
+
+  if(!enabled) {
+    int desiredBatchSize = std::min(maxBatchSize,currentBatchSize.load(std::memory_order_acquire));
+    return queue.waitPopUpToN(resultBufs,desiredBatchSize);
+  }
+
+  unique_lock<std::mutex> lock(mutex);
+  while(true) {
+    size_t queuedRows = queue.size();
+    if(queuedRows > 0) {
+      int desiredBatchSize = std::min(maxBatchSize,currentBatchSize.load(std::memory_order_acquire));
+      bool deviceIsIdle = true;
+      int gpuIdx = gpuIdxByServerThread[serverThreadIdx];
+      if(gpuIdx < 0)
+        gpuIdx = 0;
+      for(int i = 0; i < (int)serverThreadHasActiveBatch.size(); i++) {
+        int otherGpuIdx = gpuIdxByServerThread[i];
+        if(otherGpuIdx < 0)
+          otherGpuIdx = 0;
+        if(otherGpuIdx == gpuIdx && serverThreadHasActiveBatch[i]) {
+          deviceIsIdle = false;
+          break;
+        }
+      }
+
+      if(queuedRows >= (size_t)desiredBatchSize || deviceIsIdle) {
+        bool gotAnything = queue.waitPopUpToN(resultBufs,desiredBatchSize);
+        if(gotAnything) {
+          testAssert(!serverThreadHasActiveBatch[serverThreadIdx]);
+          serverThreadHasActiveBatch[serverThreadIdx] = true;
+        }
+        return gotAnything;
+      }
+    }
+    else if(queue.isReadOnly()) {
+      return false;
+    }
+    condition.wait(lock);
+  }
+}
+
+void NNBatchingDispatcher::completeBatch(int serverThreadIdx) {
+  if(!enabled)
+    return;
+  {
+    lock_guard<std::mutex> lock(mutex);
+    testAssert(serverThreadIdx >= 0 && serverThreadIdx < (int)serverThreadHasActiveBatch.size());
+    testAssert(serverThreadHasActiveBatch[serverThreadIdx]);
+    serverThreadHasActiveBatch[serverThreadIdx] = false;
+  }
+  condition.notify_all();
+}
+
+void NNBatchingDispatcher::notify() {
+  if(!enabled)
+    return;
+  {
+    lock_guard<std::mutex> lock(mutex);
+  }
+  condition.notify_all();
+}
+
+void NNBatchingDispatcher::resetGpuIdxByServerThread(
+  const vector<int>& gpuIdxByServerThread_
+) {
+  lock_guard<std::mutex> lock(mutex);
+  for(bool active : serverThreadHasActiveBatch)
+    testAssert(!active);
+  gpuIdxByServerThread = gpuIdxByServerThread_;
+  serverThreadHasActiveBatch.assign(gpuIdxByServerThread.size(),false);
+  condition.notify_all();
 }
 
 //-------------------------------------------------------------------------------------
@@ -109,6 +254,13 @@ NNEvaluator::NNEvaluator(
    warmupOnlyMaxBatchSize(
      cfg.contains("cudaWarmupOnlyMaxBatchSize") ? cfg.getBool("cudaWarmupOnlyMaxBatchSize") : false
    ),
+   batchAwareDispatch(
+     cfg.contains("nnBatchAwareDispatch") ? cfg.getBool("nnBatchAwareDispatch") : false
+   ),
+   cudaAsyncInferPipeline(parseCudaAsyncInferPipeline(cfg)),
+   cudaEventPipelineUseGraph(
+     cfg.contains("cudaEventPipelineUseGraph") ? cfg.getBool("cudaEventPipelineUseGraph") : false
+   ),
    computeContext(NULL),
    loadedModel(NULL),
    nnCacheTable(NULL),
@@ -120,6 +272,7 @@ NNEvaluator::NNEvaluator(
    postProcessParams(),
    numServerThreadsEverSpawned(0),
    serverThreads(),
+   eventPipelineSchedulerState(NULL),
    maxBatchSize(maxBatchSz),
    m_numRowsProcessed(0),
    m_numBatchesProcessed(0),
@@ -128,6 +281,9 @@ NNEvaluator::NNEvaluator(
    isKilled(false),
    numServerThreadsStartingUp(0),
    mainThreadWaitingForSpawn(),
+   serverThreadsIsUsingFP16(),
+   m_numRowsProcessedByServerThread(numThr,0),
+   m_numBatchesProcessedByServerThread(numThr,0),
    numOngoingEvals(0),
    numWaitingEvals(0),
    numEvalsToAwaken(0),
@@ -135,7 +291,8 @@ NNEvaluator::NNEvaluator(
    currentDoRandomize(doRandomize),
    currentDefaultSymmetry(defaultSymmetry),
    currentBatchSize(maxBatchSz),
-   queryQueue()
+   queryQueue(),
+   batchingDispatcher(batchAwareDispatch,gpuIdxByServerThread)
 {
   if(nnXLen > NNPos::MAX_BOARD_LEN)
     throw StringError("Maximum supported nnEval board size is " + Global::intToString(NNPos::MAX_BOARD_LEN));
@@ -145,6 +302,10 @@ NNEvaluator::NNEvaluator(
     throw StringError("maxBatchSize is negative: " + Global::intToString(maxBatchSize));
   if(gpuIdxByServerThread.size() != numThreads)
     throw StringError("gpuIdxByServerThread.size() != numThreads");
+  if(cudaEventPipelineUseGraph && !cudaAsyncInferPipeline)
+    throw StringError("cudaEventPipelineUseGraph requires cudaAsyncInferPipeline=true");
+  if(cudaEventPipelineUseGraph && !batchAwareDispatch)
+    throw StringError("cudaEventPipelineUseGraph requires nnBatchAwareDispatch=true");
 
   if(logger != NULL) {
     logger->write(
@@ -152,6 +313,23 @@ NNEvaluator::NNEvaluator(
       Global::intToString(nnXLen) + " * " + Global::intToString(nnYLen) +
       (requireExactNNLen ? " exactly" : " allowing smaller boards")
     );
+    logger->write(
+      "NN batch-aware dispatch is " + string(batchAwareDispatch ? "enabled" : "disabled")
+    );
+    if(batchAwareDispatch) {
+      logger->write(
+        "NN fixed-shape padding is enabled; backend launches always use batch size " +
+        Global::intToString(maxBatchSize)
+      );
+    }
+    logger->write(
+      "CUDA event-gated inference pipeline is " +
+      string(cudaAsyncInferPipeline ? "enabled" : "disabled")
+    );
+    if(cudaEventPipelineUseGraph)
+      logger->write("CUDA exact-shape event-pipeline graph replay is enabled");
+    if(cudaAsyncInferPipeline && numThreads < 2)
+      logger->write("WARNING: CUDA event pipeline has one infer stream; overlap is limited");
   }
 
   if(nnCacheSizePowerOfTwo >= 0)
@@ -273,6 +451,7 @@ void NNEvaluator::setCurrentBatchSize(int batchSize) {
   if(batchSize <= 0 || batchSize > maxBatchSize)
     throw StringError("Invalid setting for batch size");
   currentBatchSize.store(batchSize,std::memory_order_release);
+  batchingDispatcher.notify();
 }
 bool NNEvaluator::requiresSGFMetadata() const {
   return numInputMetaChannels > 0;
@@ -361,6 +540,14 @@ uint64_t NNEvaluator::numRowsProcessed() const {
 uint64_t NNEvaluator::numBatchesProcessed() const {
   return m_numBatchesProcessed.load(std::memory_order_relaxed);
 }
+vector<uint64_t> NNEvaluator::numRowsProcessedByServerThread() const {
+  lock_guard<std::mutex> lock(bufferMutex);
+  return m_numRowsProcessedByServerThread;
+}
+vector<uint64_t> NNEvaluator::numBatchesProcessedByServerThread() const {
+  lock_guard<std::mutex> lock(bufferMutex);
+  return m_numBatchesProcessedByServerThread;
+}
 double NNEvaluator::averageProcessedBatchSize() const {
   return (double)numRowsProcessed() / (double)numBatchesProcessed();
 }
@@ -372,6 +559,9 @@ void NNEvaluator::clearStats() {
   m_numRowsProcessed.store(0);
   m_numBatchesProcessed.store(0);
   m_numCacheHits.store(0);
+  lock_guard<std::mutex> lock(bufferMutex);
+  std::fill(m_numRowsProcessedByServerThread.begin(),m_numRowsProcessedByServerThread.end(),0);
+  std::fill(m_numBatchesProcessedByServerThread.begin(),m_numBatchesProcessedByServerThread.end(),0);
 }
 
 void NNEvaluator::clearCache() {
@@ -388,6 +578,387 @@ bool NNEvaluator::isAnyThreadUsingFP16() const {
   }
   return false;
 }
+
+#ifdef USE_CUDA_BACKEND
+void NNEvaluator::serveEventPipelineScheduler(const string& randSeedThisThread) {
+  (void)randSeedThisThread;
+  EventPipelineSchedulerState* state = eventPipelineSchedulerState;
+  testAssert(state != NULL);
+
+  auto canonicalGpuIdx = [](int gpuIdx) { return gpuIdx < 0 ? 0 : gpuIdx; };
+  auto deleteBatch = [](EventPipelineSchedulerState::BatchState*& batch) {
+    if(batch == NULL)
+      return;
+    for(NNOutput* output : batch->outputs)
+      delete output;
+    delete batch;
+    batch = NULL;
+  };
+  auto deviceIsIdle = [&](int gpuIdx) {
+    int canonical = canonicalGpuIdx(gpuIdx);
+    for(const EventPipelineSchedulerState::SlotState& slot : state->slots) {
+      if(canonicalGpuIdx(slot.gpuIdx) == canonical &&
+         (slot.front != NULL || slot.next != NULL || slot.submitting != NULL))
+        return false;
+    }
+    return true;
+  };
+  auto slotCanAccept = [&](EventPipelineSchedulerState::SlotState& slot) {
+    return slot.next == NULL && slot.submitting == NULL &&
+      NeuralNet::eventPipelineInputHostReusable(slot.gpuHandle);
+  };
+  auto selectFillingSlot = [&]() {
+    int residentBatches = 0;
+    for(const EventPipelineSchedulerState::SlotState& slot : state->slots) {
+      residentBatches += slot.front != NULL ? 1 : 0;
+      residentBatches += slot.next != NULL ? 1 : 0;
+      residentBatches += slot.submitting != NULL ? 1 : 0;
+    }
+    if(residentBatches >= (int)state->slots.size() + 1)
+      return -1;
+
+    for(int offset = 0; offset < (int)state->slots.size(); offset++) {
+      int idx = (state->rrCursor + offset) % (int)state->slots.size();
+      EventPipelineSchedulerState::SlotState& slot = state->slots[idx];
+      if(slot.front == NULL && slot.next == NULL && slotCanAccept(slot)) {
+        state->rrCursor = (idx + 1) % (int)state->slots.size();
+        return idx;
+      }
+    }
+    for(int offset = 0; offset < (int)state->slots.size(); offset++) {
+      int idx = (state->rrCursor + offset) % (int)state->slots.size();
+      EventPipelineSchedulerState::SlotState& slot = state->slots[idx];
+      if(slotCanAccept(slot)) {
+        state->rrCursor = (idx + 1) % (int)state->slots.size();
+        return idx;
+      }
+    }
+    return -1;
+  };
+  auto allocateOutputs = [&](EventPipelineSchedulerState::BatchState& batch) {
+    batch.outputs.reserve(batch.requests.size());
+    for(NNResultBuf* request : batch.requests) {
+      NNOutput* output = new NNOutput();
+      output->nnXLen = nnXLen;
+      output->nnYLen = nnYLen;
+      output->whiteOwnerMap = request->includeOwnerMap ? new float[nnXLen*nnYLen] : NULL;
+      batch.outputs.push_back(output);
+    }
+  };
+  auto beginInferenceSubmission = [&](EventPipelineSchedulerState::SlotState& slot, int batchSize) {
+    EventPipelineSchedulerState::SlotState::SubmitWorker* worker = slot.submitWorker.get();
+    testAssert(worker != NULL && worker->workerThread != NULL);
+    unique_lock<std::mutex> lock(worker->taskMutex);
+    testAssert(!worker->hasTask);
+    testAssert(!worker->taskDone.load(std::memory_order_relaxed));
+    worker->batchSize = batchSize;
+    worker->error = exception_ptr();
+    worker->hasTask = true;
+    worker->taskCondition.notify_all();
+  };
+  auto consumeInferenceSubmission = [&](EventPipelineSchedulerState::SlotState& slot) {
+    EventPipelineSchedulerState::SlotState::SubmitWorker* worker = slot.submitWorker.get();
+    testAssert(worker != NULL && worker->workerThread != NULL);
+    unique_lock<std::mutex> lock(worker->taskMutex);
+    testAssert(worker->taskDone.load(std::memory_order_acquire));
+    exception_ptr error = worker->error;
+    worker->error = exception_ptr();
+    worker->taskDone.store(false,std::memory_order_relaxed);
+    lock.unlock();
+    if(error != NULL)
+      rethrow_exception(error);
+  };
+  auto waitForInferenceSubmission = [&](EventPipelineSchedulerState::SlotState& slot) {
+    EventPipelineSchedulerState::SlotState::SubmitWorker* worker = slot.submitWorker.get();
+    testAssert(worker != NULL && worker->workerThread != NULL);
+    {
+      unique_lock<std::mutex> lock(worker->taskMutex);
+      while(!worker->taskDone.load(std::memory_order_acquire))
+        worker->taskCondition.wait(lock);
+    }
+    consumeInferenceSubmission(slot);
+  };
+  auto maybeFinishInferenceSubmission = [&](EventPipelineSchedulerState::SlotState& slot) {
+    if(slot.submitting == NULL)
+      return false;
+    EventPipelineSchedulerState::SlotState::SubmitWorker* worker = slot.submitWorker.get();
+    testAssert(worker != NULL && worker->workerThread != NULL);
+    if(!worker->taskDone.load(std::memory_order_acquire))
+      return false;
+
+    consumeInferenceSubmission(slot);
+    EventPipelineSchedulerState::BatchState* batch = slot.submitting;
+    slot.submitting = NULL;
+    if(slot.front == NULL) {
+      NeuralNet::enqueueEventPipelineOutput(
+        slot.gpuHandle,slot.serverBuf->inputBuffers,(int)batch->requests.size()
+      );
+      slot.front = batch;
+    }
+    else {
+      testAssert(slot.next == NULL);
+      slot.next = batch;
+    }
+    return true;
+  };
+  auto launchFillingBatch = [&]() {
+    testAssert(state->filling != NULL && state->fillingSlotIdx >= 0);
+    EventPipelineSchedulerState::SlotState& slot = state->slots[state->fillingSlotIdx];
+    EventPipelineSchedulerState::BatchState* batch = state->filling;
+    testAssert(!batch->requests.empty());
+    testAssert(slotCanAccept(slot));
+
+    for(NNResultBuf* request : batch->requests) {
+      if(request->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
+        if(currentDoRandomize.load(std::memory_order_acquire))
+          request->symmetry = state->rand.nextUInt(SymmetryHelpers::NUM_SYMMETRIES);
+        else
+          request->symmetry = currentDefaultSymmetry.load(std::memory_order_acquire);
+      }
+    }
+    allocateOutputs(*batch);
+    const int requestBatchSize = (int)batch->requests.size();
+    const int inferenceBatchSize = batchAwareDispatch ? maxBatchSize : requestBatchSize;
+    vector<NNResultBuf*> inferenceRequests;
+    NNResultBuf** inferenceRequestData = batch->requests.data();
+    if(inferenceBatchSize > requestBatchSize) {
+      inferenceRequests = batch->requests;
+      inferenceRequests.resize(inferenceBatchSize,batch->requests.back());
+      inferenceRequestData = inferenceRequests.data();
+    }
+    NeuralNet::prepareEventPipelineInput(
+      slot.gpuHandle,slot.serverBuf->inputBuffers,inferenceBatchSize,inferenceRequestData
+    );
+    // Each lane has a persistent host worker. Submission is deliberately
+    // nonblocking so independent CUDA streams can be filled concurrently.
+    testAssert(slot.submitting == NULL);
+    slot.submitting = batch;
+    beginInferenceSubmission(slot,inferenceBatchSize);
+    state->filling = NULL;
+    state->fillingSlotIdx = -1;
+  };
+  auto maybeLaunchFillingBatch = [&]() {
+    if(state->filling == NULL || state->filling->requests.empty())
+      return false;
+    EventPipelineSchedulerState::SlotState& slot = state->slots[state->fillingSlotIdx];
+    int desiredBatchSize = std::min(maxBatchSize,currentBatchSize.load(std::memory_order_acquire));
+    bool full = (int)state->filling->requests.size() >= desiredBatchSize;
+    bool shouldLaunch = batchAwareDispatch ?
+      full || deviceIsIdle(slot.gpuIdx) : full || queryQueue.size() == 0;
+    if(!shouldLaunch || !slotCanAccept(slot))
+      return false;
+    launchFillingBatch();
+    return true;
+  };
+  auto finalizeFront = [&](EventPipelineSchedulerState::SlotState& slot) {
+    EventPipelineSchedulerState::BatchState* completed = slot.front;
+    testAssert(completed != NULL);
+    int batchSize = (int)completed->requests.size();
+    NeuralNet::finishEventPipelineOutput(
+      slot.gpuHandle,slot.serverBuf->inputBuffers,batchSize,
+      completed->requests.data(),completed->outputs
+    );
+
+    m_numRowsProcessed.fetch_add(batchSize,std::memory_order_relaxed);
+    m_numBatchesProcessed.fetch_add(1,std::memory_order_relaxed);
+    {
+      lock_guard<std::mutex> lock(bufferMutex);
+      testAssert(slot.slotIdx >= 0 &&
+                 slot.slotIdx < (int)m_numRowsProcessedByServerThread.size());
+      m_numRowsProcessedByServerThread[slot.slotIdx] += batchSize;
+      m_numBatchesProcessedByServerThread[slot.slotIdx] += 1;
+    }
+    for(int row = 0; row < batchSize; row++) {
+      NNResultBuf* resultBuf = completed->requests[row];
+      unique_lock<std::mutex> resultLock(resultBuf->resultMutex);
+      resultBuf->result = shared_ptr<NNOutput>(completed->outputs[row]);
+      completed->outputs[row] = NULL;
+      resultBuf->hasResult = true;
+      resultBuf->clientWaitingForResult.notify_all();
+    }
+    deleteBatch(slot.front);
+
+    {
+      unique_lock<std::mutex> lock(bufferMutex);
+      numOngoingEvals -= batchSize;
+      if(numWaitingEvals > 0) {
+        numEvalsToAwaken += numWaitingEvals;
+        numWaitingEvals = 0;
+        waitingForFinish.notify_all();
+      }
+    }
+
+    if(slot.next != NULL) {
+      NeuralNet::enqueueEventPipelineOutput(
+        slot.gpuHandle,slot.serverBuf->inputBuffers,(int)slot.next->requests.size()
+      );
+      slot.front = slot.next;
+      slot.next = NULL;
+    }
+  };
+
+  bool startupComplete = false;
+  try {
+    state->slots.resize(gpuIdxByServerThread.size());
+    for(size_t i = 0; i < gpuIdxByServerThread.size(); i++) {
+      EventPipelineSchedulerState::SlotState& slot = state->slots[i];
+      slot.slotIdx = (int)i;
+      slot.gpuIdx = gpuIdxByServerThread[i];
+      slot.serverBuf = new NNServerBuf(*this,loadedModel);
+      slot.computeStream = NeuralNet::createComputeStream(slot.gpuIdx);
+      slot.gpuHandle = NeuralNet::createComputeHandle(
+        computeContext,loadedModel,logger,maxBatchSize,requireExactNNLen,
+        inputsUseNHWC,slot.gpuIdx,slot.slotIdx,slot.computeStream
+      );
+      maybeWarmupComputeHandle(slot.gpuHandle,slot.slotIdx);
+      NeuralNet::enableEventGatedPipeline(slot.gpuHandle,slot.serverBuf->inputBuffers);
+      slot.usingFP16 = NeuralNet::isUsingFP16(slot.gpuHandle);
+      slot.submitWorker = std::make_unique<EventPipelineSchedulerState::SlotState::SubmitWorker>();
+      EventPipelineSchedulerState::SlotState::SubmitWorker* worker = slot.submitWorker.get();
+      EventPipelineSchedulerState::SlotState* slotPtr = &slot;
+      worker->workerThread = new thread([slotPtr,worker]() {
+        unique_lock<std::mutex> lock(worker->taskMutex);
+        while(true) {
+          while(!worker->stop && !worker->hasTask)
+            worker->taskCondition.wait(lock);
+          if(worker->stop)
+            break;
+          int batchSize = worker->batchSize;
+          worker->hasTask = false;
+          lock.unlock();
+          try {
+            NeuralNet::launchEventPipelineInference(
+              slotPtr->gpuHandle,slotPtr->serverBuf->inputBuffers,batchSize
+            );
+          }
+          catch(...) {
+            lock.lock();
+            worker->error = current_exception();
+            worker->taskDone.store(true,std::memory_order_release);
+            worker->taskCondition.notify_all();
+            continue;
+          }
+          lock.lock();
+          worker->taskDone.store(true,std::memory_order_release);
+          worker->taskCondition.notify_all();
+        }
+      });
+      if(cudaEventPipelineUseGraph) {
+        beginInferenceSubmission(slot,maxBatchSize);
+        waitForInferenceSubmission(slot);
+        NeuralNet::enqueueEventPipelineOutput(
+          slot.gpuHandle,slot.serverBuf->inputBuffers,maxBatchSize
+        );
+        while(!NeuralNet::eventPipelineOutputReady(slot.gpuHandle))
+          std::this_thread::yield();
+      }
+    }
+
+    {
+      lock_guard<std::mutex> lock(bufferMutex);
+      serverThreadsIsUsingFP16.assign(state->slots.size(),0);
+      for(const EventPipelineSchedulerState::SlotState& slot : state->slots)
+        serverThreadsIsUsingFP16[slot.slotIdx] = slot.usingFP16 ? 1 : 0;
+      numServerThreadsStartingUp--;
+      mainThreadWaitingForSpawn.notify_all();
+    }
+    startupComplete = true;
+    if(logger != NULL)
+      logger->write("CUDA event-gated single-slot scheduler started");
+
+    NNResultBuf* deferredRequest = NULL;
+    while(true) {
+      for(EventPipelineSchedulerState::SlotState& slot : state->slots)
+        (void)maybeFinishInferenceSubmission(slot);
+
+      for(EventPipelineSchedulerState::SlotState& slot : state->slots) {
+        if(slot.front != NULL && NeuralNet::eventPipelineOutputReady(slot.gpuHandle))
+          finalizeFront(slot);
+      }
+
+      (void)maybeLaunchFillingBatch();
+
+      NNResultBuf* request = deferredRequest;
+      if(request == NULL) {
+        NNResultBuf* popped = NULL;
+        if(queryQueue.tryPop(popped))
+          request = popped;
+      }
+      deferredRequest = NULL;
+      if(request != NULL) {
+        if(state->filling == NULL) {
+          int slotIdx = selectFillingSlot();
+          if(slotIdx < 0)
+            deferredRequest = request;
+          else {
+            state->filling = new EventPipelineSchedulerState::BatchState();
+            state->fillingSlotIdx = slotIdx;
+          }
+        }
+        if(deferredRequest == NULL) {
+          int desiredBatchSize = std::min(maxBatchSize,currentBatchSize.load(std::memory_order_acquire));
+          if((int)state->filling->requests.size() >= desiredBatchSize) {
+            deferredRequest = request;
+            (void)maybeLaunchFillingBatch();
+          }
+          else {
+            state->filling->requests.push_back(request);
+            (void)maybeLaunchFillingBatch();
+          }
+        }
+      }
+
+      bool allSlotsIdle = true;
+      for(const EventPipelineSchedulerState::SlotState& slot : state->slots) {
+        if(slot.front != NULL || slot.next != NULL || slot.submitting != NULL) {
+          allSlotsIdle = false;
+          break;
+        }
+      }
+      if(queryQueue.isReadOnly() && deferredRequest == NULL &&
+         state->filling == NULL && allSlotsIdle)
+        break;
+      std::this_thread::yield();
+    }
+  }
+  catch(const exception& e) {
+    if(!startupComplete) {
+      lock_guard<std::mutex> lock(bufferMutex);
+      state->startupFailed = true;
+      state->startupFailureMessage = e.what();
+      numServerThreadsStartingUp = 0;
+      mainThreadWaitingForSpawn.notify_all();
+    }
+    else
+      Global::fatalError(string("CUDA event pipeline scheduler failed: ") + e.what());
+  }
+
+  deleteBatch(state->filling);
+  for(EventPipelineSchedulerState::SlotState& slot : state->slots) {
+    deleteBatch(slot.front);
+    deleteBatch(slot.next);
+    deleteBatch(slot.submitting);
+    if(slot.submitWorker != NULL && slot.submitWorker->workerThread != NULL) {
+      {
+        lock_guard<std::mutex> lock(slot.submitWorker->taskMutex);
+        slot.submitWorker->stop = true;
+        slot.submitWorker->taskCondition.notify_all();
+      }
+      slot.submitWorker->workerThread->join();
+      delete slot.submitWorker->workerThread;
+      slot.submitWorker->workerThread = NULL;
+    }
+    if(slot.gpuHandle != NULL)
+      NeuralNet::freeComputeHandle(slot.gpuHandle);
+    if(slot.computeStream != NULL)
+      NeuralNet::freeComputeStream(slot.computeStream);
+    delete slot.serverBuf;
+    slot.gpuHandle = NULL;
+    slot.computeStream = NULL;
+    slot.serverBuf = NULL;
+  }
+}
+#endif
 
 static void serveEvals(
   string randSeedThisThread,
@@ -410,6 +981,10 @@ void NNEvaluator::setNumThreads(const vector<int>& gpuIdxByServerThr) {
     throw StringError("NNEvaluator::setNumThreads called when threads were already running!");
   numThreads = (int)gpuIdxByServerThr.size();
   gpuIdxByServerThread = gpuIdxByServerThr;
+  batchingDispatcher.resetGpuIdxByServerThread(gpuIdxByServerThr);
+  lock_guard<std::mutex> lock(bufferMutex);
+  m_numRowsProcessedByServerThread.assign(numThreads,0);
+  m_numBatchesProcessedByServerThread.assign(numThreads,0);
 }
 
 void NNEvaluator::spawnServerThreads() {
@@ -423,20 +998,48 @@ void NNEvaluator::spawnServerThreads() {
 
   queryQueue.unsetReadOnly();
 
-  numServerThreadsStartingUp = numThreads;
-  for(int i = 0; i<numThreads; i++) {
-    int gpuIdxForThisThread = gpuIdxByServerThread[i];
+  bool useEventPipelineScheduler = false;
+#ifdef USE_CUDA_BACKEND
+  useEventPipelineScheduler = cudaAsyncInferPipeline && !debugSkipNeuralNet;
+#endif
+  if(useEventPipelineScheduler)
+    eventPipelineSchedulerState = new EventPipelineSchedulerState(randSeed + ":EventPipelineScheduler");
+
+  if(useEventPipelineScheduler) {
+    numServerThreadsStartingUp = 1;
     string randSeedThisThread = randSeed + ":NNEvalServerThread:" + Global::intToString(numServerThreadsEverSpawned);
     numServerThreadsEverSpawned++;
-    std::thread* thread = new std::thread(
-      &serveEvals,randSeedThisThread,this,loadedModel,gpuIdxForThisThread,i
-    );
+    std::thread* thread = new std::thread([this,randSeedThisThread]() {
+#ifdef USE_CUDA_BACKEND
+      serveEventPipelineScheduler(randSeedThisThread);
+#endif
+    });
     serverThreads.push_back(thread);
+  }
+  else {
+    numServerThreadsStartingUp = numThreads;
+    for(int i = 0; i<numThreads; i++) {
+      int gpuIdxForThisThread = gpuIdxByServerThread[i];
+      string randSeedThisThread = randSeed + ":NNEvalServerThread:" + Global::intToString(numServerThreadsEverSpawned);
+      numServerThreadsEverSpawned++;
+      std::thread* thread = new std::thread(
+        &serveEvals,randSeedThisThread,this,loadedModel,gpuIdxForThisThread,i
+      );
+      serverThreads.push_back(thread);
+    }
   }
 
   unique_lock<std::mutex> lock(bufferMutex);
   while(numServerThreadsStartingUp > 0)
     mainThreadWaitingForSpawn.wait(lock);
+  bool startupFailed = eventPipelineSchedulerState != NULL && eventPipelineSchedulerState->startupFailed;
+  string startupFailureMessage = startupFailed ?
+    eventPipelineSchedulerState->startupFailureMessage : string();
+  lock.unlock();
+  if(startupFailed) {
+    killServerThreads();
+    throw StringError("Failed to start CUDA event pipeline scheduler: " + startupFailureMessage);
+  }
 }
 
 void NNEvaluator::killServerThreads() {
@@ -444,6 +1047,7 @@ void NNEvaluator::killServerThreads() {
   isKilled = true;
   lock.unlock();
   queryQueue.setReadOnly();
+  batchingDispatcher.notify();
 
   waitingForFinish.notify_all();
 
@@ -453,6 +1057,8 @@ void NNEvaluator::killServerThreads() {
     delete serverThreads[i];
   serverThreads.clear();
   serverThreadsIsUsingFP16.clear();
+  delete eventPipelineSchedulerState;
+  eventPipelineSchedulerState = NULL;
 
   // Can unset now that threads are dead
   isKilled = false;
@@ -819,8 +1425,9 @@ void NNEvaluator::serve(
   unique_lock<std::mutex> lock(bufferMutex,std::defer_lock);
   while(true) {
     resultBufs.clear();
-    int desiredBatchSize = std::min(maxBatchSize, currentBatchSize.load(std::memory_order_acquire));
-    bool gotAnything = queryQueue.waitPopUpToN(resultBufs,desiredBatchSize);
+    bool gotAnything = batchingDispatcher.waitForBatch(
+      queryQueue,resultBufs,maxBatchSize,currentBatchSize,serverThreadIdx
+    );
     // Queue being closed is a signal that we're done.
     if(!gotAnything)
       break;
@@ -913,6 +1520,23 @@ void NNEvaluator::serve(
         outputBuf.push_back(emptyOutput);
       }
 
+      const int inferenceRows = batchAwareDispatch ? maxBatchSize : numRows;
+      vector<NNResultBuf*> inferenceResultBufs;
+      NNResultBuf** inferenceResultData = resultBufs.data();
+      if(inferenceRows > numRows) {
+        inferenceResultBufs = resultBufs;
+        inferenceResultBufs.resize(inferenceRows,resultBufs.back());
+        inferenceResultData = inferenceResultBufs.data();
+        for(int row = numRows; row < inferenceRows; row++) {
+          NNOutput* dummyOutput = new NNOutput();
+          dummyOutput->nnXLen = nnXLen;
+          dummyOutput->nnYLen = nnYLen;
+          dummyOutput->whiteOwnerMap = resultBufs.back()->includeOwnerMap ?
+            new float[nnXLen*nnYLen] : NULL;
+          outputBuf.push_back(dummyOutput);
+        }
+      }
+
       for(int row = 0; row<numRows; row++) {
         if(resultBufs[row]->symmetry == NNInputs::SYMMETRY_NOTSPECIFIED) {
           if(doRandomize)
@@ -924,8 +1548,13 @@ void NNEvaluator::serve(
         }
       }
 
-      NeuralNet::getOutput(gpuHandle, buf.inputBuffers, numRows, resultBufs.data(), outputBuf);
-      testAssert(outputBuf.size() == numRows);
+      NeuralNet::getOutput(
+        gpuHandle,buf.inputBuffers,inferenceRows,inferenceResultData,outputBuf
+      );
+      testAssert(outputBuf.size() == inferenceRows);
+      for(int row = numRows; row < inferenceRows; row++)
+        delete outputBuf[row];
+      outputBuf.resize(numRows);
 
       m_numRowsProcessed.fetch_add(numRows, std::memory_order_relaxed);
       m_numBatchesProcessed.fetch_add(1, std::memory_order_relaxed);
@@ -948,6 +1577,12 @@ void NNEvaluator::serve(
 
     // Lock and update stats before looping again
     lock.lock();
+    if(!debugSkipNeuralNet) {
+      testAssert(serverThreadIdx >= 0 &&
+                 serverThreadIdx < (int)m_numRowsProcessedByServerThread.size());
+      m_numRowsProcessedByServerThread[serverThreadIdx] += numRows;
+      m_numBatchesProcessedByServerThread[serverThreadIdx] += 1;
+    }
     numOngoingEvals -= numRows;
 
     if(numWaitingEvals > 0) {
@@ -956,6 +1591,7 @@ void NNEvaluator::serve(
       waitingForFinish.notify_all();
     }
     lock.unlock();
+    batchingDispatcher.completeBatch(serverThreadIdx);
     continue;
   }
 
@@ -1147,6 +1783,7 @@ void NNEvaluator::evaluate(
 
   bool suc = queryQueue.forcePush(&buf);
   testAssert(suc);
+  batchingDispatcher.notify();
 
   unique_lock<std::mutex> resultLock(buf.resultMutex);
   while(!buf.hasResult)
@@ -1568,4 +2205,43 @@ void NNCacheTable::clear() {
     }
     buf.reset();
   }
+}
+
+void NNEvaluator::evaluatePreparedRaw(NNResultBuf& buf, bool includeOwnerMap) {
+  testAssert(!isKilled);
+  if(debugSkipNeuralNet)
+    throw StringError("evaluatePreparedRaw requires a real neural net");
+
+  const size_t expectedSpatial =
+    (size_t)NNModelVersion::getNumSpatialFeatures(modelVersion) * nnXLen * nnYLen;
+  const size_t expectedGlobal = (size_t)NNModelVersion::getNumGlobalFeatures(modelVersion);
+  const size_t expectedMeta = (size_t)numInputMetaChannels;
+  if(buf.rowSpatialBuf.size() != expectedSpatial)
+    throw StringError("evaluatePreparedRaw received the wrong spatial feature length");
+  if(buf.rowGlobalBuf.size() != expectedGlobal)
+    throw StringError("evaluatePreparedRaw received the wrong global feature length");
+  if(buf.rowMetaBuf.size() != expectedMeta || buf.hasRowMeta != (expectedMeta > 0))
+    throw StringError("evaluatePreparedRaw received the wrong metadata feature length");
+
+  {
+    lock_guard<std::mutex> resultLock(buf.resultMutex);
+    buf.hasResult = false;
+    buf.result.reset();
+  }
+  buf.includeOwnerMap = includeOwnerMap;
+  buf.boardXSizeForServer = nnXLen;
+  buf.boardYSizeForServer = nnYLen;
+
+  {
+    unique_lock<std::mutex> lock(bufferMutex);
+    numOngoingEvals += 1;
+  }
+
+  bool suc = queryQueue.forcePush(&buf);
+  testAssert(suc);
+  batchingDispatcher.notify();
+
+  unique_lock<std::mutex> resultLock(buf.resultMutex);
+  while(!buf.hasResult)
+    buf.clientWaitingForResult.wait(resultLock);
 }

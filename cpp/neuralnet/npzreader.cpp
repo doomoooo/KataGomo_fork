@@ -22,15 +22,6 @@ uint32_t readU32(const vector<unsigned char>& b, size_t off) {
          ((uint32_t)b[off+2] << 16) | ((uint32_t)b[off+3] << 24);
 }
 
-uint64_t readU64(const vector<unsigned char>& b, size_t off) {
-  if(off + 8 > b.size())
-    throw StringError("npz: truncated uint64");
-  uint64_t v = 0;
-  for(int i = 7; i >= 0; i--)
-    v = (v << 8) | b[off + (size_t)i];
-  return v;
-}
-
 struct CentralEntry {
   string name;
   uint16_t method;
@@ -147,7 +138,11 @@ void parseNpyHeader(
 
 }  // namespace
 
-NpzReader::NpzReader(const string& fileName) {
+NpzReader::NpzReader(const string& fileName)
+  : NpzReader(fileName,{})
+{}
+
+NpzReader::NpzReader(const string& fileName, const set<string>& requestedNames) {
   ifstream in(fileName, ios::binary);
   if(!in)
     throw StringError("npz: could not open " + fileName);
@@ -188,6 +183,15 @@ NpzReader::NpzReader(const string& fileName) {
   }
 
   for(const CentralEntry& e : entries) {
+    string arrayName = e.name;
+    if(arrayName.size() >= 4 &&
+       arrayName.compare(arrayName.size() - 4,4,".npy") == 0)
+      arrayName.resize(arrayName.size() - 4);
+    else
+      continue;
+    if(!requestedNames.empty() && requestedNames.find(arrayName) == requestedNames.end())
+      continue;
+
     if(e.localHeaderOffset + 30 > whole.size() || readU32(whole, e.localHeaderOffset) != 0x04034b50)
       throw StringError("npz: malformed local header for " + e.name);
     uint16_t nameLen = readU16(whole, e.localHeaderOffset + 26);
@@ -217,10 +221,8 @@ NpzReader::NpzReader(const string& fileName) {
     else {
       throw StringError("npz: unsupported compression method " + Global::intToString(e.method) + " for " + e.name);
     }
-    if(e.name.size() >= 4 && e.name.compare(e.name.size() - 4, 4, ".npy") == 0) {
-      NpzArray arr;
-      parseNpyHeader(payload, arr);
-      arrays[e.name.substr(0, e.name.size() - 4)] = std::move(arr);
-    }
+    NpzArray arr;
+    parseNpyHeader(payload,arr);
+    arrays[arrayName] = std::move(arr);
   }
 }

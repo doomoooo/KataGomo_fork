@@ -74,7 +74,7 @@ using ThreadblockShape = cutlass::gemm::GemmShape<128, 64, 32>;
 using WarpShape = cutlass::gemm::GemmShape<64, 32, 32>;
 using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
 
-template<typename SwiGLUOp>
+template<typename SwiGLUOp, int Swizzle>
 using DualGemmT = cutlass::gemm::device::DualGemm<
   Element,
   cutlass::layout::RowMajor,
@@ -92,7 +92,7 @@ using DualGemmT = cutlass::gemm::device::DualGemm<
   EpilogueOutputOp,
   EpilogueOutputOp,
   SwiGLUOp,
-  cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<KATAGO_DUAL_GEMM_SWIZZLE>,
+  cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<Swizzle>,
   3,
   false,
   false,
@@ -100,8 +100,9 @@ using DualGemmT = cutlass::gemm::device::DualGemm<
   8,
   8>;
 
-using DualGemm = DualGemmT<SwiGLUOutputOp>;
-using DualGemmHalf2Tanh = DualGemmT<SwiGLUHalf2TanhOutputOp>;
+using DualGemmSwizzle2 = DualGemmT<SwiGLUOutputOp,2>;
+using DualGemmSwizzle4 = DualGemmT<SwiGLUOutputOp,4>;
+using DualGemmHalf2Tanh = DualGemmT<SwiGLUHalf2TanhOutputOp,2>;
 
 template<typename Gemm>
 typename Gemm::Arguments makeArguments(
@@ -133,16 +134,17 @@ typename Gemm::Arguments makeArguments(
 
 } // namespace
 
-struct Sm89DualGemmSwiGLUB13::Impl {
+struct Sm89DualGemmSwiGLU::Impl {
   const half* weights;
-  DualGemm op;
+  DualGemmSwizzle2 swizzle2Op;
+  DualGemmSwizzle4 swizzle4Op;
   DualGemmHalf2Tanh half2TanhOp;
-  bool useHalf2Tanh;
+  const std::string tactic;
   bool initialized;
 
-  Impl(const half* weights_, bool useHalf2Tanh_)
-    : weights(weights_), op(), half2TanhOp(),
-      useHalf2Tanh(useHalf2Tanh_), initialized(false)
+  Impl(const half* weights_, const std::string& tactic_)
+    : weights(weights_), swizzle2Op(), swizzle4Op(), half2TanhOp(),
+      tactic(tactic_), initialized(false)
   {}
 
   template<typename Gemm>
@@ -167,22 +169,26 @@ struct Sm89DualGemmSwiGLUB13::Impl {
   }
 
   bool apply(const half* input, half* output, int tokens, cudaStream_t stream) {
-    return useHalf2Tanh
-      ? applyImpl(half2TanhOp, input, output, tokens, stream)
-      : applyImpl(op, input, output, tokens, stream);
+    if(tactic == "m128-n64-k32-w64-n32-s3-sw2-exp")
+      return applyImpl(swizzle2Op, input, output, tokens, stream);
+    if(tactic == "m128-n64-k32-w64-n32-s3-sw4-exp")
+      return applyImpl(swizzle4Op, input, output, tokens, stream);
+    if(tactic == "m128-n64-k32-w64-n32-s3-sw2-tanh-half2")
+      return applyImpl(half2TanhOp, input, output, tokens, stream);
+    return false;
   }
 };
 
-Sm89DualGemmSwiGLUB13::Sm89DualGemmSwiGLUB13(
+Sm89DualGemmSwiGLU::Sm89DualGemmSwiGLU(
   const half* weights,
-  bool useHalf2Tanh
+  const std::string& tactic
 )
-  : impl(std::make_unique<Impl>(weights, useHalf2Tanh))
+  : impl(std::make_unique<Impl>(weights, tactic))
 {}
 
-Sm89DualGemmSwiGLUB13::~Sm89DualGemmSwiGLUB13() = default;
+Sm89DualGemmSwiGLU::~Sm89DualGemmSwiGLU() = default;
 
-bool Sm89DualGemmSwiGLUB13::apply(
+bool Sm89DualGemmSwiGLU::apply(
   const half* input,
   half* output,
   int batchSize,

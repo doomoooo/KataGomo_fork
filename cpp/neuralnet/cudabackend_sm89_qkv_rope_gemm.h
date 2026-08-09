@@ -11,13 +11,14 @@ namespace Sm89Backend {
 
 // Fixed-channel/19x19 FP16 QKV projection. The default path rotates Q and K in the
 // CUTLASS epilogue; the split test path writes plain QKV for standalone RoPE.
-class Sm89QKVRoPEGemmB13 {
+class Sm89QKVRoPEGemm {
  public:
-  Sm89QKVRoPEGemmB13(
-    const half* weights, const float* freqs, bool splitRoPE, int plainVariant);
-  ~Sm89QKVRoPEGemmB13();
-  Sm89QKVRoPEGemmB13(const Sm89QKVRoPEGemmB13&) = delete;
-  Sm89QKVRoPEGemmB13& operator=(const Sm89QKVRoPEGemmB13&) = delete;
+  Sm89QKVRoPEGemm(
+    const half* weights, const float* freqs, const float2* cosSinTable,
+    bool splitRoPE, int plainVariant);
+  ~Sm89QKVRoPEGemm();
+  Sm89QKVRoPEGemm(const Sm89QKVRoPEGemm&) = delete;
+  Sm89QKVRoPEGemm& operator=(const Sm89QKVRoPEGemm&) = delete;
 
   bool apply(
     const half* input,

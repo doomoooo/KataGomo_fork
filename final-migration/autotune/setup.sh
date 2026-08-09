@@ -48,7 +48,7 @@ default_build_jobs() {
   printf '%s\n' "${cpu_jobs}"
 }
 
-for command_name in bash tar sha256sum readlink find uname getconf gcc g++ flock; do need "${command_name}"; done
+for command_name in bash tar sha256sum readlink find uname getconf gcc g++; do need "${command_name}"; done
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] \
   || die "the release supports Linux x86-64 only"
 glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
@@ -137,6 +137,37 @@ log "installing pinned build and binary prerequisites without an index"
   --require-hashes -r "${SCRIPT_DIR}/payload/python-build-requirements.lock"
 "${python_bin}" -m pip install --no-index --find-links "${wheelhouse}" \
   --no-deps --require-hashes -r "${SCRIPT_DIR}/payload/python-binary-requirements.lock"
+
+mapfile -t corpus_files < <(find "${PREFIX}/assets" -maxdepth 1 -type f \
+  -name '*-19x19-8192-seed*-full19.npz' -print | sort)
+mapfile -t corpus_manifests < <(find "${PREFIX}/assets" -maxdepth 1 -type f \
+  -name '*-19x19-8192-seed*-full19.manifest.json' -print | sort)
+(( ${#corpus_files[@]} == 1 && ${#corpus_manifests[@]} == 1 )) \
+  || die "the release must carry exactly one 8192-row corpus and manifest"
+log "validating the frozen latest-at-release training-data corpus"
+"${python_bin}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
+  --repo "${PREFIX}/repo" --python "${python_bin}" \
+  --output-dir "${PREFIX}/assets" --work-dir "${PREFIX}/training-data" \
+  --corpus "${corpus_files[0]}" --manifest "${corpus_manifests[0]}" \
+  --result-json "${PREFIX}/state/accuracy-corpus.json"
+
+fp32_golden="${PREFIX}/assets/replay-fixed-fp32-full19.krnn"
+fp32_metadata="${PREFIX}/assets/replay-fixed-fp32-full19.json"
+if [[ -e "${fp32_golden}" || -e "${fp32_metadata}" ]]; then
+  [[ -r "${fp32_golden}" && -r "${fp32_metadata}" ]] \
+    || die "the FP32 reference and metadata must be carried together"
+  mapfile -t fp32_identity < <("${python_bin}" -c \
+    'import json,sys; d=json.load(open(sys.argv[1])); print(d["reference_sha256"]); print(d["model_sha256"]); print(d["corpus_sha256"])' \
+    "${fp32_metadata}")
+  actual_fp32_sha="$(sha256sum "${fp32_golden}" | awk '{print $1}')"
+  [[ "${actual_fp32_sha}" == "${fp32_identity[0]}" ]] \
+    || die "the immutable FP32 reference checksum differs from its metadata"
+  model_asset="${PREFIX}/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz"
+  [[ "$(sha256sum "${model_asset}" | awk '{print $1}')" == "${fp32_identity[1]}" ]] \
+    || die "the immutable FP32 reference belongs to a different model"
+  [[ "$(sha256sum "${corpus_files[0]}" | awk '{print $1}')" == "${fp32_identity[2]}" ]] \
+    || die "the immutable FP32 reference belongs to a different corpus"
+fi
 
 native_marker="${PREFIX}/state/native-built"
 if [[ ! -e "${native_marker}" ]]; then

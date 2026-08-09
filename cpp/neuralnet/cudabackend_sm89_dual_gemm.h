@@ -4,16 +4,17 @@
 #include "../neuralnet/cudaincludes.h"
 
 #include <memory>
+#include <string>
 
 namespace Sm89Backend {
 
 #ifdef KATAGO_ENABLE_SM89_DUAL_GEMM
-class Sm89DualGemmSwiGLUB13 {
+class Sm89DualGemmSwiGLU {
  public:
-  Sm89DualGemmSwiGLUB13(const half* weights, bool useHalf2Tanh);
-  ~Sm89DualGemmSwiGLUB13();
-  Sm89DualGemmSwiGLUB13(const Sm89DualGemmSwiGLUB13&) = delete;
-  Sm89DualGemmSwiGLUB13& operator=(const Sm89DualGemmSwiGLUB13&) = delete;
+  Sm89DualGemmSwiGLU(const half* weights, const std::string& tactic);
+  ~Sm89DualGemmSwiGLU();
+  Sm89DualGemmSwiGLU(const Sm89DualGemmSwiGLU&) = delete;
+  Sm89DualGemmSwiGLU& operator=(const Sm89DualGemmSwiGLU&) = delete;
 
   bool apply(
     const half* input,

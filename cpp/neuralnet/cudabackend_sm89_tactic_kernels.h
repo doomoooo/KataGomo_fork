@@ -21,7 +21,6 @@ struct FusedFFNAotTactic {
   int batchSize;
   int streams;
   const char* id;
-  bool automaticWinner;
   FusedFFNAotLaunchFn launch;
 };
 
@@ -30,7 +29,6 @@ struct ResidualGemmAotTactic {
   int streams;
   int inputChannels;
   const char* id;
-  bool automaticWinner;
   ResidualGemmAotLaunchFn launch;
 };
 

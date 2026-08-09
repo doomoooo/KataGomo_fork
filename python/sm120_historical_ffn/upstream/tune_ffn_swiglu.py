@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Reproducible fixed-B19 TileLang dual-GEMM + SwiGLU audit.
 
-Compilation is isolated from timed workers. Every timed worker takes the shared
-GPU lock and is killed by the parent after 15 seconds.
+Compilation is isolated from timed workers. Each timed worker is killed by the
+parent after 15 seconds.
 """
 
 import argparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
-import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -22,7 +21,6 @@ import torch
 import onnx_kernels as kernels
 
 
-GPU_LOCK = Path("/data/wangyize/katago/locks/gpu-benchmark.lock")
 RESULT_DIR = Path("/data/wangyize/katago/results/tilelang-katago")
 TIMEOUT_SECONDS = 15.0
 COMPILE_TIMEOUT_SECONDS = 180.0
@@ -576,13 +574,10 @@ def main() -> None:
     if args.compile_only:
         print("RESULT " + json.dumps(source_metadata(kernel.get_kernel_source())), flush=True)
         return
-    GPU_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    with GPU_LOCK.open("a+") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        if args.profile:
-            run_profile(config)
-        else:
-            print("RESULT " + json.dumps(run_timed(config)), flush=True)
+    if args.profile:
+        run_profile(config)
+    else:
+        print("RESULT " + json.dumps(run_timed(config)), flush=True)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import pathlib
 import shlex
@@ -35,6 +36,18 @@ def sha256(path: pathlib.Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def config_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def config_string(values: dict[str, object]) -> str:
+    return ",".join(
+        f"{key}={config_value(values[key])}" for key in sorted(values)
+    )
 
 
 def common_cmake(prefix: pathlib.Path) -> list[str]:
@@ -136,12 +149,12 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
     bundle = out / "artifact-bundle.json"
 
     if not space.exists() or args.force:
-        run([str(python), "python/portable_tactic_workflow.py", "space",
+        run([str(python), "python/cuda_tactic_workflow.py", "space",
              "--architecture", "sm89", "--gpu-class", paths["gpu_class"].name,
              "--device", str(args.device), "--batches", args.batches,
              "--streams", str(args.streams), "--output", str(space)], cwd=repo, env=env)
     if not generation.exists() or args.force:
-        run([str(python), "python/portable_tactic_workflow.py", "generation-plan",
+        run([str(python), "python/cuda_tactic_workflow.py", "generation-plan",
              "--space", str(space), "--phase", "full", "--output", str(generation)], cwd=repo, env=env)
 
     for family, target in (("dual_ffn", dual), ("linear2", linear)):
@@ -177,7 +190,7 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
         run(configure, cwd=repo, env=env)
         run(["cmake", "--build", str(build), "--parallel", str(args.jobs)], cwd=repo, env=env)
     if not bundle.exists() or args.force:
-        run([str(python), "python/portable_tactic_workflow.py", "artifact-bundle",
+        run([str(python), "python/cuda_tactic_workflow.py", "artifact-bundle",
              "--space", str(space), "--binary", str(binary), "--manifests",
              str(dual / "manifest.json"), str(linear / "manifest.json"),
              "--output", str(bundle)], cwd=repo, env=env)
@@ -185,49 +198,16 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
     ensure_file(bundle, "SM89 artifact bundle")
 
 
-def sm89_discovery(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
-    repo, out, python = paths["repo"], paths["out"], paths["python"]
-    result = out / "discovery.json"
-    run([str(python), "python/portable_tactic_workflow.py", "scan",
-         "--space", str(out / "space.json"), "--binary", str(out / "build/katago"),
-         "--config", str(repo / "docs/baseline-configs/bench-cuda-gpu0-4090-s2.cfg"),
-         "--model", str(paths["model"]), "--model-identity", str(paths["model"]),
-         "--artifact-bundle", str(out / "artifact-bundle.json"),
-         "--device", str(args.device), "--streams", str(args.streams),
-         "--batches", args.batches, "--phase", "discovery",
-         "--iterations", str(args.discovery_iterations), "--warmup", str(args.warmup),
-         "--repeats", "1", "--min-improvement-fraction", "0.001", "--resume",
-         "--output", str(result), "--raw-dir", str(out / "raw-discovery")], cwd=repo, env=env)
-
-
-def sm89_gate(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
-    repo, out, python = paths["repo"], paths["out"], paths["python"]
-    gate = out / "long-gate.json"
-    plan = out / "tactic-plan.json"
-    run([str(python), "python/portable_tactic_workflow.py", "gate",
-         "--space", str(out / "space.json"), "--discovery", str(out / "discovery.json"),
-         "--binary", str(out / "build/katago"),
-         "--config", str(repo / "docs/baseline-configs/bench-cuda-gpu0-4090-s2.cfg"),
-         "--model", str(paths["model"]), "--model-identity", str(paths["model"]),
-         "--artifact-bundle", str(out / "artifact-bundle.json"), "--device", str(args.device),
-         "--batches", args.batches, "--iterations", str(args.gate_iterations),
-         "--warmup", str(args.warmup), "--repeats", str(args.gate_repeats),
-         "--output", str(gate), "--raw-dir", str(out / "raw-long")], cwd=repo, env=env)
-    run([str(python), "python/portable_tactic_workflow.py", "plan",
-         "--space", str(out / "space.json"), "--results", str(out / "discovery.json"),
-         str(gate), "--batches", args.batches, "--output", str(plan)], cwd=repo, env=env)
-
-
 def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
     space = out / "space.json"
     if not space.exists() or args.force:
-        run([str(python), "python/sm120_tactic_search.py", "space",
-             "--gpu-class", paths["gpu_class"].name, "--device", str(args.device),
-             "--batches", args.batches, "--streams", str(args.streams),
-             "--output", str(space)], cwd=repo, env=env)
+        run([str(python), "python/cuda_tactic_workflow.py", "space",
+             "--architecture", "sm120", "--gpu-class", paths["gpu_class"].name,
+             "--device", str(args.device), "--batches", args.batches,
+             "--streams", str(args.streams), "--output", str(space)], cwd=repo, env=env)
     manifests: dict[str, pathlib.Path] = {}
-    for family in ("ffn", "qkv", "linear2"):
+    for family in ("dual_ffn", "wide_qkv", "linear2", "outproj"):
         target = out / "fat" / family
         manifest = target / "manifest.json"
         manifests[family] = manifest
@@ -247,50 +227,303 @@ def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env:
                    "--build-dir", str(out / "build"), "--jobs", str(args.jobs),
                    "--generator-python", str(python), "--fa4-python", str(python),
                    "--cutlass-root", str(paths["prefix"] / "sources/cutlass"),
-                   "--tilelang-ffn-manifest", str(manifests["ffn"]),
-                   "--tilelang-qkv-manifest", str(manifests["qkv"]),
-                   "--tilelang-linear2-manifest", str(manifests["linear2"])]
+                   "--tilelang-dual-ffn-manifest", str(manifests["dual_ffn"]),
+                   "--tilelang-wide-qkv-manifest", str(manifests["wide_qkv"]),
+                   "--tilelang-linear2-manifest", str(manifests["linear2"]),
+                   "--tilelang-outproj-manifest", str(manifests["outproj"])]
         for cmake_arg in common_cmake(paths["prefix"]):
             command.append(f"--cmake-arg={cmake_arg}")
         run(command, cwd=repo, env=env)
     ensure_file(manifest, "SM120 fat bundle")
+    bundle = out / "artifact-bundle.json"
+    coordinate_payload = load_json(manifest)
+    binary = pathlib.Path(coordinate_payload["binary"])
+    if not bundle.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "artifact-bundle",
+             "--space", str(space), "--binary", str(binary),
+             "--manifests", str(manifest), "--output", str(bundle)],
+            cwd=repo, env=env)
+    ensure_file(bundle, "SM120 artifact bundle")
 
 
-def sm120_discovery(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
+def workflow_runtime(paths: dict[str, pathlib.Path]) -> tuple[pathlib.Path, pathlib.Path, list[str]]:
+    repo, out = paths["repo"], paths["out"]
+    if paths["workflow"].name == "sm89":
+        return (
+            out / "build/katago",
+            repo / "docs/baseline-configs/bench-cuda-gpu0-4090-s2.cfg",
+            ["--artifact-bundle", str(out / "artifact-bundle.json")],
+        )
+    manifest = load_json(out / "coordinate-fat/manifest.json")
+    return (
+        pathlib.Path(manifest["binary"]),
+        repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg",
+        ["--artifact-bundle", str(out / "artifact-bundle.json")],
+    )
+
+
+def workflow_discovery(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
-    coordinate = out / "coordinate.json"
-    short_plan = out / "selected-plan-short.json"
-    if coordinate.exists() and short_plan.exists() and not args.force:
-        print("[autotune] reusing completed SM120 coordinate output", flush=True)
+    binary, config, artifact_args = workflow_runtime(paths)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "scan",
+        "--space", str(out / "space.json"), "--binary", str(binary),
+        "--config", str(config), "--model", str(paths["model"]),
+        "--model-identity", str(paths["model"]), *artifact_args,
+        "--device", str(args.device), "--streams", str(args.streams),
+        "--batches", args.batches, "--phase", "discovery",
+        "--iterations", str(args.discovery_iterations),
+        "--warmup", str(args.warmup), "--repeats", "1",
+        "--min-improvement-fraction", "0.001", "--resume",
+        "--output", str(out / "discovery.json"),
+        "--raw-dir", str(out / "raw-discovery"),
+    ], cwd=repo, env=env)
+
+
+def workflow_gate(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    binary, config, artifact_args = workflow_runtime(paths)
+    gate = out / "long-gate.json"
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "gate",
+        "--space", str(out / "space.json"),
+        "--discovery", str(out / "discovery.json"),
+        "--binary", str(binary), "--config", str(config),
+        "--model", str(paths["model"]), "--model-identity", str(paths["model"]),
+        *artifact_args, "--device", str(args.device), "--batches", args.batches,
+        "--iterations", str(args.gate_iterations), "--warmup", str(args.warmup),
+        "--repeats", str(args.gate_repeats), "--output", str(gate),
+        "--raw-dir", str(out / "raw-long"),
+    ], cwd=repo, env=env)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "plan",
+        "--space", str(out / "space.json"), "--results",
+        str(out / "discovery.json"), str(gate), "--batches", args.batches,
+        "--output", str(out / "tactic-plan.json"),
+    ], cwd=repo, env=env)
+
+
+def accuracy_corpus(paths: dict[str, pathlib.Path]) -> pathlib.Path:
+    state = paths["prefix"] / "state/accuracy-corpus.json"
+    ensure_file(state, "accuracy corpus state")
+    corpus = pathlib.Path(load_json(state)["corpus"]).resolve()
+    ensure_file(corpus, "8192-row accuracy corpus")
+    return corpus
+
+
+def workflow_reference(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    """Create the immutable reference through the disabled official FP32 path."""
+    repo, prefix = paths["repo"], paths["prefix"]
+    binary, config, _ = workflow_runtime(paths)
+    corpus = accuracy_corpus(paths)
+    model_sha256 = sha256(paths["model"])
+    corpus_sha256 = sha256(corpus)
+    golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+    metadata = prefix / "assets/replay-fixed-fp32-full19.json"
+    if golden.is_file() and not args.force:
+        ensure_file(metadata, "FP32 reference metadata")
+        recorded = load_json(metadata)
+        if (
+            recorded.get("reference_sha256") != sha256(golden) or
+            recorded.get("model_sha256") != model_sha256 or
+            recorded.get("corpus_sha256") != corpus_sha256 or
+            recorded.get("batch") != 13
+        ):
+            raise RuntimeError(
+                "FP32 reference metadata differs from the current model/corpus"
+            )
+        print(
+            f"[autotune] reusing FP32 reference {golden} sha256={sha256(golden)}",
+            flush=True,
+        )
         return
-    run([str(python), "python/sm120_coordinate_search.py",
-         "--space", str(out / "space.json"), "--fat-bundle", str(out / "coordinate-fat/manifest.json"),
-         "--output", str(coordinate), "--plan-output", str(short_plan),
-         "--config", str(repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg"),
-         "--model", str(paths["model"]), "--device", str(args.device),
-         "--batches", args.batches, "--streams", str(args.streams), "--passes", "1",
-         "--iterations", str(args.discovery_iterations), "--warmup", str(args.warmup),
-         "--repeats", "1", "--min-improvement-fraction", "0.001"], cwd=repo, env=env)
+    temporary = golden.with_suffix(golden.suffix + ".partial")
+    temporary.unlink(missing_ok=True)
+    overrides = {
+        "cudaDeviceToUseThread0": args.device,
+        "cudaSm89Backend": False,
+        "cudaSm120Backend": False,
+        "nnMaxBatchSize": 13,
+        "numNNServerThreadsPerModel": 1,
+        "useFP16": False,
+    }
+    command = [
+        str(binary), "replaynn", "-config", str(config),
+        "-override-config", config_string(overrides),
+        "-model", str(paths["model"]), "-corpus", str(corpus),
+        "-output", str(temporary), "-batch-size", "13",
+    ]
+    run(command, cwd=repo, env=env)
+    os.replace(temporary, golden)
+    metadata.write_text(json.dumps({
+        "schema": 1,
+        "kind": "official-disabled-backend-full-fp32-reference",
+        "binary": str(binary),
+        "binary_sha256": sha256(binary),
+        "model_sha256": model_sha256,
+        "corpus_sha256": corpus_sha256,
+        "reference": str(golden),
+        "reference_sha256": sha256(golden),
+        "batch": 13,
+        "device": args.device,
+        "overrides": overrides,
+        "command": command,
+    }, indent=2, sort_keys=True) + "\n")
+    print(f"[autotune] FP32 reference sha256={sha256(golden)}", flush=True)
 
 
-def sm120_gate(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
-    repo, out, python = paths["repo"], paths["out"], paths["python"]
-    joint = out / "joint-long.json"
-    final_plan = out / "tactic-plan.json"
-    run([str(python), "python/sm120_measure_joint_plan.py",
-         "--plan", str(out / "selected-plan-short.json"), "--space", str(out / "space.json"),
-         "--fat-bundle", str(out / "coordinate-fat/manifest.json"), "--output", str(joint),
-         "--config", str(repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg"),
-         "--model", str(paths["model"]), "--device", str(args.device),
-         "--batches", args.batches, "--streams", str(args.streams),
-         "--iterations", str(args.gate_iterations), "--warmup", str(args.warmup),
-         "--repeats", str(args.gate_repeats)], cwd=repo, env=env)
-    run([str(python), "python/sm120_tactic_plan.py", "finalize",
-         "--plan", str(out / "selected-plan-short.json"), "--joint-result", str(joint),
-         "--space", str(out / "space.json"), "--model", str(paths["model"]),
-         "--config", str(repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg"),
-         "--batches", args.batches, "--streams", str(args.streams),
-         "--output", str(final_plan)], cwd=repo, env=env)
+def select_best_long_gate_row(
+    gate_payload: dict[str, Any], batches: list[int],
+) -> tuple[int, dict[str, object], float]:
+    rows = [
+        row for row in gate_payload.get("rows", [])
+        if isinstance(row, dict) and row.get("history_long_gate") is True
+    ]
+    by_batch: dict[int, dict[str, object]] = {}
+    for row in rows:
+        batch = int(row["batch"])
+        if batch in by_batch:
+            raise RuntimeError(f"long gate contains duplicate B{batch} final rows")
+        by_batch[batch] = row
+    if sorted(by_batch) != batches:
+        raise RuntimeError(
+            f"long gate batches differ: {sorted(by_batch)} != {batches}"
+        )
+    measured: list[tuple[float, int]] = []
+    for batch in batches:
+        row = by_batch[batch]
+        metric = row.get("stable_long_nn_evals_per_sec")
+        if (
+            row.get("status") != "measured" or
+            not isinstance(metric, (int, float)) or
+            not math.isfinite(float(metric)) or
+            float(metric) <= 0.0
+        ):
+            raise RuntimeError(f"long gate B{batch} lacks a stable positive throughput")
+        measured.append((float(metric), batch))
+    # A tie selects the smaller exact batch deterministically.
+    best_metric, best_batch = max(measured, key=lambda item: (item[0], -item[1]))
+    return best_batch, by_batch[best_batch], best_metric
+
+
+def workflow_accuracy(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    """Replay only the fastest long-gate batch and attach its 8192-row certificate."""
+    repo, out, python, prefix = (
+        paths["repo"], paths["out"], paths["python"], paths["prefix"],
+    )
+    binary, config, _ = workflow_runtime(paths)
+    corpus = accuracy_corpus(paths)
+    golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+    ensure_file(golden, "immutable official full-FP32 reference")
+    golden_metadata = prefix / "assets/replay-fixed-fp32-full19.json"
+    ensure_file(golden_metadata, "immutable official full-FP32 metadata")
+    reference_sha256 = sha256(golden)
+    binary_sha256 = sha256(binary)
+    corpus_sha256 = sha256(corpus)
+    model_sha256 = sha256(paths["model"])
+    recorded_golden = load_json(golden_metadata)
+    if (
+        recorded_golden.get("reference_sha256") != reference_sha256 or
+        recorded_golden.get("model_sha256") != model_sha256 or
+        recorded_golden.get("corpus_sha256") != corpus_sha256 or
+        recorded_golden.get("batch") != 13
+    ):
+        raise RuntimeError(
+            "FP32 reference metadata differs from the current model/corpus"
+        )
+    gate = out / "long-gate.json"
+    ensure_file(gate, "long gate")
+    gate_payload = load_json(gate)
+    batches = parse_batch_set(args.batches)
+    best_batch, best_row, best_metric = select_best_long_gate_row(
+        gate_payload, batches
+    )
+    print(
+        f"[autotune] fastest long-gate plan is B{best_batch}: "
+        f"{best_metric:.3f} nnEval/s; certifying only this plan",
+        flush=True,
+    )
+    accuracy_dir = out / "accuracy"
+    accuracy_dir.mkdir(parents=True, exist_ok=True)
+    reports: dict[int, pathlib.Path] = {}
+    for batch in (best_batch,):
+        report = accuracy_dir / f"replay-b{batch}-vs-fp32.json"
+        reports[batch] = report
+        row_overrides = best_row.get("overrides")
+        if not isinstance(row_overrides, dict):
+            raise RuntimeError(f"long gate B{batch} has no replayable overrides")
+        overrides = dict(row_overrides)
+        if int(overrides.get("nnMaxBatchSize", -1)) != batch:
+            raise RuntimeError(
+                f"long gate B{batch} is not bound to its exact evaluator capacity"
+            )
+        if report.is_file() and not args.force:
+            existing = load_json(report)
+            if (
+                existing.get("referenceSha256") == reference_sha256 and
+                int(existing.get("numRows", 0)) == 8192 and
+                existing.get("exactBatch") == batch and
+                existing.get("candidateBinarySha256") == binary_sha256 and
+                existing.get("candidateOverrides") == overrides and
+                existing.get("corpusSha256") == corpus_sha256 and
+                existing.get("modelSha256") == model_sha256 and
+                existing.get("candidateMaxBatchSize") == batch and
+                existing.get("candidateFixedBatchTailPadding") is True and
+                existing.get("referenceFixedBatchTailPadding") is True and
+                existing.get("inputAndTargetSectionsByteExact") is True
+            ):
+                print(f"[autotune] reusing accuracy report {report}", flush=True)
+                continue
+        candidate = accuracy_dir / f"replay-b{batch}.krnn"
+        candidate.unlink(missing_ok=True)
+        replay = [
+            str(binary), "replaynn", "-config", str(config),
+            "-override-config", config_string(overrides),
+            "-model", str(paths["model"]), "-corpus", str(corpus),
+            "-output", str(candidate), "-batch-size", str(batch),
+        ]
+        run(replay, cwd=repo, env=env)
+        run([
+            str(python), "python/katago/train/compare_replay_krnn.py",
+            "--reference", str(golden), "--candidate", str(candidate),
+            "--output", str(report),
+            "--expected-candidate-batch", str(batch),
+        ], cwd=repo, env=env)
+        report_payload = load_json(report)
+        report_payload.update({
+            "candidateBinarySha256": binary_sha256,
+            "candidateOverrides": overrides,
+            "corpusSha256": corpus_sha256,
+            "modelSha256": model_sha256,
+        })
+        report.write_text(
+            json.dumps(report_payload, indent=2, sort_keys=True) + "\n"
+        )
+        candidate.unlink()
+    certified = out / "long-gate-best-certified.json"
+    certify = [
+        str(python), "python/cuda_tactic_workflow.py", "certify",
+        "--gate", str(gate),
+    ]
+    for batch, report in reports.items():
+        certify.extend(["--comparison", f"{batch}={report}"])
+    certify.extend(["--output", str(certified)])
+    run(certify, cwd=repo, env=env)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "plan",
+        "--space", str(out / "space.json"), "--results",
+        str(out / "discovery.json"), str(certified),
+        "--batches", str(best_batch),
+        "--output", str(out / "best-tactic-plan.json"),
+    ], cwd=repo, env=env)
 
 
 def main() -> int:
@@ -301,7 +534,11 @@ def main() -> int:
     parser.add_argument("--batches", default="4-32")
     parser.add_argument("--streams", type=int, default=2)
     parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
-    parser.add_argument("--phase", choices=("detect", "prepare", "discovery", "gate", "all"), default="all")
+    parser.add_argument(
+        "--phase",
+        choices=("detect", "prepare", "discovery", "gate", "reference", "accuracy", "all"),
+        default="all",
+    )
     parser.add_argument("--discovery-iterations", type=int, default=100)
     parser.add_argument("--gate-iterations", type=int, default=1000)
     parser.add_argument("--gate-repeats", type=int, default=2)
@@ -337,18 +574,34 @@ def main() -> int:
         "CMAKE_BUILD_PARALLEL_LEVEL": str(args.jobs), "MAX_JOBS": str(args.jobs),
     })
     paths = {"prefix": prefix, "repo": repo, "python": python, "model": model,
-             "out": out, "gpu_class": pathlib.Path(hardware["gpu_class"])}
+             "out": out, "gpu_class": pathlib.Path(hardware["gpu_class"]),
+             "workflow": pathlib.Path(hardware["workflow"])}
     prepare = sm89_prepare if hardware["workflow"] == "sm89" else sm120_prepare
-    discovery = sm89_discovery if hardware["workflow"] == "sm89" else sm120_discovery
-    gate = sm89_gate if hardware["workflow"] == "sm89" else sm120_gate
     if args.phase in ("prepare", "all"):
         prepare(args, paths, env)
     if args.phase in ("discovery", "all"):
-        discovery(args, paths, env)
+        workflow_discovery(args, paths, env)
     if args.phase in ("gate", "all"):
-        gate(args, paths, env)
-    if (out / "tactic-plan.json").exists():
-        print(f"[autotune] final plan: {out / 'tactic-plan.json'} sha256={sha256(out / 'tactic-plan.json')}")
+        workflow_gate(args, paths, env)
+    if args.phase == "reference":
+        workflow_reference(args, paths, env)
+    if args.phase in ("accuracy", "all"):
+        golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+        if args.phase == "accuracy" or golden.is_file():
+            workflow_accuracy(args, paths, env)
+        else:
+            print(
+                "[autotune] immutable FP32 reference is absent; skipping accuracy "
+                "and leaving production_ready=false",
+                flush=True,
+            )
+    final_plan = (
+        out / "best-tactic-plan.json"
+        if (out / "best-tactic-plan.json").is_file()
+        else out / "tactic-plan.json"
+    )
+    if final_plan.exists():
+        print(f"[autotune] final plan: {final_plan} sha256={sha256(final_plan)}")
     return 0
 
 

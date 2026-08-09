@@ -16,11 +16,13 @@ import re
 from collections.abc import Iterable
 
 
-FAMILIES = ("ffn", "qkv", "linear2", "fa4")
-TILELANG_FAMILIES = ("ffn", "qkv", "linear2")
+FAMILIES = (
+    "dual_ffn", "wide_qkv", "qkv_rope", "linear2", "outproj", "fa4",
+)
+TILELANG_FAMILIES = ("dual_ffn", "wide_qkv", "linear2", "outproj")
 
 _FAMILY_ABI = {
-    "ffn": {
+    "dual_ffn": {
         "tactic_type": "FusedFFNAotTactic",
         "getter": "getSm120SearchFfnFatTactics",
         "launch_prefix": "sm120_search_ffn_fat_launch",
@@ -28,17 +30,31 @@ _FAMILY_ABI = {
             "const half*, const half*, const half*, half*, cudaStream_t"
         ),
     },
-    "qkv": {
+    "wide_qkv": {
         "tactic_type": "WideQKVAotTactic",
         "getter": "getSm120SearchQkvFatTactics",
         "launch_prefix": "sm120_search_qkv_fat_launch",
         "launch_args": "const half*, const half*, half*, cudaStream_t",
     },
+    "qkv_rope": {
+        "tactic_type": "WideQKVRopeAotTactic",
+        "getter": "getSm120SearchQkvRopeFatTactics",
+        "launch_prefix": "sm120_search_qkv_rope_fat_launch",
+        "launch_args": (
+            "const half*, const half*, const half*, half*, cudaStream_t"
+        ),
+    },
     "linear2": {
         "tactic_type": "ResidualGemmAotTactic",
         "getter": "getSm120SearchLinear2FatTactics",
         "launch_prefix": "sm120_search_linear2_fat_launch",
-        "launch_args": "const half*, const half*, half*, cudaStream_t",
+        "launch_args": "const half*, const half*, half*, int, cudaStream_t",
+    },
+    "outproj": {
+        "tactic_type": "ResidualGemmAotTactic",
+        "getter": "getSm120SearchOutprojFatTactics",
+        "launch_prefix": "sm120_search_outproj_fat_launch",
+        "launch_args": "const half*, const half*, half*, int, cudaStream_t",
     },
     "fa4": {
         "tactic_type": "FA4AotTactic",
@@ -46,7 +62,7 @@ _FAMILY_ABI = {
         "launch_prefix": "sm120_search_fa4_fat_launch",
         "launch_args": (
             "void*, void*, void*, void*, int, int, int, int, float, "
-            "cudaStream_t"
+            "bool, cudaStream_t"
         ),
     },
 }
@@ -119,12 +135,16 @@ def select_tilelang_requests(
     batches: Iterable[int],
     candidate_ids: Iterable[str] = (),
 ) -> list[dict]:
-    """Select every exact (batch, tactic) TileLang request from a schema-2 space."""
+    """Select every exact (batch, tactic) request from a CUDA tactic space."""
     validate_family(family)
     if family not in TILELANG_FAMILIES:
         raise ValueError(f"{family} does not use the TileLang fat preparer")
-    if space.get("schema") != 2:
-        raise ValueError("fat scan requires a schema-2 search space")
+    if (
+        space.get("schema") != 1 or
+        space.get("kind") != "cuda-tactic-search-space" or
+        space.get("architecture") != "sm120"
+    ):
+        raise ValueError("fat scan requires an SM120 CUDA tactic search space")
     requested_batches = sorted(set(int(value) for value in batches))
     if not requested_batches or requested_batches[0] < 1:
         raise ValueError("batch set must contain positive integers")
@@ -211,17 +231,26 @@ def render_registry(family: str, requests: Iterable[dict]) -> str:
     for item in values:
         quoted_id = json.dumps(item["candidate_id"], ensure_ascii=True)
         launch = item["launch_symbol"]
-        if family == "ffn":
-            entry = f'{{{item["batch"]}, 0, 0, {quoted_id}, false, {launch}}}'
-        elif family == "qkv":
+        if family == "dual_ffn":
+            paired = str(
+                item.get("candidate", {}).get("paired_weights", False)
+            ).lower()
+            entry = (
+                f'{{{item["batch"]}, {quoted_id}, '
+                f'{paired}, {launch}}}'
+            )
+        elif family == "wide_qkv":
             packed = str(item.get("candidate", {}).get("output") == "packed").lower()
             entry = (
-                f'{{{item["batch"]}, 0, 0, {quoted_id}, false, '
+                f'{{{item["batch"]}, {quoted_id}, '
                 f'{packed}, {launch}}}'
             )
-        elif family == "linear2":
+        elif family == "qkv_rope":
+            entry = f'{{{item["batch"]}, {quoted_id}, {launch}}}'
+        elif family in ("linear2", "outproj"):
+            input_channels = 1152 if family == "linear2" else 384
             entry = (
-                f'{{{item["batch"]}, 0, 0, 1152, {quoted_id}, false, '
+                f'{{{item["batch"]}, {input_channels}, {quoted_id}, '
                 f'{launch}}}'
             )
         else:

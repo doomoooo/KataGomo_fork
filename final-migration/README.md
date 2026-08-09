@@ -14,6 +14,11 @@ record used by the migration.
   `inventory/environment-validation.md`.
 - Phase 2 (plan scanner): both SM89 and SM120 snapshots are frozen and merged;
   the unified offline autotune SDK is under `autotune/`.
+- Phase 3 (plan-driven backend): integrated; SM89 plan loading is certified on
+  one and two RTX 4090 D devices. SM120 awaits a new production plan from the
+  final unified search space.
+- Phase 4 (frontend): the batch-aware, fixed-shape, event-gated scheduler and
+  multi-GPU correctness guard are ported and certified on SM89.
 - Active optimization worktrees are read-only inputs. Do not edit, merge, clean,
   or build in them from this migration.
 
@@ -79,6 +84,7 @@ virtual-environment data stay in ignored directories at the repository root.
 
 - `PLAN.md`: phase ordering, deliverables, and acceptance criteria.
 - `FREEZE-GATES.md`: hard gates protecting active optimization sessions.
+- `RUNTIME.md`: plan loading, batch gathering, async pipeline, and multi-GPU configuration.
 - `inventory/`: observations and asset relationships, never presumed frozen.
 - `environment/`: reproducible bootstrap, locks, audits, and build verification.
 - `autotune/`: unified source-based SM89/SM120 B4-B32 release and plan entry point.

@@ -22,7 +22,7 @@ bool sm89FlashAttentionD32(
   int numKVHeads,
   int qHeadDim,
   int vHeadDim,
-  bool useBoth16Accum,
+  int tactic,
   int numSms,
   cudaStream_t stream
 );

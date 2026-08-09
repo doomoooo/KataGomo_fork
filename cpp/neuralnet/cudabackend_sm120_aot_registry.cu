@@ -1,6 +1,7 @@
 #include "../neuralnet/cudabackend_sm120_kernels.h"
 
 #include <cstring>
+#include <string>
 
 namespace Sm120Backend {
 
@@ -18,91 +19,69 @@ extern "C" cudaError_t sm120_search_qkv_launch(
 extern "C" int sm120_search_linear2_batch();
 extern "C" const char* sm120_search_linear2_id();
 extern "C" cudaError_t sm120_search_linear2_launch(
-  const half*, const half*, half*, cudaStream_t);
+  const half*, const half*, half*, int, cudaStream_t);
+extern "C" int sm120_search_outproj_batch();
+extern "C" const char* sm120_search_outproj_id();
+extern "C" cudaError_t sm120_search_outproj_launch(
+  const half*, const half*, half*, int, cudaStream_t);
 extern "C" int sm120_search_fa4_batch();
 extern "C" const char* sm120_search_fa4_id();
 extern "C" cudaError_t sm120_search_fa4_launch(
-  void*, void*, void*, void*, int, int, int, int, float, cudaStream_t);
+  void*, void*, void*, void*, int, int, int, int, float, bool, cudaStream_t);
 
-cudaError_t launchFfnCurrent(
-  const half* input, const half* linearWeights, const half* gateWeights,
-  half* output, cudaStream_t stream
-) {
-  launchFusedFFNB13(input, linearWeights, gateWeights, output, stream);
-  return cudaPeekAtLastError();
-}
-
-cudaError_t launchFfnAReuse(
-  const half* input, const half* linearWeights, const half* gateWeights,
-  half* output, cudaStream_t stream
-) {
-  launchFusedFFNB13CandidateAReuse(
-    input, linearWeights, gateWeights, output, stream);
-  return cudaPeekAtLastError();
-}
-
-cudaError_t launchFfnSingleStream(
-  const half* input, const half* linearWeights, const half* gateWeights,
-  half* output, cudaStream_t stream
-) {
-  return launchFusedFFNB13S1(
-    input, linearWeights, gateWeights, output, stream);
-}
-
-// Shape values live only in this generated-style registry. Backend operator
-// code performs a data-driven lookup and contains no fixed-batch conditions.
-// Explicit requested IDs are search candidates on any SM120 GPU. "auto"
-// selects only an entry accepted for the exact CUDA-reported SM-count,
-// batch, and stream key. No marketing-name matching is used at runtime.
-const FusedFFNAotTactic ffnTactics[] = {
-  {13, 0, 0, "ffn-m128-n64-k32-s2-mb3-exp", false, launchFfnCurrent},
-  {13, 170, 2, "ffn-m128-n64-k32-s2-mb3-areuse-exp", true, launchFfnAReuse},
-  {13, 0, 0, "ffn-m128-n64-k32-s3-single-stream-exp", false, launchFfnSingleStream},
-};
-
-const WideQKVAotTactic qkvTactics[] = {
-  {13, 170, 2, "qkv-m128-n128-k64-s2-tilelang-planar", true, false, launchWideQKVB13},
-  {13, 0, 0, "qkv-m128-n128-k32-s3-tilelang-planar", false, false, launchWideQKVB13S1},
-};
-
+// Runtime lookup is explicit-ID only. All historical shapes, including the
+// former B13 implementations, are emitted by the B4-B32 fat generators.
 const ResidualGemmAotTactic residualTactics[] = {
-  {13, 170, 2, 1152, "linear2-m128-n128-k32-s4-tilelang-64k", true, launchLinear2ResidualB13},
-  {13, 0, 0, 1152, "linear2-balanced-b13", false, launchLinear2ResidualB13Balanced},
-  {13, 0, 0, 384, "outproj-m128-n128-k32-s4-tilelang-64k", false, launchOutProjectionResidualB13},
+#define KATAGO_CUTLASS_RESIDUAL_BATCH(B) \
+  {B, 1152, "linear2-m128-n128-k32-s3-cutlass", launchLinear2ResidualCutlass}, \
+  {B, 384, "outproj-m128-n128-k32-s3-cutlass", launchOutProjectionResidualCutlass}
+  KATAGO_CUTLASS_RESIDUAL_BATCH(4),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(5),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(6),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(7),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(8),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(9),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(10),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(11),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(12),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(13),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(14),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(15),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(16),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(17),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(18),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(19),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(20),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(21),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(22),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(23),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(24),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(25),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(26),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(27),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(28),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(29),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(30),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(31),
+  KATAGO_CUTLASS_RESIDUAL_BATCH(32),
+#undef KATAGO_CUTLASS_RESIDUAL_BATCH
 };
 
 const FusedFFNAotTactic searchFfnTactic = {
-  sm120_search_ffn_batch(), 0, 0,
-  sm120_search_ffn_id(), false, sm120_search_ffn_launch};
+  sm120_search_ffn_batch(), sm120_search_ffn_id(), false,
+  sm120_search_ffn_launch};
 const WideQKVAotTactic searchQkvTactic = {
-  sm120_search_qkv_batch(), 0, 0,
-  sm120_search_qkv_id(), false, sm120_search_qkv_packed() != 0,
+  sm120_search_qkv_batch(), sm120_search_qkv_id(),
+  sm120_search_qkv_packed() != 0,
   sm120_search_qkv_launch};
 const ResidualGemmAotTactic searchLinear2Tactic = {
-  sm120_search_linear2_batch(), 0, 0, 1152,
-  sm120_search_linear2_id(), false, sm120_search_linear2_launch};
+  sm120_search_linear2_batch(), 1152,
+  sm120_search_linear2_id(), sm120_search_linear2_launch};
+const ResidualGemmAotTactic searchOutprojTactic = {
+  sm120_search_outproj_batch(), 384,
+  sm120_search_outproj_id(), sm120_search_outproj_launch};
 const FA4AotTactic searchFA4Tactic = {
   sm120_search_fa4_batch(), sm120_search_fa4_id(), sm120_search_fa4_launch};
-
-template<typename T, size_t N>
-const T* findTactic(
-  const T (&tactics)[N], int batchSize, int numSms, int streams,
-  const char* requestedId
-) {
-  const bool automatic = requestedId == nullptr || std::strcmp(requestedId, "auto") == 0;
-  for(const T& tactic: tactics) {
-    if(tactic.batchSize != batchSize)
-      continue;
-    if(automatic) {
-      if(tactic.automaticWinner && tactic.requiredNumSms == numSms && tactic.streams == streams)
-        return &tactic;
-    }
-    else if(std::strcmp(tactic.id, requestedId) == 0) {
-      return &tactic;
-    }
-  }
-  return nullptr;
-}
 
 template<typename T>
 const T* findExplicitFatTactic(
@@ -123,14 +102,12 @@ const T* findExplicitFatTactic(
 const FusedFFNAotTactic* findFusedFFNAotTactic(
   int batchSize, int numSms, int streams, const char* requestedId
 ) {
+  (void)numSms;
+  (void)streams;
   std::size_t fatCount = 0;
   const FusedFFNAotTactic* fatTactics = getSm120SearchFfnFatTactics(fatCount);
   const FusedFFNAotTactic* tactic = findExplicitFatTactic(
     fatTactics, fatCount, batchSize, requestedId);
-  if(tactic != nullptr)
-    return tactic;
-  tactic = findTactic(
-    ffnTactics, batchSize, numSms, streams, requestedId);
   if(tactic != nullptr)
     return tactic;
   return requestedId != nullptr && searchFfnTactic.batchSize == batchSize &&
@@ -140,26 +117,37 @@ const FusedFFNAotTactic* findFusedFFNAotTactic(
 const WideQKVAotTactic* findWideQKVAotTactic(
   int batchSize, int numSms, int streams, const char* requestedId
 ) {
+  (void)numSms;
+  (void)streams;
   std::size_t fatCount = 0;
   const WideQKVAotTactic* fatTactics = getSm120SearchQkvFatTactics(fatCount);
   const WideQKVAotTactic* tactic = findExplicitFatTactic(
     fatTactics, fatCount, batchSize, requestedId);
   if(tactic != nullptr)
     return tactic;
-  tactic = findTactic(
-    qkvTactics, batchSize, numSms, streams, requestedId);
-  if(tactic != nullptr)
-    return tactic;
   return requestedId != nullptr && searchQkvTactic.batchSize == batchSize &&
     std::strcmp(searchQkvTactic.id, requestedId) == 0 ? &searchQkvTactic : nullptr;
+}
+
+const WideQKVRopeAotTactic* findWideQKVRopeAotTactic(
+  int batchSize, const char* requestedId
+) {
+  std::size_t fatCount = 0;
+  const WideQKVRopeAotTactic* fatTactics =
+    getSm120SearchQkvRopeFatTactics(fatCount);
+  return findExplicitFatTactic(
+    fatTactics,fatCount,batchSize,requestedId);
 }
 
 const ResidualGemmAotTactic* findResidualGemmAotTactic(
   int batchSize, int numSms, int streams, int inputChannels,
   const char* requestedId
 ) {
+  (void)numSms;
+  (void)streams;
   std::size_t fatCount = 0;
-  const ResidualGemmAotTactic* fatTactics =
+  const ResidualGemmAotTactic* fatTactics = inputChannels == 384 ?
+    getSm120SearchOutprojFatTactics(fatCount) :
     getSm120SearchLinear2FatTactics(fatCount);
   const ResidualGemmAotTactic* fatTactic = findExplicitFatTactic(
     fatTactics, fatCount, batchSize, requestedId);
@@ -169,15 +157,14 @@ const ResidualGemmAotTactic* findResidualGemmAotTactic(
      searchLinear2Tactic.batchSize == batchSize && requestedId != nullptr &&
      std::strcmp(searchLinear2Tactic.id, requestedId) == 0)
     return &searchLinear2Tactic;
-  const bool automatic = requestedId == nullptr || std::strcmp(requestedId, "auto") == 0;
+  if(inputChannels == searchOutprojTactic.inputChannels &&
+     searchOutprojTactic.batchSize == batchSize && requestedId != nullptr &&
+     std::strcmp(searchOutprojTactic.id, requestedId) == 0)
+    return &searchOutprojTactic;
   for(const ResidualGemmAotTactic& tactic: residualTactics) {
     if(tactic.batchSize != batchSize || tactic.inputChannels != inputChannels)
       continue;
-    if(automatic) {
-      if(tactic.automaticWinner && tactic.requiredNumSms == numSms && tactic.streams == streams)
-        return &tactic;
-    }
-    else if(std::strcmp(tactic.id, requestedId) == 0) {
+    if(requestedId != nullptr && std::strcmp(tactic.id, requestedId) == 0) {
       return &tactic;
     }
   }
@@ -193,6 +180,24 @@ const FA4AotTactic* findFA4AotTactic(
     fatTactics, fatCount, batchSize, requestedId);
   if(tactic != nullptr)
     return tactic;
+
+  // FA4's generated IDs include their compile-time batch (fa4-b19-...),
+  // unlike the other fat families. A model warms every batch up to its
+  // capacity, so selecting packed QKV requires the same FA4 shape at each
+  // warmup/runtime batch. Canonicalize only the batch component here.
+  if(requestedId != nullptr && std::strncmp(requestedId, "fa4-b", 5) == 0) {
+    const char* suffix = requestedId + 5;
+    while(*suffix >= '0' && *suffix <= '9')
+      suffix++;
+    if(*suffix == '-') {
+      const std::string batchVariant =
+        std::string("fa4-b") + std::to_string(batchSize) + suffix;
+      tactic = findExplicitFatTactic(
+        fatTactics, fatCount, batchSize, batchVariant.c_str());
+      if(tactic != nullptr)
+        return tactic;
+    }
+  }
   return requestedId != nullptr && searchFA4Tactic.batchSize == batchSize &&
     std::strcmp(searchFA4Tactic.id, requestedId) == 0 ? &searchFA4Tactic : nullptr;
 }

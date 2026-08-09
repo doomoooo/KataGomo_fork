@@ -23,7 +23,6 @@ from sm120_fat_scan import (  # noqa: E402
 )
 from sm120_generate_cute_qkv_aot import render_bridge as render_cute_qkv_bridge  # noqa: E402
 from sm120_generate_tilelang_aot import append_wrapper  # noqa: E402
-from sm120_run_tactic_search import load_fat_bundle  # noqa: E402
 
 
 def test_space() -> dict:
@@ -33,9 +32,11 @@ def test_space() -> dict:
         {"id": "official", "implementation": "fallback"},
     ]
     return {
-        "schema": 2,
+        "schema": 1,
+        "kind": "cuda-tactic-search-space",
+        "architecture": "sm120",
         "batches": [
-            {"batch": batch, "ffn": candidates}
+            {"batch": batch, "dual_ffn": candidates}
             for batch in range(1, 33)
         ],
     }
@@ -44,7 +45,7 @@ def test_space() -> dict:
 class FatScanTests(unittest.TestCase):
     def test_all_explicit_batches_are_materialized(self) -> None:
         requests = select_tilelang_requests(
-            test_space(), "ffn", range(1, 33), ("tile-a", "tile-b", "official")
+            test_space(), "dual_ffn", range(1, 33), ("tile-a", "tile-b", "official")
         )
         self.assertEqual(len(requests), 64)
         self.assertEqual({item["batch"] for item in requests}, set(range(1, 33)))
@@ -55,31 +56,31 @@ class FatScanTests(unittest.TestCase):
 
     def test_symbol_token_depends_on_exact_batch(self) -> None:
         self.assertNotEqual(
-            symbol_token("qkv", 1, "same-tactic"),
-            symbol_token("qkv", 32, "same-tactic"),
+            symbol_token("wide_qkv", 1, "same-tactic"),
+            symbol_token("wide_qkv", 32, "same-tactic"),
         )
 
     def test_registry_contains_exact_batch_and_id_entries(self) -> None:
         requests = select_tilelang_requests(
-            test_space(), "ffn", (1, 32), ("tile-a",)
+            test_space(), "dual_ffn", (1, 32), ("tile-a",)
         )
-        source = render_registry("ffn", requests)
-        self.assertIn('{1, 0, 0, "tile-a", false,', source)
-        self.assertIn('{32, 0, 0, "tile-a", false,', source)
+        source = render_registry("dual_ffn", requests)
+        self.assertIn('{1, "tile-a", false,', source)
+        self.assertIn('{32, "tile-a", false,', source)
         for request in requests:
             self.assertEqual(source.count(request["launch_symbol"]), 2)
 
     def test_qkv_registry_preserves_packed_output_abi(self) -> None:
-        token = symbol_token("qkv", 7, "cute-packed")
-        source = render_registry("qkv", [{
+        token = symbol_token("wide_qkv", 7, "cute-packed")
+        source = render_registry("wide_qkv", [{
             "batch": 7,
             "candidate_id": "cute-packed",
             "candidate": {"id": "cute-packed", "output": "packed"},
             "symbol_token": token,
-            "launch_symbol": launch_symbol("qkv", token),
+            "launch_symbol": launch_symbol("wide_qkv", token),
         }])
         self.assertIn(
-            '{7, 0, 0, "cute-packed", false, true,', source,
+            '{7, "cute-packed", true,', source,
         )
 
     def test_fa4_registry_uses_exact_batch_id_getter(self) -> None:
@@ -93,13 +94,21 @@ class FatScanTests(unittest.TestCase):
         }])
         self.assertIn('{13, "fa4-n96",', source)
         self.assertIn("getSm120SearchFA4FatTactics", source)
+        self.assertIn("float, bool, cudaStream_t", source)
+
+    def test_fa4_bridge_carries_packed_qkv_stride(self) -> None:
+        generator = (
+            REPO / "cpp/neuralnet/fa4_aot/build_aot.py"
+        ).read_text()
+        self.assertIn("float scale, bool packedQKV", generator)
+        self.assertIn("(packedQKV ? 3 : 1) * heads * dim", generator)
 
     def test_cute_qkv_fat_bridge_has_no_single_slot_exports(self) -> None:
-        token = symbol_token("qkv", 8, "cute-packed")
+        token = symbol_token("wide_qkv", 8, "cute-packed")
         source = render_cute_qkv_bridge(
             token, 8, "cute-packed", token,
         )
-        self.assertIn(launch_symbol("qkv", token), source)
+        self.assertIn(launch_symbol("wide_qkv", token), source)
         self.assertNotIn("sm120_search_qkv_batch()", source)
         self.assertNotIn("sm120_search_qkv_id()", source)
 
@@ -120,7 +129,7 @@ __global__ void kernel() { debug_print_msg("x"); }
         self.assertNotEqual(first, second)
         self.assertTrue(first.rstrip().endswith("#undef PrintTraits"))
 
-    def test_repository_wires_fat_and_legacy_slots_together(self) -> None:
+    def test_repository_wires_fat_slots_without_implicit_b13_winners(self) -> None:
         cmake = (REPO / "cpp/CMakeLists.txt").read_text()
         registry = (
             REPO / "cpp/neuralnet/cudabackend_sm120_aot_registry.cu"
@@ -132,15 +141,21 @@ __global__ void kernel() { debug_print_msg("x"); }
         self.assertIn("searchFfnTactic", registry)
         self.assertIn("getSm120SearchFfnFatTactics", registry)
         self.assertIn("getSm120SearchFA4FatTactics", registry)
+        self.assertIn('std::strncmp(requestedId, "fa4-b", 5)', registry)
+        self.assertIn('std::string("fa4-b") + std::to_string(batchSize)', registry)
+        self.assertIn("outproj-m128-n128-k32-s3-cutlass", registry)
         self.assertLess(
             registry.index("getSm120SearchFfnFatTactics", registry.index("findFusedFFNAotTactic")),
-            registry.index("ffnTactics", registry.index("findFusedFFNAotTactic")),
+            registry.index("searchFfnTactic", registry.index("findFusedFFNAotTactic")),
         )
+        self.assertNotIn("ffnTactics", registry)
+        self.assertNotIn("qkvTactics", registry)
+        self.assertNotIn('strcmp(requestedId, "auto")', registry)
 
     def test_planar_qkv_single_slot_exports_packed_abi_bit(self) -> None:
         source = append_wrapper(
             "extern __global__ void wide_qkv_kernel() {}\n",
-            "qkv",
+            "wide_qkv",
             {"id": "qkv-planar", "m": 128, "n": 128, "k": 64, "stages": 2,
              "output": "planar"},
             16, 65536,
@@ -169,11 +184,12 @@ source_path.parent.mkdir(parents=True, exist_ok=True)
 source_path.write_text(source)
 metadata_dir = pathlib.Path(a.output_dir)
 metadata_dir.mkdir(parents=True, exist_ok=True)
+prefix = {"dual_ffn": "ffn", "wide_qkv": "qkv"}.get(a.family, a.family)
 metadata = {
   "batch": a.batch,
   "candidate": {"id": a.candidate_id},
   "fat_symbol_token": a.fat_symbol_token,
-  "launch_symbol": f"sm120_search_{a.family}_fat_launch_{a.fat_symbol_token}",
+  "launch_symbol": f"sm120_search_{prefix}_fat_launch_{a.fat_symbol_token}",
   "source_sha256": hashlib.sha256(source.encode("ascii")).hexdigest(),
 }
 (metadata_dir / f"{a.family}-{a.candidate_id}.json").write_text(json.dumps(metadata))
@@ -190,7 +206,7 @@ metadata = {
                     sys.executable,
                     str(PYTHON_DIR / "sm120_prepare_tilelang_fat_scan.py"),
                     "--space", str(space_path),
-                    "--family", "ffn",
+                    "--family", "dual_ffn",
                     "--batches", "1-32",
                     "--candidate-ids", "tile-a",
                     "--device", "999",
@@ -209,31 +225,18 @@ metadata = {
                 {item["batch"] for item in manifest["entries"]}, set(range(1, 33))
             )
             self.assertEqual(len(manifest["sources"]), 32)
-            loaded = load_fat_bundle(
-                output_dir / "manifest.json", "ffn", space_path,
-                test_space(), {(1, "tile-a")},
-            )
-            self.assertEqual(len(loaded["entries"]), 32)
             migrated_space = test_space()
             migrated_space["cuda_device_properties_at_space_generation"] = {
                 "compute_capability": [12, 0],
                 "multiprocessor_count": 170,
             }
             space_path.write_text(json.dumps(migrated_space))
-            loaded = load_fat_bundle(
-                output_dir / "manifest.json", "ffn", space_path,
-                migrated_space, {(1, "tile-a")},
-            )
-            self.assertEqual(
-                loaded["loaded_space_compatibility"],
-                "exact_candidate_projection",
-            )
             subprocess.run(
                 [
                     sys.executable,
                     str(PYTHON_DIR / "sm120_prepare_tilelang_fat_scan.py"),
                     "--space", str(space_path),
-                    "--family", "ffn",
+                    "--family", "dual_ffn",
                     "--batches", "1-32",
                     "--candidate-ids", "tile-a",
                     "--device", "999",
@@ -257,7 +260,7 @@ metadata = {
                     sys.executable,
                     str(PYTHON_DIR / "sm120_prepare_tilelang_fat_scan.py"),
                     "--space", str(space_path),
-                    "--family", "ffn",
+                    "--family", "dual_ffn",
                     "--batches", "1-32",
                     "--candidate-ids", "tile-a",
                     "--device", "999",

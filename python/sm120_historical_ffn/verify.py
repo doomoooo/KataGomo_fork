@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 
-CANDIDATE_ID = "ffn-m128-n64-k32-s2-mb3-tanh-half2"
+CANDIDATE_ID = "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2"
 SOURCE_NAME = f"ffn-{CANDIDATE_ID}.cu"
 METADATA_NAME = f"ffn-{CANDIDATE_ID}.json"
 
