@@ -44,6 +44,9 @@ cp -- "${SCRIPT_DIR}/deploy-prebuilt.sh" "${bundle}/installer/deploy-prebuilt.sh
 cp -- "${SCRIPT_DIR}/install-tar.sh" "${bundle}/installer/install-tar.sh"
 cp -- "${SCRIPT_DIR}/check-python-environment.py" "${bundle}/installer/check-python-environment.py"
 cp -- "${SCRIPT_DIR}/distribution-README.md" "${bundle}/README.md"
+cp -- "${REPO_ROOT}/final-migration/README.md" "${bundle}/FORK-README.md"
+cp -- "${REPO_ROOT}/final-migration/README.zh-CN.md" "${bundle}/FORK-README.zh-CN.md"
+cp -a -- "${REPO_ROOT}/final-migration/plans" "${bundle}/plans"
 chmod 0755 "${bundle}/bin/katago" "${bundle}/verify.sh" \
   "${bundle}/installer/deploy-prebuilt.sh" "${bundle}/installer/install-tar.sh"
 

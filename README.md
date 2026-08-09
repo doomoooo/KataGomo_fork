@@ -1,5 +1,10 @@
 # KataGo
 
+> This branch contains an experimental plan-driven CUDA inference fork based
+> on official KataGo. See the detailed [English fork README](final-migration/README.md)
+> or [中文说明](final-migration/README.zh-CN.md). The upstream documentation
+> below is retained unchanged for KataGo's general features and usage.
+
 * [Overview](#overview)
 * [Training History and Research](#training-history-and-research)
 * [Where To Download Stuff](#where-to-download-stuff)

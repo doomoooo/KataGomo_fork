@@ -45,6 +45,14 @@ class AutotuneEntrypointTests(unittest.TestCase):
             package,
         )
 
+    def test_package_exposes_versioned_plans_and_bilingual_readmes(self) -> None:
+        package = (AUTOTUNE_PATH.parent / "package-autotune.sh").read_text()
+        self.assertIn('final-migration/plans/.', package)
+        self.assertIn('"${bundle}/plans/"', package)
+        self.assertIn('"${bundle}/README.md"', package)
+        self.assertIn('"${bundle}/README.zh-CN.md"', package)
+        self.assertIn("find payload patches metadata plans", package)
+
     def test_parse_batch_set(self) -> None:
         self.assertEqual(AUTOTUNE.parse_batch_set("4-6,8,6"), [4, 5, 6, 8])
         with self.assertRaises(ValueError):
