@@ -150,7 +150,7 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(
             projections["supersedes"],
-            ["wide_qkv", "wide_ffn", "qkv_rope", "dual_ffn"],
+            ["wide_qkv", "wide_ffn", "qkv_rope", "swiglu", "dual_ffn"],
         )
         self.assertEqual(len(projections["activation_markers"]), 2)
         self.assertIn(
@@ -252,8 +252,17 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         dual = candidate_map(sm120, "dual_ffn", 4)[
             "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2"
         ]
-        self.assertEqual(dual["supersedes"], ["wide_ffn"])
+        self.assertEqual(dual["supersedes"], ["wide_ffn", "swiglu"])
         self.assertFalse(dual["config"]["cudaUseWideFFNSingleGemm"])
+        swiglu = candidate_map(sm120, "swiglu", 4)["swiglu-on"]
+        legacy_dual = dict(dual)
+        legacy_dual["supersedes"] = ["wide_ffn"]
+        effective, superseded, _, _ = resolve_candidate_config_state({
+            "swiglu": swiglu,
+            "dual_ffn": legacy_dual,
+        })
+        self.assertNotIn("swiglu", effective)
+        self.assertEqual(superseded["swiglu"], "dual_ffn")
         linear2 = candidate_map(sm120, "linear2", 4)[
             "linear2-m128-n128-k32-s3-cutlass"
         ]
@@ -468,13 +477,33 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                 "3" * 64,
             )
 
+            gate_payload = json.loads(gate.read_text())
+            gate_payload["rows"].append({
+                "history_long_gate": True,
+                "batch": 5,
+                "binary_sha256": binary_sha,
+                "overrides": {"nnMaxBatchSize": 5},
+            })
+            write_json(gate, gate_payload)
+            with self.assertRaisesRegex(ValueError, "missing --comparison for gate B5"):
+                command_certify(SimpleNamespace(
+                    gate=str(gate), comparison=[f"4={report}"],
+                    output=str(output), batches=None,
+                ))
+            command_certify(SimpleNamespace(
+                gate=str(gate), comparison=[f"4={report}"],
+                output=str(output), batches="4",
+            ))
+            certified = json.loads(output.read_text())
+            self.assertEqual(certified["accuracy_certification"]["batches"], [4])
+
             payload = json.loads(report.read_text())
             payload["exactBatch"] = 5
             write_json(report, payload)
             with self.assertRaisesRegex(ValueError, "not bound to exact B4"):
                 command_certify(SimpleNamespace(
                     gate=str(gate), comparison=[f"4={report}"],
-                    output=str(output),
+                    output=str(output), batches="4",
                 ))
 
     def test_history_winner_retains_incumbent_for_tie_or_tiny_gain(self):

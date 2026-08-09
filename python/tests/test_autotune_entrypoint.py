@@ -72,6 +72,26 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn("b % realBatchSize", replay)
         self.assertIn('"fixedBatchTailPadding\\\":true', replay)
 
+    def test_replaynn_argv_uses_katago_single_dash_options(self) -> None:
+        command = AUTOTUNE.replaynn_command(
+            pathlib.Path("katago"),
+            pathlib.Path("bench.cfg"),
+            {"nnMaxBatchSize": 19},
+            pathlib.Path("model.bin.gz"),
+            pathlib.Path("corpus.npz"),
+            pathlib.Path("candidate.krnn"),
+            19,
+        )
+        self.assertEqual(command[1], "replaynn")
+        self.assertEqual(
+            command[2::2],
+            [
+                "-config", "-override-config", "-model", "-corpus",
+                "-output", "-batch-size",
+            ],
+        )
+        self.assertFalse(any(item.startswith("--") for item in command))
+
     def test_accuracy_selects_peak_stable_throughput_and_lower_batch_on_tie(self) -> None:
         payload = {
             "rows": [

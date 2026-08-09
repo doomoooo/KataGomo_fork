@@ -36,25 +36,32 @@
 | 架构 | 已实现搜索空间 | Production plan | 硬件认证 |
 | --- | --- | --- | --- |
 | SM89 | 20 个 family、62 条正收益历史记录、精确 B4-B32 共 3738 个候选 | 已提交 RTX 4090 D B12/S2 plan | 已完成 GTP 加载、单/双卡和 8192-row 全输出 FP32 replay |
-| SM120 | 23 个 family、64 条正收益历史记录、精确 B4-B32 共 4234 个候选 | 等待新的统一扫描 | backend/静态闭环已完成；production 性能和 GTP 认证尚未完成 |
+| SM120 | 23 个 family、64 条正收益历史记录、精确 B4-B32 共 4234 个候选 | 已提交 RTX 5080 B19/S2 plan | 已完成统一 long gate 和 8192-row 全输出 FP32 replay；普通 GTP 路径认证待完成 |
 
 此前 RTX 5080 的 B18 `2586.579` physical nnEval/s 来自尚未合并完整历史
-优化集合的旧扫描。该旧 plan 会被 production loader 拒绝，也不会作为可发布
-plan 打包。
+优化集合的旧扫描。它已被统一扫描得到的 B19 plan 替代；新 plan 的稳定 long
+gate 为 `2763.4413825` physical nnEval/s。旧 plan 会被 production loader 拒绝，
+也不会打包。
 
-当前纳入 Git 的 SM89 plan 为：
+当前纳入 Git 的 plan 为：
 
 ```text
 final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
+final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json
 ```
 
-文件 SHA-256 为
+SM89 文件 SHA-256 为
 `57aba0d9f5ff009f0103fe792766bd3fe065d156c13396cb99bc40b5488f9edb`。
 整图 long gate 为 `3026.196859` physical nnEval/s。随后通过普通 evaluator
 调度路径验证：单张 RTX 4090 D 上 8192/8192 正确且达到 3035.87 physical
 nnEval/s；两张 RTX 4090 D 上 8192/8192 正确且达到 6072.97 physical
 nnEval/s。这些数字只描述被测主机、频率、模型、batch 和拓扑，不是对所有机器
 的普适性能承诺。
+
+SM120 RTX 5080 文件 SHA-256 为
+`5f90e7fb5c02ac147e4cf535e664dca736f4fcbd9c0afd188ef5a5fd1e7b788b`。
+统一 long gate 在 B19/S2 达到 `2763.4413825` physical nnEval/s；只对该最优
+plan 执行的一次 8192-row 全输出 replay 通过了全部全 FP32 阈值。
 
 ## Plan 驱动 backend
 
@@ -204,6 +211,10 @@ cudaAsyncInferPipeline = true
 cudaEventPipelineUseGraph = false
 ```
 
+RTX 5080 使用
+`final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json`，并设置
+`cudaTacticPlanBatch = 19`；双 stream 映射保持不变。
+
 双卡、每卡双流：
 
 ```cfg
@@ -214,9 +225,10 @@ cudaDeviceToUseThread2 = 1
 cudaDeviceToUseThread3 = 1
 ```
 
-loader 会提供并验证精确 B12、精确 19x19、FP16/NHWC、
-`nnBatchAwareDispatch=true`、只对最大 batch warmup，以及全部 CUDA tactic
-override。用户配置与 plan 冲突时会报错，不会静默覆盖。
+loader 会提供并验证 plan 指定的精确 batch（SM89 示例为 B12，RTX 5080 为
+B19）、精确 19x19、FP16/NHWC、`nnBatchAwareDispatch=true`、只对最大 batch
+warmup，以及全部 CUDA tactic override。用户配置与 plan 冲突时会报错，不会
+静默覆盖。
 
 搜索线程数量可从以下公式开始调节：
 
@@ -341,9 +353,11 @@ SM89 runtime 认证见
 
 - 本项目只优化 CUDA backend，不需要 TensorRT。
 - production plan 当前要求精确 19x19 和匹配的模型 hash。
-- 已提交的 production plan 是 SM89/RTX 4090 D B12/S2；设备或模型不兼容时
-  会被有意拒绝。
-- SM120 backend 和扫描器已实现，但仍需要新的统一硬件扫描和最优 plan 认证。
+- 已提交的 production plan 是 SM89/RTX 4090 D B12/S2 和 SM120/RTX 5080
+  B19/S2；仓库对每种 GPU 型号只维护一个当前 plan。设备或模型不兼容时会被
+  有意拒绝。
+- RTX 5080 已通过统一 long gate 和 8192-row FP32 认证；普通 GTP 路径认证
+  仍待完成。
 - CUDA Graph 是可选项，当前不是 SM89 已认证的最快模式。
 - 在短搜索或固定 visits 场景中，过高搜索线程数即使提高 GPU 利用率，也可能
   降低棋力。

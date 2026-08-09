@@ -315,6 +315,24 @@ def accuracy_corpus(paths: dict[str, pathlib.Path]) -> pathlib.Path:
     return corpus
 
 
+def replaynn_command(
+    binary: pathlib.Path,
+    config: pathlib.Path,
+    overrides: dict[str, object],
+    model: pathlib.Path,
+    corpus: pathlib.Path,
+    output: pathlib.Path,
+    batch: int,
+) -> list[str]:
+    """Build replaynn argv using KataGo's single-dash command interface."""
+    return [
+        str(binary), "replaynn", "-config", str(config),
+        "-override-config", config_string(overrides),
+        "-model", str(model), "-corpus", str(corpus),
+        "-output", str(output), "-batch-size", str(batch),
+    ]
+
+
 def workflow_reference(
     args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
 ) -> None:
@@ -353,12 +371,9 @@ def workflow_reference(
         "numNNServerThreadsPerModel": 1,
         "useFP16": False,
     }
-    command = [
-        str(binary), "replaynn", "-config", str(config),
-        "-override-config", config_string(overrides),
-        "-model", str(paths["model"]), "-corpus", str(corpus),
-        "-output", str(temporary), "-batch-size", "13",
-    ]
+    command = replaynn_command(
+        binary, config, overrides, paths["model"], corpus, temporary, 13,
+    )
     run(command, cwd=repo, env=env)
     os.replace(temporary, golden)
     metadata.write_text(json.dumps({
@@ -484,12 +499,9 @@ def workflow_accuracy(
                 continue
         candidate = accuracy_dir / f"replay-b{batch}.krnn"
         candidate.unlink(missing_ok=True)
-        replay = [
-            str(binary), "replaynn", "-config", str(config),
-            "-override-config", config_string(overrides),
-            "-model", str(paths["model"]), "-corpus", str(corpus),
-            "-output", str(candidate), "-batch-size", str(batch),
-        ]
+        replay = replaynn_command(
+            binary, config, overrides, paths["model"], corpus, candidate, batch,
+        )
         run(replay, cwd=repo, env=env)
         run([
             str(python), "python/katago/train/compare_replay_krnn.py",
@@ -511,7 +523,7 @@ def workflow_accuracy(
     certified = out / "long-gate-best-certified.json"
     certify = [
         str(python), "python/cuda_tactic_workflow.py", "certify",
-        "--gate", str(gate),
+        "--gate", str(gate), "--batches", str(best_batch),
     ]
     for batch, report in reports.items():
         certify.extend(["--comparison", f"{batch}={report}"])

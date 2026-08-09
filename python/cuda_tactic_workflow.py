@@ -1559,7 +1559,7 @@ def _sm120_candidates(
             if value.get("id") != "dual_ffn-fallback-cublas-swiglu":
                 value["config"]["cudaUseWideFFNSingleGemm"] = False
                 value["overrides_keys"] = ["cudaUseWideFFNSingleGemm"]
-                value["supersedes"] = ["wide_ffn"]
+                value["supersedes"] = ["wide_ffn", "swiglu"]
         return [keep, *values]
 
     if family == "wide_projection":
@@ -1581,7 +1581,9 @@ def _sm120_candidates(
                     "cudaUseBatchSharedRoPEUnrolledSm120": False,
                     "cudaQKVRopeAotTacticSm120": "disabled",
                 },
-                supersedes=["wide_qkv", "wide_ffn", "qkv_rope", "dual_ffn"],
+                supersedes=[
+                    "wide_qkv", "wide_ffn", "qkv_rope", "swiglu", "dual_ffn",
+                ],
                 overrides_keys=[
                     "cudaUseWideFFNSingleGemm", "cudaUseFusedFFN",
                     "cudaFusedFFNAotTacticSm120", "cudaUseWideQKV",
@@ -2767,6 +2769,25 @@ def candidate_compatibility(
     return True, None
 
 
+def runtime_supersedes(
+    family: str, value: dict[str, object],
+) -> list[str]:
+    """Return boundary ownership, including backend-implied FFN ownership."""
+    supersedes = value.get("supersedes", [])
+    if not isinstance(supersedes, list):
+        raise ValueError(f"candidate {value.get('id')} has malformed supersedes")
+    result = [str(previous) for previous in supersedes]
+    config = candidate_config(family, value)
+    if family == "dual_ffn" and config.get("cudaUseFusedFFN") is True:
+        result.append("swiglu")
+    if (
+        family == "wide_projection" and
+        config.get("cudaUseWideFFNSingleGemm") is True
+    ):
+        result.append("swiglu")
+    return list(dict.fromkeys(result))
+
+
 def effective_candidate_map(
     selected: dict[str, dict[str, object]],
 ) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
@@ -2774,10 +2795,7 @@ def effective_candidate_map(
     effective: dict[str, dict[str, object]] = {}
     superseded_by: dict[str, str] = {}
     for family, value in selected.items():
-        supersedes = value.get("supersedes", [])
-        if not isinstance(supersedes, list):
-            raise ValueError(f"candidate {value.get('id')} has malformed supersedes")
-        for previous in supersedes:
+        for previous in runtime_supersedes(family, value):
             effective.pop(str(previous), None)
             superseded_by[str(previous)] = family
         effective[family] = value
@@ -2796,7 +2814,7 @@ def resolve_candidate_config_state(
     owners: dict[str, str] = {}
     overridden_by: dict[str, dict[str, str]] = {}
     for family, value in selected.items():
-        supersedes = set(value.get("supersedes", []))
+        supersedes = set(runtime_supersedes(family, value))
         overrides_keys = set(value.get("overrides_keys", []))
         for key, item in tactic_overrides(family, value).items():
             previous = owners.get(key)
@@ -4825,13 +4843,34 @@ def command_certify(args: argparse.Namespace) -> None:
     rows = payload.get("rows", [])
     if not isinstance(rows, list):
         raise ValueError("gate result rows are not a list")
+    gate_batches = {
+        int(row.get("batch", -1))
+        for row in rows
+        if isinstance(row, dict) and row.get("history_long_gate") is True
+    }
+    batches_text = getattr(args, "batches", None)
+    target_batches = parse_int_set(batches_text) if batches_text else sorted(gate_batches)
+    unknown_batches = sorted(set(target_batches) - gate_batches)
+    if unknown_batches:
+        raise ValueError(
+            f"certification batches are absent from the long gate: {unknown_batches}"
+        )
+    missing_reports = sorted(set(target_batches) - reports.keys())
+    unexpected_reports = sorted(reports.keys() - set(target_batches))
+    if missing_reports:
+        raise ValueError(f"missing --comparison for gate B{missing_reports[0]}")
+    if unexpected_reports:
+        raise ValueError(
+            f"comparison batches were not selected for certification: {unexpected_reports}"
+        )
     for row in rows:
         if not isinstance(row, dict) or row.get("history_long_gate") is not True:
             continue
         batch = int(row.get("batch", -1))
+        if batch not in target_batches:
+            continue
         report_path = reports.get(batch)
-        if report_path is None:
-            raise ValueError(f"missing --comparison for gate B{batch}")
+        assert report_path is not None
         report = read_json(report_path)
         reference_sha256 = str(report.get("referenceSha256", ""))
         candidate_sha256 = str(report.get("candidateSha256", ""))
@@ -5086,6 +5125,13 @@ def build_parser() -> argparse.ArgumentParser:
     certify.add_argument("--gate", required=True)
     certify.add_argument(
         "--comparison", action="append", required=True, metavar="BATCH=PATH",
+    )
+    certify.add_argument(
+        "--batches",
+        help=(
+            "certify only this gate subset; without this option every long-gate "
+            "batch still requires a comparison"
+        ),
     )
     certify.add_argument("--output", required=True)
     certify.set_defaults(function=command_certify)

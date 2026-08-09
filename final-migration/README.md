@@ -38,25 +38,32 @@ the maintained search space.
 | Architecture | Implemented search space | Production plan | Hardware qualification |
 | --- | --- | --- | --- |
 | SM89 | 20 families, 62 positive-history records, 3738 candidates across exact B4-B32 | checked-in RTX 4090 D B12/S2 plan | complete: GTP load, one/two GPU, 8192-row all-head FP32 replay |
-| SM120 | 23 families, 64 positive-history records, 4234 candidates across exact B4-B32 | pending a fresh unified scan | backend/static closure complete; production performance and GTP qualification pending |
+| SM120 | 23 families, 64 positive-history records, 4234 candidates across exact B4-B32 | checked-in RTX 5080 B19/S2 plan | unified long gate and 8192-row all-head FP32 replay complete; ordinary GTP qualification pending |
 
 The previous RTX 5080 B18 result (`2586.579` physical nnEval/s) came from an
-incomplete pre-unification space. Its old plan is intentionally rejected and
-is not shipped as a production plan.
+incomplete pre-unification space. It has been replaced by the unified B19 plan,
+whose stable long-gate result is `2763.4413825` physical nnEval/s. The old plan
+is intentionally rejected and is not shipped.
 
-The checked-in SM89 plan is:
+The checked-in plans are:
 
 ```text
 final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
+final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json
 ```
 
-Its file SHA-256 is
+The SM89 file SHA-256 is
 `57aba0d9f5ff009f0103fe792766bd3fe065d156c13396cb99bc40b5488f9edb`.
 The long whole-graph gate measured `3026.196859` physical nnEval/s. Subsequent
 ordinary evaluator scheduling verified 8192/8192 requests at 3035.87 physical
 nnEval/s on one RTX 4090 D and 6072.97 on two RTX 4090 D devices. These values
 are evidence for the tested host, clocks, model, batch, and topology, not a
 universal performance guarantee.
+
+The SM120 RTX 5080 file SHA-256 is
+`5f90e7fb5c02ac147e4cf535e664dca736f4fcbd9c0afd188ef5a5fd1e7b788b`.
+Its unified long gate measured `2763.4413825` physical nnEval/s at B19/S2, and
+its single 8192-row all-head replay passed every full-FP32 threshold.
 
 ## Plan-driven backend
 
@@ -221,6 +228,10 @@ cudaAsyncInferPipeline = true
 cudaEventPipelineUseGraph = false
 ```
 
+On RTX 5080, select
+`final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json` and set
+`cudaTacticPlanBatch = 19`; the two-stream mapping is unchanged.
+
 Two GPUs, two streams per GPU:
 
 ```cfg
@@ -231,7 +242,8 @@ cudaDeviceToUseThread2 = 1
 cudaDeviceToUseThread3 = 1
 ```
 
-The loader supplies and verifies exact B12, exact 19x19, FP16/NHWC,
+The loader supplies and verifies the plan's exact batch (B12 in the SM89
+example and B19 for RTX 5080), exact 19x19, FP16/NHWC,
 `nnBatchAwareDispatch=true`, maximum-batch-only warmup, and every planned CUDA
 override. A conflicting user value is rejected.
 
@@ -365,10 +377,11 @@ The SM89 runtime certificate is in
 
 - Only the CUDA backend is optimized by this work; TensorRT is not required.
 - Production plans currently require exact 19x19 and the bound model hash.
-- The checked-in production plan is SM89/RTX 4090 D B12/S2. Receiver checks
-  deliberately reject incompatible devices or models.
-- SM120 implementation and scanning are present, but a fresh unified hardware
-  scan and best-plan certificate are still required.
+- The checked-in production plans are SM89/RTX 4090 D B12/S2 and SM120/RTX
+  5080 B19/S2. The registry permits one current plan per GPU model. Receiver
+  checks deliberately reject incompatible devices or models.
+- RTX 5080 has passed the unified long gate and 8192-row FP32 certificate; its
+  ordinary GTP-path qualification is still pending.
 - CUDA Graph is optional and currently not the fastest certified SM89 mode.
 - High search-thread counts may reduce playing strength in short/fixed-visit
   searches even when they increase GPU utilization.
