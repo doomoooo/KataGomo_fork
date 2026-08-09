@@ -76,6 +76,8 @@ class PrepareAccuracyCorpusTests(unittest.TestCase):
         self.assertIn('"${SCRIPT_DIR}/prepare_accuracy_corpus.py"', setup)
         self.assertIn("--refresh-latest", package)
         self.assertIn('"${SCRIPT_DIR}/prepare_accuracy_corpus.py"', package)
+        self.assertIn('--corpus "${CORPUS}" --manifest "${CORPUS_MANIFEST}"', package)
+        self.assertIn('result["source_url"]', package)
 
 
 if __name__ == "__main__":

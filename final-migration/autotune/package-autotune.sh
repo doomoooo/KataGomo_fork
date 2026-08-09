@@ -24,6 +24,7 @@ PYTHON_SHA256='506191be3ee7bd190a8834dcdc1b3bc70aab50608deccc711935aa007239cabd'
 PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 DEFAULT_SEED_WHEELS="${ENV_ROOT}/distributions/20260807T205459Z/wheels:${ENV_ROOT}/autotune-wheel-seed"
 SEED_WHEELS="${AUTOTUNE_SEED_WHEELS:-${DEFAULT_SEED_WHEELS}}"
+CORPUS_RESULT="${ENV_ROOT}/accuracy-corpus/current.json"
 
 log() { printf '[autotune-package] %s\n' "$*"; }
 die() { printf '[autotune-package] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -36,16 +37,23 @@ if [[ -z "${CORPUS}" || -z "${CORPUS_MANIFEST}" ]]; then
   [[ -x "${CORPUS_PYTHON}" ]] || CORPUS_PYTHON="$(command -v python3)"
   "${CORPUS_PYTHON}" -c 'import numpy' \
     || die "accuracy-corpus Python lacks NumPy; run the environment setup first"
-  corpus_result="${ENV_ROOT}/accuracy-corpus/current.json"
   log "resolving the latest public KataGo training archive and the fixed 8192-row corpus"
   "${CORPUS_PYTHON}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
     --repo "${REPO_ROOT}" --python "${CORPUS_PYTHON}" \
     --output-dir "${CORPUS_OUTPUT_ROOT}" \
     --work-dir "${ENV_ROOT}/accuracy-corpus" \
     --archive-cache-dir "${TRAINING_DATA_CACHE}" \
-    --refresh-latest --result-json "${corpus_result}"
-  CORPUS="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["corpus"])' "${corpus_result}")"
-  CORPUS_MANIFEST="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest"])' "${corpus_result}")"
+    --refresh-latest --result-json "${CORPUS_RESULT}"
+  CORPUS="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["corpus"])' "${CORPUS_RESULT}")"
+  CORPUS_MANIFEST="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest"])' "${CORPUS_RESULT}")"
+else
+  log "validating the supplied frozen 8192-row corpus and source identity"
+  "${CORPUS_PYTHON}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
+    --repo "${REPO_ROOT}" --python "${CORPUS_PYTHON}" \
+    --output-dir "${CORPUS_OUTPUT_ROOT}" \
+    --work-dir "${ENV_ROOT}/accuracy-corpus" \
+    --corpus "${CORPUS}" --manifest "${CORPUS_MANIFEST}" \
+    --result-json "${CORPUS_RESULT}"
 fi
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
@@ -214,7 +222,7 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
   printf 'cuda_toolkit=13.2\ncudnn_cuda13=9.25.0.15\n'
   printf 'model_sha256=%s\n' "$(sha256sum "${MODEL}" | awk '{print $1}')"
   printf 'corpus_sha256=%s\n' "$(sha256sum "${CORPUS}" | awk '{print $1}')"
-  "${CORPUS_PYTHON}" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("training_data_archive="+d["source_archive"]); print("training_data_archive_sha256="+d["source_archive_sha256"]); print("training_data_url="+d["source_archive_url"])' "${CORPUS_MANIFEST}"
+  "${CORPUS_PYTHON}" -c 'import json,sys; manifest=json.load(open(sys.argv[1])); result=json.load(open(sys.argv[2])); print("training_data_archive="+manifest["source_archive"]); print("training_data_archive_sha256="+manifest["source_archive_sha256"]); print("training_data_url="+result["source_url"])' "${CORPUS_MANIFEST}" "${CORPUS_RESULT}"
 } > "${bundle}/metadata/release.txt"
 
 (
