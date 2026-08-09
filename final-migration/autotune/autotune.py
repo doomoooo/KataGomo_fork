@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+"""One entry point for the frozen SM89 and SM120 B4-B32 workflows."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import pathlib
+import shlex
+import subprocess
+import sys
+from typing import Any
+
+try:
+    from build_parallelism import conservative_build_jobs
+except ModuleNotFoundError:  # running from the source tree instead of a release tar
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "python"))
+    from build_parallelism import conservative_build_jobs
+
+
+def run(command: list[str], *, cwd: pathlib.Path, env: dict[str, str]) -> None:
+    print("[autotune] +", shlex.join(command), flush=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def load_json(path: pathlib.Path) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def config_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def config_string(values: dict[str, object]) -> str:
+    return ",".join(
+        f"{key}={config_value(values[key])}" for key in sorted(values)
+    )
+
+
+def common_cmake(prefix: pathlib.Path) -> list[str]:
+    return [
+        f"-DCMAKE_CUDA_COMPILER={prefix / 'cuda/bin/nvcc'}",
+        f"-DCUDNN_INCLUDE_DIR={prefix / 'cudnn/include'}",
+        f"-DCUDNN_LIBRARY={prefix / 'cudnn/lib/libcudnn.so'}",
+        f"-DZLIB_INCLUDE_DIR={prefix / 'native/include'}",
+        f"-DZLIB_LIBRARY={prefix / 'native/lib/libz.so'}",
+        f"-DKATAGO_TILELANG_ROOT={prefix / 'sources/TileLang'}",
+        f"-DKATAGO_CUTLASS_ROOT={prefix / 'sources/cutlass'}",
+        "-DNO_GIT_REVISION=1",
+    ]
+
+
+def detect(repo: pathlib.Path, device: int) -> dict[str, Any]:
+    sys.path.insert(0, str(repo / "python"))
+    from portable_cuda_device import query_cuda_device
+
+    result = query_cuda_device(device)
+    cc = tuple(result["compute_capability"])
+    if cc == (8, 9):
+        workflow = "sm89"
+        gpu_class = "rtx4090"
+    elif cc == (12, 0):
+        workflow = "sm120"
+        gpu_class = "rtx5080" if "5080" in result["name"].lower() else "rtx5090d"
+    else:
+        raise RuntimeError(f"unsupported compute capability {cc}; expected SM89 or SM120")
+    return {"schema": 1, "workflow": workflow, "gpu_class": gpu_class, "device": result}
+
+
+def ensure_file(path: pathlib.Path, label: str) -> None:
+    if not path.is_file():
+        raise RuntimeError(f"{label} is missing: {path}")
+
+
+def parse_batch_set(value: str) -> list[int]:
+    batches: set[int] = set()
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "-" in item:
+            first, last = (int(part) for part in item.split("-", 1))
+            if last < first:
+                raise ValueError(f"invalid descending batch range: {item}")
+            batches.update(range(first, last + 1))
+        else:
+            batches.add(int(item))
+    result = sorted(batches)
+    if not result or result[0] < 1:
+        raise ValueError("batch set must contain positive integers")
+    return result
+
+
+def complete_manifest_for_batches(path: pathlib.Path, batches: str) -> bool:
+    """Reject an interrupted or differently scoped fat-bundle checkpoint."""
+    if not path.is_file():
+        return False
+    try:
+        payload = load_json(path)
+    except (OSError, ValueError, TypeError):
+        return False
+    return (
+        payload.get("complete") is True
+        and sorted(payload.get("batches", [])) == parse_batch_set(batches)
+    )
+
+
+def tilelang_root_from_manifests(*manifests: dict[str, Any]) -> pathlib.Path:
+    roots: set[pathlib.Path] = set()
+    for manifest in manifests:
+        if manifest.get("complete") is not True:
+            raise RuntimeError("cannot configure from an incomplete TileLang manifest")
+        for entry in manifest.get("entries", []):
+            metadata_path = pathlib.Path(entry["metadata"])
+            metadata = load_json(metadata_path)
+            root = metadata.get("generation_environment", {}).get("tilelang_root")
+            if not root:
+                raise RuntimeError(f"TileLang root is missing from {metadata_path}")
+            roots.add(pathlib.Path(root).resolve())
+    if len(roots) != 1:
+        raise RuntimeError(f"fat manifests disagree on TileLang root: {sorted(map(str, roots))}")
+    root = roots.pop()
+    for relative in ("src/tl_templates/cuda/debug.h", "3rdparty/cutlass/include/cutlass/cutlass.h"):
+        ensure_file(root / relative, "TileLang build input")
+    return root
+
+
+def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    space = out / "space.json"
+    generation = out / "generation-plan.json"
+    dual = out / "fat" / "dual-ffn"
+    linear = out / "fat" / "linear2"
+    build = out / "build"
+    binary = build / "katago"
+    bundle = out / "artifact-bundle.json"
+
+    if not space.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "space",
+             "--architecture", "sm89", "--gpu-class", paths["gpu_class"].name,
+             "--device", str(args.device), "--batches", args.batches,
+             "--streams", str(args.streams), "--output", str(space)], cwd=repo, env=env)
+    if not generation.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "generation-plan",
+             "--space", str(space), "--phase", "full", "--output", str(generation)], cwd=repo, env=env)
+
+    for family, target in (("dual_ffn", dual), ("linear2", linear)):
+        command = [str(python), "python/portable_prepare_tilelang_fat_scan.py",
+                   "--space", str(space), "--family", family,
+                   "--batches", args.batches, "--device", str(args.device),
+                   "--output-dir", str(target), "--python", str(python),
+                   "--nvcc", str(paths["prefix"] / "cuda/bin/nvcc"),
+                   "--compile-objects"]
+        if not args.force:
+            command.append("--reuse-existing")
+        # The generator writes an intentionally incomplete manifest after every
+        # candidate. Always enter it so a killed run resumes and closes the
+        # exact requested domain instead of mistaking a checkpoint for success.
+        run(command, cwd=repo, env=env)
+
+    dual_manifest = load_json(dual / "manifest.json")
+    linear_manifest = load_json(linear / "manifest.json")
+    tilelang_root = tilelang_root_from_manifests(dual_manifest, linear_manifest)
+    configure = [
+        "cmake", "-S", str(repo / "cpp"), "-B", str(build), "-G", "Ninja",
+        "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
+        "-DKATAGO_CUDA_ARCHITECTURES=89",
+        f"-DSM89_FLASH_ATTN_ROOT={paths['prefix'] / 'sources/flash-attention'}",
+        f"-DSM89_TACTIC_TILELANG_ROOT={tilelang_root}",
+        f"-DSM89_SEARCH_DUAL_FFN_FAT_REGISTRY={dual_manifest['registry_source']}",
+        f"-DSM89_SEARCH_DUAL_FFN_FAT_SOURCES={';'.join(dual_manifest['sources'])}",
+        f"-DSM89_SEARCH_LINEAR2_FAT_REGISTRY={linear_manifest['registry_source']}",
+        f"-DSM89_SEARCH_LINEAR2_FAT_SOURCES={';'.join(linear_manifest['sources'])}",
+        *common_cmake(paths["prefix"]),
+    ]
+    if not binary.exists() or args.force:
+        run(configure, cwd=repo, env=env)
+        run(["cmake", "--build", str(build), "--parallel", str(args.jobs)], cwd=repo, env=env)
+    if not bundle.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "artifact-bundle",
+             "--space", str(space), "--binary", str(binary), "--manifests",
+             str(dual / "manifest.json"), str(linear / "manifest.json"),
+             "--output", str(bundle)], cwd=repo, env=env)
+    ensure_file(binary, "SM89 fat binary")
+    ensure_file(bundle, "SM89 artifact bundle")
+
+
+def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    space = out / "space.json"
+    if not space.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "space",
+             "--architecture", "sm120", "--gpu-class", paths["gpu_class"].name,
+             "--device", str(args.device), "--batches", args.batches,
+             "--streams", str(args.streams), "--output", str(space)], cwd=repo, env=env)
+    manifests: dict[str, pathlib.Path] = {}
+    for family in ("dual_ffn", "wide_qkv", "linear2", "outproj"):
+        target = out / "fat" / family
+        manifest = target / "manifest.json"
+        manifests[family] = manifest
+        command = [str(python), "python/sm120_prepare_tilelang_fat_scan.py",
+                   "--space", str(space), "--family", family,
+                   "--batches", args.batches, "--device", str(args.device),
+                   "--output-dir", str(target), "--python", str(python)]
+        if not args.force:
+            command.append("--reuse-existing")
+        run(command, cwd=repo, env=env)
+    coordinate = out / "coordinate-fat"
+    manifest = coordinate / "manifest.json"
+    if not complete_manifest_for_batches(manifest, args.batches) or args.force:
+        command = [str(python), "python/sm120_prepare_coordinate_fat.py",
+                   "--repo", str(repo), "--space", str(space), "--batches", args.batches,
+                   "--device", str(args.device), "--output-dir", str(coordinate),
+                   "--build-dir", str(out / "build"), "--jobs", str(args.jobs),
+                   "--generator-python", str(python), "--fa4-python", str(python),
+                   "--cutlass-root", str(paths["prefix"] / "sources/cutlass"),
+                   "--tilelang-dual-ffn-manifest", str(manifests["dual_ffn"]),
+                   "--tilelang-wide-qkv-manifest", str(manifests["wide_qkv"]),
+                   "--tilelang-linear2-manifest", str(manifests["linear2"]),
+                   "--tilelang-outproj-manifest", str(manifests["outproj"])]
+        for cmake_arg in common_cmake(paths["prefix"]):
+            command.append(f"--cmake-arg={cmake_arg}")
+        run(command, cwd=repo, env=env)
+    ensure_file(manifest, "SM120 fat bundle")
+    bundle = out / "artifact-bundle.json"
+    coordinate_payload = load_json(manifest)
+    binary = pathlib.Path(coordinate_payload["binary"])
+    if not bundle.exists() or args.force:
+        run([str(python), "python/cuda_tactic_workflow.py", "artifact-bundle",
+             "--space", str(space), "--binary", str(binary),
+             "--manifests", str(manifest), "--output", str(bundle)],
+            cwd=repo, env=env)
+    ensure_file(bundle, "SM120 artifact bundle")
+
+
+def workflow_runtime(paths: dict[str, pathlib.Path]) -> tuple[pathlib.Path, pathlib.Path, list[str]]:
+    repo, out = paths["repo"], paths["out"]
+    if paths["workflow"].name == "sm89":
+        return (
+            out / "build/katago",
+            repo / "docs/baseline-configs/bench-cuda-gpu0-4090-s2.cfg",
+            ["--artifact-bundle", str(out / "artifact-bundle.json")],
+        )
+    manifest = load_json(out / "coordinate-fat/manifest.json")
+    return (
+        pathlib.Path(manifest["binary"]),
+        repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg",
+        ["--artifact-bundle", str(out / "artifact-bundle.json")],
+    )
+
+
+def workflow_discovery(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    binary, config, artifact_args = workflow_runtime(paths)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "scan",
+        "--space", str(out / "space.json"), "--binary", str(binary),
+        "--config", str(config), "--model", str(paths["model"]),
+        "--model-identity", str(paths["model"]), *artifact_args,
+        "--device", str(args.device), "--streams", str(args.streams),
+        "--batches", args.batches, "--phase", "discovery",
+        "--iterations", str(args.discovery_iterations),
+        "--warmup", str(args.warmup), "--repeats", "1",
+        "--min-improvement-fraction", "0.001", "--resume",
+        "--output", str(out / "discovery.json"),
+        "--raw-dir", str(out / "raw-discovery"),
+    ], cwd=repo, env=env)
+
+
+def workflow_gate(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    binary, config, artifact_args = workflow_runtime(paths)
+    gate = out / "long-gate.json"
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "gate",
+        "--space", str(out / "space.json"),
+        "--discovery", str(out / "discovery.json"),
+        "--binary", str(binary), "--config", str(config),
+        "--model", str(paths["model"]), "--model-identity", str(paths["model"]),
+        *artifact_args, "--device", str(args.device), "--batches", args.batches,
+        "--iterations", str(args.gate_iterations), "--warmup", str(args.warmup),
+        "--repeats", str(args.gate_repeats), "--output", str(gate),
+        "--raw-dir", str(out / "raw-long"),
+    ], cwd=repo, env=env)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "plan",
+        "--space", str(out / "space.json"), "--results",
+        str(out / "discovery.json"), str(gate), "--batches", args.batches,
+        "--output", str(out / "tactic-plan.json"),
+    ], cwd=repo, env=env)
+
+
+def accuracy_corpus(paths: dict[str, pathlib.Path]) -> pathlib.Path:
+    state = paths["prefix"] / "state/accuracy-corpus.json"
+    ensure_file(state, "accuracy corpus state")
+    corpus = pathlib.Path(load_json(state)["corpus"]).resolve()
+    ensure_file(corpus, "8192-row accuracy corpus")
+    return corpus
+
+
+def workflow_reference(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    """Create the immutable reference through the disabled official FP32 path."""
+    repo, prefix = paths["repo"], paths["prefix"]
+    binary, config, _ = workflow_runtime(paths)
+    corpus = accuracy_corpus(paths)
+    model_sha256 = sha256(paths["model"])
+    corpus_sha256 = sha256(corpus)
+    golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+    metadata = prefix / "assets/replay-fixed-fp32-full19.json"
+    if golden.is_file() and not args.force:
+        ensure_file(metadata, "FP32 reference metadata")
+        recorded = load_json(metadata)
+        if (
+            recorded.get("reference_sha256") != sha256(golden) or
+            recorded.get("model_sha256") != model_sha256 or
+            recorded.get("corpus_sha256") != corpus_sha256 or
+            recorded.get("batch") != 13
+        ):
+            raise RuntimeError(
+                "FP32 reference metadata differs from the current model/corpus"
+            )
+        print(
+            f"[autotune] reusing FP32 reference {golden} sha256={sha256(golden)}",
+            flush=True,
+        )
+        return
+    temporary = golden.with_suffix(golden.suffix + ".partial")
+    temporary.unlink(missing_ok=True)
+    overrides = {
+        "cudaDeviceToUseThread0": args.device,
+        "cudaSm89Backend": False,
+        "cudaSm120Backend": False,
+        "nnMaxBatchSize": 13,
+        "numNNServerThreadsPerModel": 1,
+        "useFP16": False,
+    }
+    command = [
+        str(binary), "replaynn", "-config", str(config),
+        "-override-config", config_string(overrides),
+        "-model", str(paths["model"]), "-corpus", str(corpus),
+        "-output", str(temporary), "-batch-size", "13",
+    ]
+    run(command, cwd=repo, env=env)
+    os.replace(temporary, golden)
+    metadata.write_text(json.dumps({
+        "schema": 1,
+        "kind": "official-disabled-backend-full-fp32-reference",
+        "binary": str(binary),
+        "binary_sha256": sha256(binary),
+        "model_sha256": model_sha256,
+        "corpus_sha256": corpus_sha256,
+        "reference": str(golden),
+        "reference_sha256": sha256(golden),
+        "batch": 13,
+        "device": args.device,
+        "overrides": overrides,
+        "command": command,
+    }, indent=2, sort_keys=True) + "\n")
+    print(f"[autotune] FP32 reference sha256={sha256(golden)}", flush=True)
+
+
+def select_best_long_gate_row(
+    gate_payload: dict[str, Any], batches: list[int],
+) -> tuple[int, dict[str, object], float]:
+    rows = [
+        row for row in gate_payload.get("rows", [])
+        if isinstance(row, dict) and row.get("history_long_gate") is True
+    ]
+    by_batch: dict[int, dict[str, object]] = {}
+    for row in rows:
+        batch = int(row["batch"])
+        if batch in by_batch:
+            raise RuntimeError(f"long gate contains duplicate B{batch} final rows")
+        by_batch[batch] = row
+    if sorted(by_batch) != batches:
+        raise RuntimeError(
+            f"long gate batches differ: {sorted(by_batch)} != {batches}"
+        )
+    measured: list[tuple[float, int]] = []
+    for batch in batches:
+        row = by_batch[batch]
+        metric = row.get("stable_long_nn_evals_per_sec")
+        if (
+            row.get("status") != "measured" or
+            not isinstance(metric, (int, float)) or
+            not math.isfinite(float(metric)) or
+            float(metric) <= 0.0
+        ):
+            raise RuntimeError(f"long gate B{batch} lacks a stable positive throughput")
+        measured.append((float(metric), batch))
+    # A tie selects the smaller exact batch deterministically.
+    best_metric, best_batch = max(measured, key=lambda item: (item[0], -item[1]))
+    return best_batch, by_batch[best_batch], best_metric
+
+
+def workflow_accuracy(
+    args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str],
+) -> None:
+    """Replay only the fastest long-gate batch and attach its 8192-row certificate."""
+    repo, out, python, prefix = (
+        paths["repo"], paths["out"], paths["python"], paths["prefix"],
+    )
+    binary, config, _ = workflow_runtime(paths)
+    corpus = accuracy_corpus(paths)
+    golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+    ensure_file(golden, "immutable official full-FP32 reference")
+    golden_metadata = prefix / "assets/replay-fixed-fp32-full19.json"
+    ensure_file(golden_metadata, "immutable official full-FP32 metadata")
+    reference_sha256 = sha256(golden)
+    binary_sha256 = sha256(binary)
+    corpus_sha256 = sha256(corpus)
+    model_sha256 = sha256(paths["model"])
+    recorded_golden = load_json(golden_metadata)
+    if (
+        recorded_golden.get("reference_sha256") != reference_sha256 or
+        recorded_golden.get("model_sha256") != model_sha256 or
+        recorded_golden.get("corpus_sha256") != corpus_sha256 or
+        recorded_golden.get("batch") != 13
+    ):
+        raise RuntimeError(
+            "FP32 reference metadata differs from the current model/corpus"
+        )
+    gate = out / "long-gate.json"
+    ensure_file(gate, "long gate")
+    gate_payload = load_json(gate)
+    batches = parse_batch_set(args.batches)
+    best_batch, best_row, best_metric = select_best_long_gate_row(
+        gate_payload, batches
+    )
+    print(
+        f"[autotune] fastest long-gate plan is B{best_batch}: "
+        f"{best_metric:.3f} nnEval/s; certifying only this plan",
+        flush=True,
+    )
+    accuracy_dir = out / "accuracy"
+    accuracy_dir.mkdir(parents=True, exist_ok=True)
+    reports: dict[int, pathlib.Path] = {}
+    for batch in (best_batch,):
+        report = accuracy_dir / f"replay-b{batch}-vs-fp32.json"
+        reports[batch] = report
+        row_overrides = best_row.get("overrides")
+        if not isinstance(row_overrides, dict):
+            raise RuntimeError(f"long gate B{batch} has no replayable overrides")
+        overrides = dict(row_overrides)
+        if int(overrides.get("nnMaxBatchSize", -1)) != batch:
+            raise RuntimeError(
+                f"long gate B{batch} is not bound to its exact evaluator capacity"
+            )
+        if report.is_file() and not args.force:
+            existing = load_json(report)
+            if (
+                existing.get("referenceSha256") == reference_sha256 and
+                int(existing.get("numRows", 0)) == 8192 and
+                existing.get("exactBatch") == batch and
+                existing.get("candidateBinarySha256") == binary_sha256 and
+                existing.get("candidateOverrides") == overrides and
+                existing.get("corpusSha256") == corpus_sha256 and
+                existing.get("modelSha256") == model_sha256 and
+                existing.get("candidateMaxBatchSize") == batch and
+                existing.get("candidateFixedBatchTailPadding") is True and
+                existing.get("referenceFixedBatchTailPadding") is True and
+                existing.get("inputAndTargetSectionsByteExact") is True
+            ):
+                print(f"[autotune] reusing accuracy report {report}", flush=True)
+                continue
+        candidate = accuracy_dir / f"replay-b{batch}.krnn"
+        candidate.unlink(missing_ok=True)
+        replay = [
+            str(binary), "replaynn", "-config", str(config),
+            "-override-config", config_string(overrides),
+            "-model", str(paths["model"]), "-corpus", str(corpus),
+            "-output", str(candidate), "-batch-size", str(batch),
+        ]
+        run(replay, cwd=repo, env=env)
+        run([
+            str(python), "python/katago/train/compare_replay_krnn.py",
+            "--reference", str(golden), "--candidate", str(candidate),
+            "--output", str(report),
+            "--expected-candidate-batch", str(batch),
+        ], cwd=repo, env=env)
+        report_payload = load_json(report)
+        report_payload.update({
+            "candidateBinarySha256": binary_sha256,
+            "candidateOverrides": overrides,
+            "corpusSha256": corpus_sha256,
+            "modelSha256": model_sha256,
+        })
+        report.write_text(
+            json.dumps(report_payload, indent=2, sort_keys=True) + "\n"
+        )
+        candidate.unlink()
+    certified = out / "long-gate-best-certified.json"
+    certify = [
+        str(python), "python/cuda_tactic_workflow.py", "certify",
+        "--gate", str(gate),
+    ]
+    for batch, report in reports.items():
+        certify.extend(["--comparison", f"{batch}={report}"])
+    certify.extend(["--output", str(certified)])
+    run(certify, cwd=repo, env=env)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "plan",
+        "--space", str(out / "space.json"), "--results",
+        str(out / "discovery.json"), str(certified),
+        "--batches", str(best_batch),
+        "--output", str(out / "best-tactic-plan.json"),
+    ], cwd=repo, env=env)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prefix", type=pathlib.Path)
+    parser.add_argument("--output-dir", type=pathlib.Path)
+    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--batches", default="4-32")
+    parser.add_argument("--streams", type=int, default=2)
+    parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
+    parser.add_argument(
+        "--phase",
+        choices=("detect", "prepare", "discovery", "gate", "reference", "accuracy", "all"),
+        default="all",
+    )
+    parser.add_argument("--discovery-iterations", type=int, default=100)
+    parser.add_argument("--gate-iterations", type=int, default=1000)
+    parser.add_argument("--gate-repeats", type=int, default=2)
+    parser.add_argument("--warmup", type=int, default=50)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+    script_dir = pathlib.Path(__file__).resolve().parent
+    if args.prefix is None:
+        pointer = script_dir / "runtime-prefix.txt"
+        args.prefix = pathlib.Path(pointer.read_text().strip()) if pointer.exists() else script_dir / "runtime"
+    prefix = args.prefix.resolve()
+    repo = prefix / "repo"
+    python = prefix / "venv/bin/python"
+    model = prefix / "assets/b11c768h12nbt3tflrs-fson-silu.bin.gz"
+    for path, label in ((python, "configured Python"), (model, "model")):
+        ensure_file(path, label)
+    hardware = detect(repo, args.device)
+    out = (args.output_dir or prefix / "results" / f"{hardware['workflow']}-{args.batches}-s{args.streams}-gpu{args.device}").resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "device.json").write_text(json.dumps(hardware, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(hardware, indent=2, sort_keys=True), flush=True)
+    if args.phase == "detect":
+        return 0
+    env = dict(os.environ)
+    env.update({
+        "AUTOTUNE_PREFIX": str(prefix), "CUDA_HOME": str(prefix / "cuda"),
+        "CUDA_PATH": str(prefix / "cuda"), "CUDNN_ROOT": str(prefix / "cudnn"),
+        "PATH": f"{prefix / 'venv/bin'}:{prefix / 'cuda/bin'}:{env.get('PATH', '')}",
+        "LD_LIBRARY_PATH": f"{prefix / 'cudnn/lib'}:{prefix / 'cuda/lib64'}:{prefix / 'native/lib'}:{env.get('LD_LIBRARY_PATH', '')}",
+        "CMAKE_PREFIX_PATH": f"{prefix / 'native'}:{env.get('CMAKE_PREFIX_PATH', '')}",
+        "XDG_CACHE_HOME": str(prefix / "cache"), "TRITON_HOME": str(prefix / "cache/triton"),
+        "TRITON_CACHE_DIR": str(prefix / "cache/triton-runtime"),
+        "CMAKE_BUILD_PARALLEL_LEVEL": str(args.jobs), "MAX_JOBS": str(args.jobs),
+    })
+    paths = {"prefix": prefix, "repo": repo, "python": python, "model": model,
+             "out": out, "gpu_class": pathlib.Path(hardware["gpu_class"]),
+             "workflow": pathlib.Path(hardware["workflow"])}
+    prepare = sm89_prepare if hardware["workflow"] == "sm89" else sm120_prepare
+    if args.phase in ("prepare", "all"):
+        prepare(args, paths, env)
+    if args.phase in ("discovery", "all"):
+        workflow_discovery(args, paths, env)
+    if args.phase in ("gate", "all"):
+        workflow_gate(args, paths, env)
+    if args.phase == "reference":
+        workflow_reference(args, paths, env)
+    if args.phase in ("accuracy", "all"):
+        golden = prefix / "assets/replay-fixed-fp32-full19.krnn"
+        if args.phase == "accuracy" or golden.is_file():
+            workflow_accuracy(args, paths, env)
+        else:
+            print(
+                "[autotune] immutable FP32 reference is absent; skipping accuracy "
+                "and leaving production_ready=false",
+                flush=True,
+            )
+    final_plan = (
+        out / "best-tactic-plan.json"
+        if (out / "best-tactic-plan.json").is_file()
+        else out / "tactic-plan.json"
+    )
+    if final_plan.exists():
+        print(f"[autotune] final plan: {final_plan} sha256={sha256(final_plan)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

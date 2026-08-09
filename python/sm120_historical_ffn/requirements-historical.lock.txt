@@ -1,0 +1,44 @@
+# Exact `pip freeze --all`, sorted, from the historical source-generation venv.
+# Its SHA256 including only the package lines below plus trailing newlines is
+# 3704b3fca84fe62052a367d3368cce1005dfc27f01303e43be66fc9936f7336c.
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+apache-tvm-ffi==0.1.12
+cloudpickle==3.1.2
+cuda-bindings==13.3.1
+cuda-pathfinder==1.6.0
+cuda-toolkit==13.0.3.0
+filelock==3.32.2
+fsspec==2026.7.0
+ml_dtypes==0.5.4
+mpmath==1.3.0
+networkx==3.4.2
+numpy==2.2.6
+nvidia-cublas==13.1.1.3
+nvidia-cuda-cupti==13.0.85
+nvidia-cuda-nvrtc==13.0.88
+nvidia-cuda-runtime==13.0.96
+nvidia-cudnn-cu13==9.20.0.48
+nvidia-cufft==12.0.0.61
+nvidia-cufile==1.15.1.6
+nvidia-curand==10.4.0.35
+nvidia-cusolver==12.0.4.66
+nvidia-cusparse==12.6.3.3
+nvidia-cusparselt-cu13==0.8.1
+nvidia-nccl-cu13==2.29.7
+nvidia-nvjitlink==13.3.33
+nvidia-nvshmem-cu13==3.4.5
+nvidia-nvtx==13.0.85
+onnx==1.19.0
+pip==26.2
+protobuf==7.35.1
+psutil==7.2.2
+setuptools==83.0.0
+sympy==1.14.0
+tilelang==0.1.13
+torch==2.13.0
+torch_c_dlpack_ext==0.1.5
+tqdm==4.70.0
+triton==3.7.1
+typing_extensions==4.16.0
+z3-solver==4.15.4.0

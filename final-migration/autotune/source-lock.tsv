@@ -1,0 +1,10 @@
+# name	commit	builder	distribution	notes
+cutlass	dcf215af68a2d08d305076c152a06f201728cd53	header+nvidia-binary	nvidia-cutlass-dsl	CuTe source plus official DSL binary payload
+flash-attention	69e1bcbe77c359c84b3a4589e92a7c076e33a202	python:flash_attn/cute	flash-attn-4	apply both checked-in KataGo patches
+flash-cutlass	7127592069c2fe01b041e174ba4345ef9b279671	header	-	materialize at flash-attention/csrc/cutlass
+triton	5bcfc513ddbbc64f2688dfb15a4d824c56a9649a	python:.	triton	offline build uses carried LLVM and JSON trees
+quack	050387bde3d3f03a26c87279bff2df3173640127	python:.	quack-kernels	build with --no-deps
+TileLang	12dbf3e9d30d84b5c27d7b8b672c268457f7eb27	python:.	tilelang	all recursive submodules materialized
+apache-tvm-ffi	3050b0a7bd48e04f853027c5fa1f5ab7bc20b856	python:.	apache-tvm-ffi	all recursive submodules materialized
+cudnn-frontend	ec139877e51f17d6b1d7520d9789f34d1c65f77e	header	-	header-only source
+zlib	e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca	cmake	zlib	KataGo model and NPZ input support

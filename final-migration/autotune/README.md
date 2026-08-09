@@ -1,0 +1,88 @@
+# Unified SM89 / SM120 autotune SDK
+
+This directory defines the source-based, non-invasive autotune distribution.
+It is separate from `environment/package-distribution.sh`, which packages an
+already-built inference runtime.
+
+The release artifact is one uncompressed outer `.tar`.  Release construction
+resolves the newest dated archive listed by the official KataGo public
+training-data index, records its URL and SHA-256, and deterministically samples
+exactly 8192 full 19x19 rows with seed 20260803. It carries that corpus and its
+complete source/row manifest. It also carries a pinned
+Python runtime, CUDA 13.2 build toolkit, cuDNN 9.25 for CUDA 13, the complete
+KataGo source tree, materialized third-party source trees, build-prerequisite
+payloads, pinned binary wheels, the model, and integrity manifests.  The
+target does not clone GitHub repositories or resolve dependency versions.
+
+After extracting the release in a writable persistent directory:
+
+```bash
+./setup.sh
+./run-autotune.sh --device 0
+```
+
+The host baseline is Linux x86-64 with glibc 2.28 or newer, an NVIDIA driver
+compatible with CUDA 13.2, and the small OS bootstrap set checked by `setup.sh`
+(`bash`, GNU tar/coreutils, and GCC/G++). Everything above that
+bootstrap is carried in the tar; setup performs no APT transaction, Git clone,
+or network access. Setup validates the carried corpus before building. The
+same `prepare_accuracy_corpus.py` path can reconstruct a missing pair from the
+frozen official archive, while release construction uses `--refresh-latest` so
+"latest" is resolved once and then made reproducible. This deliberately
+supports both validated Ubuntu 22.04 and
+24.04 hosts instead of encoding one Ubuntu release.
+
+`setup.sh` writes only below the extracted directory unless `--prefix` is
+given.  It builds TVM-FFI, Triton, TileLang, Quack and FlashAttention from the
+carried source into the locked Python 3.12 environment.  PyTorch and NVIDIA
+CUTLASS DSL are explicit upstream-binary exceptions; their exact wheels are
+carried because neither project exposes a practical equivalent source-only
+Python payload for this workflow.  CUDA and cuDNN are NVIDIA binary
+toolchains, not Python source dependencies.
+
+Build parallelism defaults to the lower of `nproc` and a memory-aware limit
+(75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler
+process). This avoids fixed `-j4`/`-j8` values while protecting hosts where
+Triton translation units make `-j$(nproc)` exceed RAM. `--jobs N` remains an
+explicit override.
+
+`run-autotune.sh` queries the selected device through the CUDA Runtime.  CC
+8.9 dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow.
+The default domain is exact B4-B32 with two inference streams. Discovery is
+short; a final plan is only marked scan-bypass-ready after the 1000-iteration,
+two-repeat long gate has covered all 29 batches. If the tar carries the
+immutable full-FP32 golden, `all` selects the highest-throughput long-gate
+batch, replays that one plan over the 8,192-row corpus, and emits a single-batch
+`best-tactic-plan.json` with `production_ready=true`. Replay pads only
+the physical tail batch by repeating real rows and serializes exactly 8,192
+rows, so an exact-batch AOT route never escapes the accuracy gate through a
+short-tail fallback. Candidate `.krnn` dumps are deleted immediately after
+comparison; the reference and the one selected report are retained.
+The comparator also requires exact-batch/tail-padding metadata and
+byte-identical target/input sections; a golden from a different model or
+corpus is rejected rather than relabeled.
+
+Release qualification can create the reference explicitly, through the
+official CUDA FP32 path with both optimized backends disabled:
+
+```bash
+./run-autotune.sh --device 0 --phase reference
+./run-autotune.sh --device 0 --phase accuracy
+```
+
+The first command records the binary/model/corpus hashes and the exact
+disabled-backend overrides next to the golden. It never treats a candidate
+backend's output as its own expected result. If the tar has no reference,
+`all` leaves `production_ready=false` and prints that accuracy was skipped.
+
+The accepted historical SM120 tanh-half2 FFN is preserved as hash-addressed
+B1-B32 device sources. The current/latest TileLang source build is used for new
+optimization candidates, while historical materialization verifies and wraps
+the frozen source instead of asking a newer compiler to reproduce old bytes.
+
+Each benchmark subprocess records SM occupancy with `nvidia-smi pmon` while it
+runs. A process that only holds device memory but has zero SM activity is not
+treated as contention; a newly active external compute process invalidates
+that measurement.
+
+See [SPEC.md](SPEC.md) for the packaging and plan contracts.

@@ -1,0 +1,377 @@
+#ifndef NEURALNET_NNEVAL_H_
+#define NEURALNET_NNEVAL_H_
+
+#include <memory>
+#include <vector>
+
+#include "../core/global.h"
+#include "../core/commontypes.h"
+#include "../core/logger.h"
+#include "../core/multithread.h"
+#include "../core/threadsafequeue.h"
+#include "../game/board.h"
+#include "../game/boardhistory.h"
+#include "../neuralnet/nninputs.h"
+#include "../neuralnet/sgfmetadata.h"
+#include "../neuralnet/nninterface.h"
+#include "../search/mutexpool.h"
+
+class NNEvaluator;
+struct NNResultBuf;
+struct EventPipelineSchedulerState;
+
+struct NNEvalBenchmarkResult {
+  int batchSize;
+  int numServerThreads;
+  int numIterations;
+  int phaseOffsetMicros;
+  std::vector<std::vector<double>> perServerIterationSeconds;
+  std::vector<double> perServerMedianSeconds;
+  std::vector<double> perServerNNEvalsPerSec;
+  double combinedWallSeconds;
+  double combinedNNEvalsPerSec;
+  double actualWallSeconds;
+  double actualWallPerForwardMs;
+};
+
+// Coordinates evaluator workers so that partial batches launch only while their
+// GPU has no other inference in flight. Full batches may overlap across workers.
+class NNBatchingDispatcher {
+ public:
+  NNBatchingDispatcher(bool enabled, const std::vector<int>& gpuIdxByServerThread);
+
+  bool waitForBatch(
+    ThreadSafeQueue<NNResultBuf*>& queue,
+    std::vector<NNResultBuf*>& resultBufs,
+    int maxBatchSize,
+    const std::atomic<int>& currentBatchSize,
+    int serverThreadIdx
+  );
+  void completeBatch(int serverThreadIdx);
+  void notify();
+  // Only call while no evaluator server threads are running.
+  void resetGpuIdxByServerThread(const std::vector<int>& gpuIdxByServerThread);
+
+ private:
+  const bool enabled;
+  std::vector<int> gpuIdxByServerThread;
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::vector<bool> serverThreadHasActiveBatch;
+};
+
+class NNCacheTable {
+  struct Entry {
+    std::shared_ptr<NNOutput> ptr;
+    Entry();
+    ~Entry();
+  };
+
+  Entry* entries;
+  MutexPool* mutexPool;
+  uint64_t tableSize;
+  uint64_t tableMask;
+  uint32_t mutexPoolMask;
+
+ public:
+  NNCacheTable(int sizePowerOfTwo, int mutexPoolSizePowerOfTwo);
+  ~NNCacheTable();
+
+  NNCacheTable(const NNCacheTable& other) = delete;
+  NNCacheTable& operator=(const NNCacheTable& other) = delete;
+
+  // These are thread-safe. For get, ret will be set to nullptr upon a failure to find.
+  bool get(Hash128 nnHash, std::shared_ptr<NNOutput>& ret);
+  void set(const std::shared_ptr<NNOutput>& p);
+  void clear();
+};
+
+// Each thread should allocate and re-use one of these
+struct NNResultBuf {
+  std::condition_variable clientWaitingForResult;
+  std::mutex resultMutex;
+  bool hasResult;
+  bool includeOwnerMap;
+  int boardXSizeForServer;
+  int boardYSizeForServer;
+  std::vector<float> rowSpatialBuf;
+  std::vector<float> rowGlobalBuf;
+  std::vector<float> rowMetaBuf;
+  bool hasRowMeta;
+  std::shared_ptr<NNOutput> result;
+  bool errorLogLockout; // error flag to restrict log to 1 error to prevent spam
+  int symmetry; // The symmetry to use for this eval
+  double policyOptimism; // The policy optimism to use for this eval
+
+  NNResultBuf();
+  ~NNResultBuf();
+  NNResultBuf(const NNResultBuf& other) = delete;
+  NNResultBuf& operator=(const NNResultBuf& other) = delete;
+};
+
+// Each server thread should allocate and re-use one of these
+struct NNServerBuf {
+  InputBuffers* inputBuffers;
+
+  NNServerBuf(const NNEvaluator& nneval, const LoadedModel* model);
+  ~NNServerBuf();
+  NNServerBuf(const NNServerBuf& other) = delete;
+  NNServerBuf& operator=(const NNServerBuf& other) = delete;
+};
+
+class NNEvaluator {
+ public:
+  NNEvaluator(
+    const std::string& modelName,
+    const std::string& modelFileName,
+    const std::string& expectedSha256,
+    Logger* logger,
+    int maxBatchSize,
+    int nnXLen,
+    int nnYLen,
+    bool requireExactNNLen,
+    bool inputsUseNHWC,
+    int nnCacheSizePowerOfTwo,
+    int nnMutexPoolSizePowerofTwo,
+    bool debugSkipNeuralNet,
+    const std::string& homeDataDirOverride,
+    enabled_t useFP16Mode,
+    int numThreads,
+    const std::vector<int>& gpuIdxByServerThread,
+    const std::string& randSeed,
+    bool doRandomize,
+    int defaultSymmetry,
+    bool disableWarmup,
+    // Consulted by the compute backend for its own custom options; not stored.
+    ConfigParser& cfg
+  );
+  ~NNEvaluator();
+
+  NNEvaluator(const NNEvaluator& other) = delete;
+  NNEvaluator& operator=(const NNEvaluator& other) = delete;
+
+  std::string getModelName() const;
+  std::string getModelFileName() const;
+  std::string getInternalModelName() const;
+  std::string getAbbrevInternalModelName() const;
+  Logger* getLogger();
+  bool isNeuralNetLess() const;
+  int getMaxBatchSize() const;
+  int getCurrentBatchSize() const;
+  void setCurrentBatchSize(int batchSize);
+  bool requiresSGFMetadata() const;
+
+  int getNumGpus() const;
+  int getNumServerThreads() const;
+  std::set<int> getGpuIdxs() const;
+  int getNNXLen() const;
+  int getNNYLen() const;
+  bool getRequireExactNNLen() const;
+  int getModelVersion() const;
+  double getTrunkSpatialConvDepth() const;
+  enabled_t getUsingFP16Mode() const;
+
+  // Check if the loaded neural net supports shorttermError fields
+  bool supportsShorttermError() const;
+
+  // Whether the loaded model declares that it expects pass-alive area input features to be
+  // computed as if multi-stone suicide were always legal, regardless of the actual suicide rule.
+  // False if there is no loaded model (e.g. debugSkipNeuralNet).
+  bool modelPreferPassAliveUnderSuicideRules() const;
+
+  // Return the "nearest" supported ruleset to desiredRules by this model.
+  // Fills supported with true if desiredRules itself was exactly supported, false if some modifications had to be made.
+  Rules getSupportedRules(const Rules& desiredRules, bool& supported) const;
+
+  // Clear all entires cached in the table
+  void clearCache();
+
+  // Queue a position for the next neural net batch evaluation and wait for it. Upon evaluation, result
+  // will be supplied in NNResultBuf& buf, the shared_ptr there can grabbed via std::move if desired.
+  // logStream is for some error logging, can be NULL.
+  // This function is threadsafe.
+  void evaluate(
+    const Board& board,
+    const BoardHistory& history,
+    Player nextPlayer,
+    const MiscNNInputParams& nnInputParams,
+    NNResultBuf& buf,
+    bool skipCache,
+    bool includeOwnerMap
+  );
+  // Queue already-prepared feature tensors through the ordinary evaluator
+  // scheduler and return raw heads for the offline FP32 stress guard.
+  void evaluatePreparedRaw(NNResultBuf& buf, bool includeOwnerMap);
+  void evaluate(
+    const Board& board,
+    const BoardHistory& history,
+    Player nextPlayer,
+    const SGFMetadata* sgfMeta,
+    const MiscNNInputParams& nnInputParams,
+    NNResultBuf& buf,
+    bool skipCache,
+    bool includeOwnerMap
+  );
+  std::shared_ptr<NNOutput>* averageMultipleSymmetries(
+    const Board& board,
+    const BoardHistory& history,
+    Player nextPlayer,
+    const SGFMetadata* sgfMeta,
+    const MiscNNInputParams& baseNNInputParams,
+    NNResultBuf& buf,
+    bool includeOwnerMap,
+    Rand& rand,
+    int numSymmetriesToSample
+  );
+
+  // If there is at least one evaluate ongoing, wait until at least one finishes.
+  // Returns immediately if there isn't one ongoing right now.
+  void waitForNextNNEvalIfAny();
+
+  // Actually spawn threads to handle evaluations.
+  // If doRandomize, uses randSeed as a seed, further randomized per-thread
+  // If not doRandomize, uses defaultSymmetry for all nn evaluations, unless a symmetry is requested in MiscNNInputParams.
+  // This function itself is not threadsafe.
+  void spawnServerThreads();
+
+  // Kill spawned server threads and join and free them. This function is not threadsafe, and along with spawnServerThreads
+  // should have calls to it and spawnServerThreads singlethreaded.
+  void killServerThreads();
+
+  // Set the number of threads and what gpus they use. Only call this if threads are not spawned yet, or have been killed.
+  void setNumThreads(const std::vector<int>& gpuIdxByServerThr);
+
+  // After spawnServerThreads has returned, check if is was using FP16.
+  bool isAnyThreadUsingFP16() const;
+
+  // These are thread-safe. Setting them in the middle of operation might only affect future
+  // neural net evals, rather than any in-flight.
+  bool getDoRandomize() const;
+  int getDefaultSymmetry() const;
+  void setDoRandomize(bool b);
+  void setDefaultSymmetry(int s);
+
+  // Some stats
+  uint64_t numRowsProcessed() const;
+  uint64_t numBatchesProcessed() const;
+  std::vector<uint64_t> numRowsProcessedByServerThread() const;
+  std::vector<uint64_t> numBatchesProcessedByServerThread() const;
+  double averageProcessedBatchSize() const;
+  uint64_t numCacheHits() const;
+
+  void clearStats();
+
+  // Pure-network benchmark honoring the evaluator's configured batch size, NN server threads, and
+  // per-server GPU assignment. Does not include feature generation, postprocessing, H2D/D2H, or
+  // search. One compute handle + input buffers are created per NN server thread, each on its own
+  // CUDA stream, and the forward passes run concurrently.
+  NNEvalBenchmarkResult benchmarkPureForward(
+    int numWarmups, int numIterations, int phaseOffsetMicros
+  );
+
+  // Accessors used by the replay command (replaynn) to drive the same compute handles and input
+  // buffers that the benchmark path uses, without going through search or the eval queue.
+  ComputeContext* getComputeContext() const { return computeContext; }
+  LoadedModel* getLoadedModel() const { return loadedModel; }
+  bool getInputsUseNHWC() const { return inputsUseNHWC; }
+  int getGpuIdxByServerThread(int threadIdx) const {
+    testAssert(threadIdx >= 0 && threadIdx < (int)gpuIdxByServerThread.size());
+    return gpuIdxByServerThread[threadIdx];
+  }
+
+ private:
+  const std::string modelName;
+  const std::string modelFileName;
+  const int nnXLen;
+  const int nnYLen;
+  const bool requireExactNNLen;
+  const int policySize;
+  const bool inputsUseNHWC;
+  const enabled_t usingFP16Mode;
+  int numThreads;
+  std::vector<int> gpuIdxByServerThread;
+  const std::string randSeed;
+  const bool debugSkipNeuralNet;
+  const bool disableWarmup;
+  const bool warmupOnlyMaxBatchSize;
+  const bool batchAwareDispatch;
+  const bool cudaAsyncInferPipeline;
+  const bool cudaEventPipelineUseGraph;
+
+  ComputeContext* computeContext;
+  LoadedModel* loadedModel;
+  NNCacheTable* nnCacheTable;
+  Logger* logger;
+
+  std::string internalModelName;
+  int modelVersion;
+  int inputsVersion;
+  int numInputMetaChannels;
+
+  ModelPostProcessParams postProcessParams;
+
+  int numServerThreadsEverSpawned;
+  std::vector<std::thread*> serverThreads;
+  EventPipelineSchedulerState* eventPipelineSchedulerState;
+
+  const int maxBatchSize;
+
+  // Counters for statistics
+  std::atomic<uint64_t> m_numRowsProcessed;
+  std::atomic<uint64_t> m_numBatchesProcessed;
+  std::atomic<uint64_t> m_numCacheHits;
+
+  mutable std::mutex bufferMutex;
+
+  // Everything in this section is protected under bufferMutex--------------------------------------------
+
+  bool isKilled; // Flag used for killing server threads
+  int numServerThreadsStartingUp; // Counter for waiting until server threads are spawned
+  std::condition_variable mainThreadWaitingForSpawn; // Condvar for waiting until server threads are spawned
+
+  std::vector<int> serverThreadsIsUsingFP16;
+  std::vector<uint64_t> m_numRowsProcessedByServerThread;
+  std::vector<uint64_t> m_numBatchesProcessedByServerThread;
+
+  int numOngoingEvals; // Current number of ongoing evals.
+  int numWaitingEvals; // Current number of things waiting for finish.
+  int numEvalsToAwaken; // Current number of things waitingForFinish that should be woken up. Used to avoid spurious wakeups.
+  std::condition_variable waitingForFinish; // Condvar for waiting for at least one ongoing eval to finish.
+
+  //-------------------------------------------------------------------------------------------------
+
+  // Randomization settings for symmetries
+  std::atomic<bool> currentDoRandomize;
+  std::atomic<int> currentDefaultSymmetry;
+  // Modifiable batch size smaller than maxBatchSize
+  std::atomic<int> currentBatchSize;
+
+  // Queued up requests
+  ThreadSafeQueue<NNResultBuf*> queryQueue;
+  NNBatchingDispatcher batchingDispatcher;
+
+  // Fill buf.row{Spatial,Global,Meta}Buf from a position. Shared by evaluate() and warmup.
+  void fillRowBufs(
+    const Board& board,
+    const BoardHistory& history,
+    Player nextPlayer,
+    const SGFMetadata* sgfMeta,
+    const MiscNNInputParams& nnInputParams,
+    NNResultBuf& buf
+  ) const;
+
+  // Run forward passes on this freshly-created handle to pre-compile lazily-built backend graphs
+  // (e.g. cuDNN SDPA execution plans). By default all batch sizes 1..maxBatchSize are covered;
+  // fixed-B benchmarks may request only maxBatchSize through cudaWarmupOnlyMaxBatchSize.
+  // gpuHandle may be NULL (neural-net-less), in which case this is a no-op.
+  void maybeWarmupComputeHandle(ComputeHandle* gpuHandle, int serverThreadIdx);
+
+ public:
+  // Helper, for internal use only
+  void serve(NNServerBuf& buf, Rand& rand, int gpuIdxForThisThread, int serverThreadIdx);
+#ifdef USE_CUDA_BACKEND
+  void serveEventPipelineScheduler(const std::string& randSeedThisThread);
+#endif
+};
+
+#endif  // NEURALNET_NNEVAL_H_

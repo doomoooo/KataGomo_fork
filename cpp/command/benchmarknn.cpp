@@ -1,0 +1,280 @@
+#include "../core/global.h"
+#include "../core/config_parser.h"
+#include "../core/logger.h"
+#include "../core/rand.h"
+#include "../dataio/sgf.h"
+#include "../neuralnet/nneval.h"
+#include "../program/setup.h"
+#include "../command/commandline.h"
+#include "../main.h"
+
+#ifdef USE_CUDA_BACKEND
+#include "../neuralnet/cudaincludes.h"
+#endif
+
+#include <iomanip>
+#include <set>
+#include <sstream>
+
+using namespace std;
+
+static string jsonEscape(const string& s) {
+  ostringstream out;
+  for(char c : s) {
+    if(c == '"' || c == '\\')
+      out << '\\' << c;
+    else if(c == '\n')
+      out << "\\n";
+    else if(c == '\t')
+      out << "\\t";
+    else if(c == '\r')
+      out << "\\r";
+    else
+      out << c;
+  }
+  return out.str();
+}
+
+int MainCmds::benchmarknn(const vector<string>& args) {
+  Board::initHash();
+  ScoreValue::initTables();
+  Rand seedRand;
+
+  ConfigParser cfg;
+  string modelFile;
+  int numIterations = 100;
+  int numWarmups = 10;
+  int batchSizeOverride = -1;
+  int boardSize = 19;
+  int phaseOffsetMicros = -1;
+  bool jsonOut = false;
+
+  try {
+    KataGoCommandLine cmd(
+      "Benchmark pure neural-net forward throughput. Honors config settings for batch size, "
+      "NN server threads, and per-server GPU assignment. Excludes feature generation, "
+      "postprocessing, H2D/D2H, and search."
+    );
+    cmd.addConfigFileArg(KataGoCommandLine::defaultGtpConfigFileName(),"gtp_example.cfg");
+    cmd.addModelFileArg();
+    TCLAP::ValueArg<int> iterationsArg(
+      "","iterations","Number of timed forward passes per server thread (default 100)",
+      false,100,"N"
+    );
+    TCLAP::ValueArg<int> warmupArg(
+      "","warmup","Warmup forward passes per server thread before timing (default 10)",
+      false,10,"N"
+    );
+    TCLAP::ValueArg<int> batchSizeArg(
+      "","batch-size","Override nnMaxBatchSize from config (default: use config, or 16)",
+      false,-1,"N"
+    );
+    TCLAP::ValueArg<int> boardSizeArg(
+      "","boardsize","NN board size: 9, 13, or 19 (default 19)",
+      false,19,"N"
+    );
+    TCLAP::ValueArg<int> phaseOffsetArg(
+      "","phase-offset-us",
+      "Diagnostic initial offset between benchmark streams in microseconds (-1 disables)",
+      false,-1,"US"
+    );
+    TCLAP::SwitchArg jsonArg("","json","Print results as JSON",false);
+    cmd.add(iterationsArg);
+    cmd.add(warmupArg);
+    cmd.add(batchSizeArg);
+    cmd.add(boardSizeArg);
+    cmd.add(phaseOffsetArg);
+    cmd.add(jsonArg);
+    cmd.setShortUsageArgLimit();
+    cmd.addOverrideConfigArg();
+
+    cmd.parseArgs(args);
+
+    modelFile = cmd.getModelFile();
+    numIterations = iterationsArg.getValue();
+    numWarmups = warmupArg.getValue();
+    batchSizeOverride = batchSizeArg.getValue();
+    boardSize = boardSizeArg.getValue();
+    phaseOffsetMicros = phaseOffsetArg.getValue();
+    jsonOut = jsonArg.getValue();
+    cmd.getConfig(cfg);
+
+    if(numIterations <= 0)
+      throw StringError("benchmarknn: iterations must be > 0");
+    if(numWarmups < 0)
+      throw StringError("benchmarknn: warmup must be >= 0");
+    if(boardSize != 9 && boardSize != 13 && boardSize != 19)
+      throw StringError("benchmarknn: boardsize must be 9, 13, or 19");
+    if(phaseOffsetMicros < -1)
+      throw StringError("benchmarknn: phase-offset-us must be -1 or nonnegative");
+  }
+  catch(TCLAP::ArgException& e) {
+    cerr << "Error: " << e.error() << " for argument " << e.argId() << endl;
+    return 1;
+  }
+
+  const bool logToStdoutDefault = true;
+  const bool logToStderrDefault = false;
+  const bool logTimeDefault = false;
+  Logger logger(NULL, logToStdoutDefault, logToStderrDefault, logTimeDefault);
+  logger.write("Version " + Version::getGitRevisionWithBackend());
+  logger.write("benchmarknn model " + modelFile);
+  logger.write("benchmarknn board size " + Global::intToString(boardSize));
+
+  const string expectedSha256 = "";
+  int maxBatchSize =
+    batchSizeOverride > 0 ? batchSizeOverride :
+    cfg.contains("nnMaxBatchSize") ? cfg.getInt("nnMaxBatchSize",1,65536) :
+    16;
+  logger.write("Using batch size " + Global::intToString(maxBatchSize));
+
+  const int expectedConcurrentEvals = maxBatchSize;
+  // Full-board fixed-size inputs: the mask is all ones, so exact-NN-length
+  // semantics are identical and the SM120 FA4 AOT path (no mask) can run.
+  const bool defaultRequireExactNNLen = true;
+  const bool disableFP16 = false;
+
+  NNEvaluator* nnEval = NULL;
+  try {
+    nnEval = Setup::initializeNNEvaluator(
+      modelFile,modelFile,expectedSha256,cfg,logger,seedRand,expectedConcurrentEvals,
+      boardSize,boardSize,maxBatchSize,defaultRequireExactNNLen,disableFP16,
+      Setup::SETUP_FOR_BENCHMARKNN
+    );
+
+    NNEvalBenchmarkResult result = nnEval->benchmarkPureForward(
+      numWarmups,numIterations,phaseOffsetMicros
+    );
+
+    if(jsonOut) {
+      cout << "{";
+      cout << "\"modelFile\":\"" << jsonEscape(nnEval->getModelFileName()) << "\",";
+      cout << "\"modelName\":\"" << jsonEscape(nnEval->getInternalModelName()) << "\",";
+      cout << "\"revision\":\"" << jsonEscape(Version::getGitRevisionWithBackend()) << "\",";
+      cout << "\"batchSize\":" << result.batchSize << ",";
+      cout << "\"numServerThreads\":" << result.numServerThreads << ",";
+      cout << "\"numIterations\":" << result.numIterations << ",";
+      cout << "\"phaseOffsetUs\":" << result.phaseOffsetMicros << ",";
+      cout << "\"gpuIdxs\":[";
+      bool first = true;
+      for(int g : nnEval->getGpuIdxs()) {
+        if(!first)
+          cout << ",";
+        first = false;
+        cout << g;
+      }
+      cout << "],";
+#ifdef USE_CUDA_BACKEND
+      cout << "\"cudaDevices\":[";
+      first = true;
+      set<int> emittedGpuIdxs;
+      for(int g : nnEval->getGpuIdxs()) {
+        if(g < 0)
+          g = 0;
+        if(!emittedGpuIdxs.insert(g).second)
+          continue;
+        cudaDeviceProp prop = {};
+        if(cudaGetDeviceProperties(&prop,g) != cudaSuccess)
+          continue;
+        int clockRateKhz = 0;
+        int memoryClockRateKhz = 0;
+        const bool hasClockRate =
+          cudaDeviceGetAttribute(&clockRateKhz,cudaDevAttrClockRate,g) == cudaSuccess;
+        const bool hasMemoryClockRate =
+          cudaDeviceGetAttribute(&memoryClockRateKhz,cudaDevAttrMemoryClockRate,g) == cudaSuccess;
+        if(!first)
+          cout << ",";
+        first = false;
+        cout << "{";
+        cout << "\"ordinal\":" << g << ",";
+        cout << "\"name\":\"" << jsonEscape(prop.name) << "\",";
+        cout << "\"computeCapabilityMajor\":" << prop.major << ",";
+        cout << "\"computeCapabilityMinor\":" << prop.minor << ",";
+        cout << "\"multiProcessorCount\":" << prop.multiProcessorCount << ",";
+        cout << "\"warpSize\":" << prop.warpSize << ",";
+        cout << "\"maxThreadsPerMultiProcessor\":" << prop.maxThreadsPerMultiProcessor << ",";
+        cout << "\"maxThreadsPerBlock\":" << prop.maxThreadsPerBlock << ",";
+        cout << "\"regsPerMultiprocessor\":" << prop.regsPerMultiprocessor << ",";
+        cout << "\"sharedMemPerMultiprocessor\":" << prop.sharedMemPerMultiprocessor << ",";
+        cout << "\"sharedMemPerBlockOptin\":" << prop.sharedMemPerBlockOptin << ",";
+        cout << "\"l2CacheSize\":" << prop.l2CacheSize << ",";
+        cout << "\"totalGlobalMem\":" << prop.totalGlobalMem << ",";
+        cout << "\"memoryBusWidth\":" << prop.memoryBusWidth << ",";
+        cout << "\"clockRateKhz\":";
+        if(hasClockRate)
+          cout << clockRateKhz;
+        else
+          cout << "null";
+        cout << ",\"memoryClockRateKhz\":";
+        if(hasMemoryClockRate)
+          cout << memoryClockRateKhz;
+        else
+          cout << "null";
+        cout << ",";
+        cout << "\"asyncEngineCount\":" << prop.asyncEngineCount << ",";
+        cout << "\"concurrentKernels\":" << (prop.concurrentKernels ? "true" : "false");
+        cout << "}";
+      }
+      cout << "],";
+#endif
+      cout << "\"perServerMedianMs\":[";
+      for(int i = 0; i < result.numServerThreads; i++) {
+        if(i > 0)
+          cout << ",";
+        cout << setprecision(10) << result.perServerMedianSeconds[i] * 1000.0;
+      }
+      cout << "],";
+      cout << "\"perServerNNEvalsPerSec\":[";
+      for(int i = 0; i < result.numServerThreads; i++) {
+        if(i > 0)
+          cout << ",";
+        cout << setprecision(10) << result.perServerNNEvalsPerSec[i];
+      }
+      cout << "],";
+      cout << "\"combinedPerBatchMs\":" << setprecision(10) << result.combinedWallSeconds * 1000.0 << ",";
+      cout << "\"combinedNNEvalsPerSec\":" << setprecision(10) << result.combinedNNEvalsPerSec << ",";
+      cout << "\"actualWallSeconds\":" << setprecision(10) << result.actualWallSeconds << ",";
+      cout << "\"actualWallPerForwardMs\":" << setprecision(10) << result.actualWallPerForwardMs;
+      cout << "}" << endl;
+    }
+    else {
+      cout << "=== benchmarknn ===" << endl;
+      cout << "model: " << nnEval->getModelFileName() << endl;
+      cout << "internal model: " << nnEval->getInternalModelName() << endl;
+      cout << "revision/backend: " << Version::getGitRevisionWithBackend() << endl;
+      cout << "batch size per server: " << result.batchSize << endl;
+      cout << "NN server threads: " << result.numServerThreads << endl;
+      cout << "GPU indices:";
+      for(int g : nnEval->getGpuIdxs())
+        cout << " " << g;
+      cout << endl;
+      cout << "timed iterations per server: " << result.numIterations << endl;
+      cout << "diagnostic phase offset us: " << result.phaseOffsetMicros << endl;
+      cout << "combined concurrent evaluations: " << result.numServerThreads * result.batchSize << endl;
+      for(int i = 0; i < result.numServerThreads; i++) {
+        cout << "server " << i << ": "
+             << setprecision(6) << result.perServerMedianSeconds[i] * 1000.0
+             << " ms/batch, " << setprecision(10) << result.perServerNNEvalsPerSec[i]
+             << " nnEval/s" << endl;
+      }
+      cout << "combined per-batch wall time (max server median): "
+           << setprecision(6) << result.combinedWallSeconds * 1000.0 << " ms" << endl;
+      cout << "combined throughput: " << setprecision(10) << result.combinedNNEvalsPerSec
+           << " nnEval/s" << endl;
+      cout << "actual wall time across server threads: "
+           << setprecision(6) << result.actualWallSeconds << " s ("
+           << result.actualWallPerForwardMs << " ms per forward incl. warmup)" << endl;
+    }
+  }
+  catch(...) {
+    delete nnEval;
+    NeuralNet::globalCleanup();
+    ScoreValue::freeTables();
+    throw;
+  }
+
+  delete nnEval;
+  NeuralNet::globalCleanup();
+  ScoreValue::freeTables();
+  return 0;
+}

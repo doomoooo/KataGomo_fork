@@ -1,0 +1,465 @@
+{
+  "batches": [
+    {
+      "batch": 1,
+      "bytes": 15489,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15489,
+        "sourceSha256": "7f537e9398452b87c30d215236fd66a398d449f895924bc364edac9f0ecd0a84",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b1_s361_kernel",
+      "path": "b1.cu",
+      "sha256": "7f537e9398452b87c30d215236fd66a398d449f895924bc364edac9f0ecd0a84"
+    },
+    {
+      "batch": 2,
+      "bytes": 15483,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15483,
+        "sourceSha256": "a86325a42c5b70e2b3bf7f80927b81b4f957acd8eac4bf27537652826c96179b",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b2_s361_kernel",
+      "path": "b2.cu",
+      "sha256": "a86325a42c5b70e2b3bf7f80927b81b4f957acd8eac4bf27537652826c96179b"
+    },
+    {
+      "batch": 3,
+      "bytes": 15494,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15494,
+        "sourceSha256": "6748f12425ed5261e8f6562c8d178233ea038d0bf39053a41bf92b293449326a",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b3_s361_kernel",
+      "path": "b3.cu",
+      "sha256": "6748f12425ed5261e8f6562c8d178233ea038d0bf39053a41bf92b293449326a"
+    },
+    {
+      "batch": 4,
+      "bytes": 15479,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15479,
+        "sourceSha256": "6715d0630e520610f3220bb7d1a38305e750073783b01a0a1b841edcba98ad3b",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b4_s361_kernel",
+      "path": "b4.cu",
+      "sha256": "6715d0630e520610f3220bb7d1a38305e750073783b01a0a1b841edcba98ad3b"
+    },
+    {
+      "batch": 5,
+      "bytes": 15494,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15494,
+        "sourceSha256": "cebacdb48347b60f9cc4f2b2dc39044800a31ba04b91194a27ceeb3fa919d844",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b5_s361_kernel",
+      "path": "b5.cu",
+      "sha256": "cebacdb48347b60f9cc4f2b2dc39044800a31ba04b91194a27ceeb3fa919d844"
+    },
+    {
+      "batch": 6,
+      "bytes": 15488,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15488,
+        "sourceSha256": "699e6b4c640cfba43c744384dd2eaf18e688a3fd5b7c61a03c0fd1099f713d11",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b6_s361_kernel",
+      "path": "b6.cu",
+      "sha256": "699e6b4c640cfba43c744384dd2eaf18e688a3fd5b7c61a03c0fd1099f713d11"
+    },
+    {
+      "batch": 7,
+      "bytes": 15494,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15494,
+        "sourceSha256": "2dbc1923051fd2ad9e8d7141d3f115879a02fde2506af3c0f7dc91945d499173",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b7_s361_kernel",
+      "path": "b7.cu",
+      "sha256": "2dbc1923051fd2ad9e8d7141d3f115879a02fde2506af3c0f7dc91945d499173"
+    },
+    {
+      "batch": 8,
+      "bytes": 15479,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15479,
+        "sourceSha256": "dbdf511b416b7e4caf5c9506377f30886097301b577348113337558a571f2153",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b8_s361_kernel",
+      "path": "b8.cu",
+      "sha256": "dbdf511b416b7e4caf5c9506377f30886097301b577348113337558a571f2153"
+    },
+    {
+      "batch": 9,
+      "bytes": 15494,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15494,
+        "sourceSha256": "906a74778d06d5741e390b3bd61cc526c53152f7540d55f0bb57cbf99a904ce5",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b9_s361_kernel",
+      "path": "b9.cu",
+      "sha256": "906a74778d06d5741e390b3bd61cc526c53152f7540d55f0bb57cbf99a904ce5"
+    },
+    {
+      "batch": 10,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "1f9ea6602876994f2e9c9391e622f8d5b3a69c7cc2070b387cb96ad3e845c7a4",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b10_s361_kernel",
+      "path": "b10.cu",
+      "sha256": "1f9ea6602876994f2e9c9391e622f8d5b3a69c7cc2070b387cb96ad3e845c7a4"
+    },
+    {
+      "batch": 11,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "cdf92fe09c8a62e73b2398e72cc2179a92cb384413f1b39ad29c47d51daea144",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b11_s361_kernel",
+      "path": "b11.cu",
+      "sha256": "cdf92fe09c8a62e73b2398e72cc2179a92cb384413f1b39ad29c47d51daea144"
+    },
+    {
+      "batch": 12,
+      "bytes": 15486,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15486,
+        "sourceSha256": "1e8d10e5170add0f7fda535fa8f2a04d8b56cc4cd63d70d3cf58313948379811",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b12_s361_kernel",
+      "path": "b12.cu",
+      "sha256": "1e8d10e5170add0f7fda535fa8f2a04d8b56cc4cd63d70d3cf58313948379811"
+    },
+    {
+      "batch": 13,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "22ed01bc4c48bcd87f6d5e8029d01c1d3629174a16d79e2f543a8fd37e8addfb",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b13_s361_kernel",
+      "path": "b13.cu",
+      "sha256": "22ed01bc4c48bcd87f6d5e8029d01c1d3629174a16d79e2f543a8fd37e8addfb"
+    },
+    {
+      "batch": 14,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "2123b5cf08620441071b63b3004d080a1f438cbe6eec4677796540ae4f16d352",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b14_s361_kernel",
+      "path": "b14.cu",
+      "sha256": "2123b5cf08620441071b63b3004d080a1f438cbe6eec4677796540ae4f16d352"
+    },
+    {
+      "batch": 15,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "c5e8d1aaa88a679c9b0bec61fad9829ad1bff1b2822c1acf54fe145a1e958d99",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b15_s361_kernel",
+      "path": "b15.cu",
+      "sha256": "c5e8d1aaa88a679c9b0bec61fad9829ad1bff1b2822c1acf54fe145a1e958d99"
+    },
+    {
+      "batch": 16,
+      "bytes": 15440,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15440,
+        "sourceSha256": "a26ab3f458f5080aaa1c3088d5d57a37778cca6444ec30a48b5469bac67de6a7",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b16_s361_kernel",
+      "path": "b16.cu",
+      "sha256": "a26ab3f458f5080aaa1c3088d5d57a37778cca6444ec30a48b5469bac67de6a7"
+    },
+    {
+      "batch": 17,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "a01f5d86d9c80fe05dae19a2b3db2df02ab11d72e7a836d2040b5e223048c1b8",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b17_s361_kernel",
+      "path": "b17.cu",
+      "sha256": "a01f5d86d9c80fe05dae19a2b3db2df02ab11d72e7a836d2040b5e223048c1b8"
+    },
+    {
+      "batch": 18,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "3616278eb27dcae1c5210965616f6b84acfe8a001d3b7b881a77f1bb38406d74",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b18_s361_kernel",
+      "path": "b18.cu",
+      "sha256": "3616278eb27dcae1c5210965616f6b84acfe8a001d3b7b881a77f1bb38406d74"
+    },
+    {
+      "batch": 19,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "905d8068911c4c1e08408ebf4c8968dd4c6e5e97189abb2057c2aec2669aaa81",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b19_s361_kernel",
+      "path": "b19.cu",
+      "sha256": "905d8068911c4c1e08408ebf4c8968dd4c6e5e97189abb2057c2aec2669aaa81"
+    },
+    {
+      "batch": 20,
+      "bytes": 15486,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15486,
+        "sourceSha256": "59a66f34b0dec122fa13acb74e71e267db6905d4c178ffc9a96f3bda76aa615e",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b20_s361_kernel",
+      "path": "b20.cu",
+      "sha256": "59a66f34b0dec122fa13acb74e71e267db6905d4c178ffc9a96f3bda76aa615e"
+    },
+    {
+      "batch": 21,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "30a702d5844052ddc5a38a4ab25917496dbb96617ecfbaa2e7096398509d959a",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b21_s361_kernel",
+      "path": "b21.cu",
+      "sha256": "30a702d5844052ddc5a38a4ab25917496dbb96617ecfbaa2e7096398509d959a"
+    },
+    {
+      "batch": 22,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "7ed8b45c0ba15dbea56e17d7a22d828f3ab8f14b31d8bc40bd12048825557d4b",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b22_s361_kernel",
+      "path": "b22.cu",
+      "sha256": "7ed8b45c0ba15dbea56e17d7a22d828f3ab8f14b31d8bc40bd12048825557d4b"
+    },
+    {
+      "batch": 23,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "81dd9a1305f6426c769ce5437a136920275f8174eb9acf3bd6c4ffd6bcfad9fd",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b23_s361_kernel",
+      "path": "b23.cu",
+      "sha256": "81dd9a1305f6426c769ce5437a136920275f8174eb9acf3bd6c4ffd6bcfad9fd"
+    },
+    {
+      "batch": 24,
+      "bytes": 15486,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15486,
+        "sourceSha256": "a81d170ebc726e4156191a060982b05ffe2cda2e61cdb238951dd50452b98246",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b24_s361_kernel",
+      "path": "b24.cu",
+      "sha256": "a81d170ebc726e4156191a060982b05ffe2cda2e61cdb238951dd50452b98246"
+    },
+    {
+      "batch": 25,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "0f7aeecca6855dae9f9a315a54bc53fdfc1c450e090e15bb2edbcdf353c1be0e",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b25_s361_kernel",
+      "path": "b25.cu",
+      "sha256": "0f7aeecca6855dae9f9a315a54bc53fdfc1c450e090e15bb2edbcdf353c1be0e"
+    },
+    {
+      "batch": 26,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "c2bd6e39f2273790f031288190f1412362e3d3b7ee41ef35ada88920b5ea0aa1",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b26_s361_kernel",
+      "path": "b26.cu",
+      "sha256": "c2bd6e39f2273790f031288190f1412362e3d3b7ee41ef35ada88920b5ea0aa1"
+    },
+    {
+      "batch": 27,
+      "bytes": 15496,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15496,
+        "sourceSha256": "20e2542abd629b7e95a229e1217adf577f1a1221e348adf50603c2f1de36ce81",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b27_s361_kernel",
+      "path": "b27.cu",
+      "sha256": "20e2542abd629b7e95a229e1217adf577f1a1221e348adf50603c2f1de36ce81"
+    },
+    {
+      "batch": 28,
+      "bytes": 15486,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15486,
+        "sourceSha256": "8e4821647af41200f4511d04c03440245de107b9e41c57cc25405cbb94c2c971",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b28_s361_kernel",
+      "path": "b28.cu",
+      "sha256": "8e4821647af41200f4511d04c03440245de107b9e41c57cc25405cbb94c2c971"
+    },
+    {
+      "batch": 29,
+      "bytes": 15501,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15501,
+        "sourceSha256": "620a46a44c9d6b87cb7fd15daab37f47263c9400d2bf0fed10872f66c1643630",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b29_s361_kernel",
+      "path": "b29.cu",
+      "sha256": "620a46a44c9d6b87cb7fd15daab37f47263c9400d2bf0fed10872f66c1643630"
+    },
+    {
+      "batch": 30,
+      "bytes": 15490,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15490,
+        "sourceSha256": "b6d7f9d716f7a857f02df6af8ff84628e1f068ad7ee8151f6854c3634cb6874e",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b30_s361_kernel",
+      "path": "b30.cu",
+      "sha256": "b6d7f9d716f7a857f02df6af8ff84628e1f068ad7ee8151f6854c3634cb6874e"
+    },
+    {
+      "batch": 31,
+      "bytes": 15501,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15501,
+        "sourceSha256": "449f03f3c20880118743a1d11ab03e01121810b7e60968eb6b6902c8df15196f",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b31_s361_kernel",
+      "path": "b31.cu",
+      "sha256": "449f03f3c20880118743a1d11ab03e01121810b7e60968eb6b6902c8df15196f"
+    },
+    {
+      "batch": 32,
+      "bytes": 15303,
+      "deviceEvidence": {
+        "fp16MmaInstructionCount": 8,
+        "sourceBytes": 15303,
+        "sourceSha256": "50be69b56a3e2bdf22c5bc6c0022b7c7d72b9b532ca13a595e63687e9ef75d9a",
+        "usesHalf2TanhApprox": true,
+        "usesScalarExpf": false
+      },
+      "kernelName": "katago_ffn_tilelang_sm120_b32_s361_kernel",
+      "path": "b32.cu",
+      "sha256": "50be69b56a3e2bdf22c5bc6c0022b7c7d72b9b532ca13a595e63687e9ef75d9a"
+    }
+  ],
+  "candidateId": "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2",
+  "generatorDependencies": {
+    "historicalTilelangPackageTreeSha256": "f20f03fdf1f9924f6d1540aac7202035be8ff2839f3e3d72b28783bd11e879e0",
+    "matchesHistoricalTilelangPackageTree": true,
+    "tilelangPackageTreeSha256": "f20f03fdf1f9924f6d1540aac7202035be8ff2839f3e3d72b28783bd11e879e0",
+    "versions": {
+      "apache-tvm-ffi": "0.1.12",
+      "numpy": "2.5.1",
+      "tilelang": "0.1.13"
+    }
+  },
+  "note": "Immutable codegen output; runtime generation verifies and wraps these sources without invoking the historical compiler.",
+  "schema": 1
+}
