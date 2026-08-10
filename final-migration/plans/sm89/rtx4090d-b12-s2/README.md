@@ -13,6 +13,12 @@ all-head replay then passed the immutable full-FP32 aggregate and per-request
 gates. The plan contains no mask search component; full 19x19 is a backend
 invariant.
 
+The stable optimized B4-B32 prescan independently selected B12, B13, and B14
+for full search and recorded no foreign PID with nonzero SM activity. A normal
+GTP startup loaded this plan on two NN-server lanes, observed all planned
+post-launch activation markers on both lanes, started fixed-B12 dispatch and
+the event-gated single-slot scheduler, and completed basic 19x19 commands.
+
 The recorded CUDA ordinal is provenance only. A receiver may use another
 ordinal, but the loader still requires SM89, the exact model/board/batch,
 FP16/NHWC, and two streams, and fails closed on any incompatible tactic.

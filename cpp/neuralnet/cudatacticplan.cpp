@@ -228,7 +228,6 @@ unique_ptr<Plan> loadAndApply(
   map<string,string> runtimeOverrides = tacticOverrides;
   runtimeOverrides["nnMaxBatchSize"] = Global::intToString(batch);
   runtimeOverrides["numNNServerThreadsPerModel"] = Global::intToString(evaluatorThreads);
-  runtimeOverrides["requireMaxBoardSize"] = "true";
   runtimeOverrides["nnBatchAwareDispatch"] = "true";
   runtimeOverrides["cudaWarmupOnlyMaxBatchSize"] = "true";
   runtimeOverrides["useFP16"] = "true";

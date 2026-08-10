@@ -67,6 +67,13 @@ passed every aggregate and per-request full-FP32 threshold. The old SM120 file
 remains excluded until the RTX 5080 is available for the same current-source
 certification.
 
+The stable optimized B4-B32 prescan on that RTX 4090 D selected B12, B13, and
+B14 for full search. Its B12 sample measured `3079.829482` physical nnEval/s;
+every prescan sample recorded an empty foreign-SM PID set. A normal GTP startup
+then loaded the checked-in plan on two NN-server lanes, observed every planned
+post-launch activation marker on both lanes, started fixed-B12 dispatch and the
+event-gated single-slot scheduler, and completed basic 19x19 GTP commands.
+
 ## Plan-driven backend
 
 The autotuner emits schema-1 `cuda-tactic-plan` JSON. A production plan binds:
@@ -245,9 +252,8 @@ cudaAsyncInferPipeline = true
 cudaEventPipelineUseGraph = false
 ```
 
-On RTX 5080, select
-`final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json` and set
-`cudaTacticPlanBatch = 19`; the two-stream mapping is unchanged.
+The RTX 5080 plan is temporarily absent while current-source B19 certification
+is pending. Do not reuse the pre-full-board SM120 plan from Git history.
 
 Two GPUs, two streams per GPU:
 
@@ -259,8 +265,8 @@ cudaDeviceToUseThread2 = 1
 cudaDeviceToUseThread3 = 1
 ```
 
-The loader supplies and verifies the plan's exact batch (B12 in the SM89
-example and B19 for RTX 5080), exact 19x19, FP16/NHWC,
+The loader supplies and verifies the plan's exact batch (B12 in the checked-in
+SM89 example), exact 19x19, FP16/NHWC,
 `nnBatchAwareDispatch=true`, maximum-batch-only warmup, and every planned CUDA
 override. A conflicting user value is rejected.
 
@@ -403,11 +409,11 @@ The SM89 runtime certificate is in
 
 - Only the CUDA backend is optimized by this work; TensorRT is not required.
 - Production plans currently require exact 19x19 and the bound model hash.
-- The checked-in production plans are SM89/RTX 4090 D B12/S2 and SM120/RTX
-  5080 B19/S2. The registry permits one current plan per GPU model. Receiver
-  checks deliberately reject incompatible devices or models.
-- RTX 5080 has passed the unified long gate and 8192-row FP32 certificate; its
-  ordinary GTP-path qualification is still pending.
+- The only currently checked-in production plan is SM89/RTX 4090 D B12/S2.
+  The registry permits one current plan per GPU model. Receiver checks
+  deliberately reject incompatible devices or models.
+- The RTX 5080 current-source B19 plan, long gate, FP32 certificate, and GTP
+  qualification remain pending until that host is available again.
 - CUDA Graph is optional and currently not the fastest certified SM89 mode.
 - High search-thread counts may reduce playing strength in short/fixed-visit
   searches even when they increase GPU utilization.
