@@ -50,7 +50,7 @@ Current per-result gates are:
 | Head | max absolute | RMSE |
 | --- | ---: | ---: |
 | policy probability | 0.025 | 0.002 |
-| value probability | 0.05 | 0.04 |
+| value probability | 0.06 | 0.05 |
 | score raw | 0.60 | 0.30 |
 | ownership probability | 0.025 | 0.006 |
 

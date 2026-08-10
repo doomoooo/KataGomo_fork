@@ -395,6 +395,10 @@ def main() -> None:
         "--family", choices=("dual_ffn", "wide_qkv", "linear2", "outproj"),
         required=True,
     )
+    parser.add_argument(
+        "--candidate-family", default="",
+        help="search-space family owning the candidate when boundaries are merged",
+    )
     parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--batch", type=int, required=True)
     parser.add_argument("--device", type=int, required=True)
@@ -415,7 +419,10 @@ def main() -> None:
     args = parser.parse_args()
 
     space = json.loads(pathlib.Path(args.space).read_text())
-    candidate_value = find_candidate(space, args.batch, args.family, args.candidate_id)
+    candidate_value = find_candidate(
+        space, args.batch, args.candidate_family or args.family,
+        args.candidate_id,
+    )
     if candidate_value.get("implementation", "tilelang") != "tilelang":
         raise ValueError("this generator only handles TileLang candidates")
     if args.family == "dual_ffn" and candidate_value.get("swiglu") != "exp":

@@ -58,12 +58,21 @@ class AutotuneEntrypointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             AUTOTUNE.parse_batch_set("6-4")
 
+    def test_distributed_workflow_never_mutates_gpu_clocks_or_power(self) -> None:
+        source = AUTOTUNE_PATH.read_text()
+        self.assertNotIn("gpu-lock", source)
+        self.assertNotIn("-lgc", source)
+        self.assertNotIn("nvidia-smi", source)
+        self.assertNotIn("performance_profile", source)
+
     def test_accuracy_replay_uses_fixed_batch_and_removes_candidate_dump(self) -> None:
         source = AUTOTUNE_PATH.read_text()
         replay = (
             AUTOTUNE_PATH.parents[2] / "cpp" / "command" / "replaynn.cpp"
         ).read_text()
-        self.assertIn('choices=("detect", "prepare", "discovery", "gate", "reference", "accuracy", "all")', source)
+        self.assertIn('"detect", "prescan", "prepare", "discovery", "gate",', source)
+        self.assertIn('"--full-batch-scan", action="store_true"', source)
+        self.assertIn('"--top-batches", type=int, default=3', source)
         self.assertIn("candidate.unlink()", source)
         self.assertIn("fastest long-gate plan", source)
         self.assertIn('"--batches", str(best_batch)', source)

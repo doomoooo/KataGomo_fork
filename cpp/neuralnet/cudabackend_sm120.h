@@ -327,7 +327,6 @@ struct Options {
   bool useSwiGLU1152 = false;
   // disabled, half2, half2x3, or flat-vec8-c768.
   std::string affineSiluTactic = "disabled";
-  bool useExactMaskElision = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;
   int persistingL2Streams = 2;
@@ -634,7 +633,7 @@ class Sm120Model {
   void setLogger(Logger* logger);
   bool hasPersistingL2Trunk() const;
   bool hasPersistingL2Inner() const;
-  float* getExactMaskSumBuf() const;
+  float* getFullBoardAreaBuf() const;
 
   // Mirrors Model::apply exactly so ComputeHandle can dispatch without touching the official
   // getOutput/benchmarkOutput paths.
@@ -889,7 +888,7 @@ class Sm120Model {
   Options options;
   int sm120NumSms;
   Logger* logger;
-  float* exactMaskSumBuf;
+  float* fullBoardAreaBuf;
   bool loggedFallback;
   bool loggedFa4;
   bool loggedFa4AtMaxBatch;

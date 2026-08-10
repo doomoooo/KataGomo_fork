@@ -40,7 +40,7 @@ carried because neither project exposes a practical equivalent source-only
 Python payload for this workflow.  CUDA and cuDNN are NVIDIA binary
 toolchains, not Python source dependencies.
 
-Build parallelism defaults to the lower of `nproc` and a memory-aware limit
+Build parallelism defaults to the lower of `nproc`, 8, and a memory-aware limit
 (75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler
 process). This avoids fixed `-j4`/`-j8` values while protecting hosts where
 Triton translation units make `-j$(nproc)` exceed RAM. `--jobs N` remains an
@@ -48,19 +48,30 @@ explicit override.
 
 `run-autotune.sh` queries the selected device through the CUDA Runtime.  CC
 8.9 dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow.
-The default domain is exact B4-B32 with two inference streams. Discovery is
-short; a final plan is only marked scan-bypass-ready after the 1000-iteration,
-two-repeat long gate has covered all 29 batches. If the tar carries the
-immutable full-FP32 golden, `all` selects the highest-throughput long-gate
-batch, replays that one plan over the 8,192-row corpus, and emits a single-batch
-`best-tactic-plan.json` with `production_ready=true`. Replay pads only
+The selection domain is exact B4-B32 with two inference streams. By default an
+artifact-free stable optimized graph first measures all 29 batches, and only its
+three highest-throughput shapes receive complete tactic generation,
+batch-outer discovery, and the 1000-iteration/two-repeat long gate. Use
+`--full-batch-scan` to optimize every B4-B32 shape; exhaustive mode is
+supported but default-off.
+
+The 19 backend implementation catalogs are organized into 10 decision groups
+on both architectures. Shared runtime keys and declarative dependencies may not
+cross a group boundary. Discovery is short; a plan is only marked
+scan-bypass-ready after every selected batch passes the long gate. If the tar
+carries the immutable full-FP32 golden, `all` selects the highest-throughput
+long-gate batch, replays that one plan over the 8,192-row corpus, and emits a
+single-batch `best-tactic-plan.json` with `production_ready=true`. Replay pads only
 the physical tail batch by repeating real rows and serializes exactly 8,192
 rows, so an exact-batch AOT route never escapes the accuracy gate through a
 short-tail fallback. Candidate `.krnn` dumps are deleted immediately after
 comparison; the reference and the one selected report are retained.
 The comparator also requires exact-batch/tail-padding metadata and
 byte-identical target/input sections; a golden from a different model or
-corpus is rejected rather than relabeled.
+corpus is rejected rather than relabeled. It applies the ordinary GTP
+verifier's worst-per-request max-absolute and per-head RMSE limits as well as
+the aggregate 8,192-row metrics, so a single bad position cannot disappear in
+an average.
 
 Release qualification can create the reference explicitly, through the
 official CUDA FP32 path with both optimized backends disabled:

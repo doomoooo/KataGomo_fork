@@ -92,8 +92,6 @@ struct Options {
   int policyP1RowsPerBlock = 0;
   bool useHeadBNHalfToFloat = false;
   bool useWideHeadProjection = false;
-  bool useExactMaskDownstreamElision = false;
-  bool useExactMaskElision = false;
   bool useFusedValueTerminal = false;
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;

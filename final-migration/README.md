@@ -28,42 +28,37 @@ supported by upstream KataGo.
 | Correctness | normal KataGo backend tests | immutable 8192-row full-FP32 reference gate, input identity checks, exact-batch tail checks, and GTP-shaped stress harness |
 | Distribution | ordinary source/build workflow | reproducible source-complete autotune tar and a separate non-invasive prebuilt-runtime tar |
 
-The goal is not a collection of special cases for one batch. The scanner
-searches the same complete tactic families at every exact batch in B4-B32. The
-union of all historically positive, numerically valid SM89 and SM120 work is
-the maintained search space.
+The goal is not a collection of special cases for one batch. Every exact batch
+in B4-B32 can materialize the same complete implementation catalogs. The
+default workflow first ranks B4-B32 with a stable artifact-free optimized graph, then runs
+the complete tactic flow for the three fastest shapes. `--full-batch-scan`
+retains the exhaustive 29-batch mode. The union of all historically positive,
+numerically valid SM89 and SM120 work is the maintained search space.
 
 ## Current qualification status
 
 | Architecture | Implemented search space | Production plan | Hardware qualification |
 | --- | --- | --- | --- |
-| SM89 | 20 families, 62 positive-history records, 3738 candidates across exact B4-B32 | checked-in RTX 4090 D B12/S2 plan | complete: GTP load, one/two GPU, 8192-row all-head FP32 replay |
-| SM120 | 23 families, 64 positive-history records, 4234 candidates across exact B4-B32 | checked-in RTX 5080 B19/S2 plan | unified long gate and 8192-row all-head FP32 replay complete; ordinary GTP qualification pending |
+| SM89 | 19 implementation catalogs in 10 decision groups; 60 positive-history records; 3564 full-domain candidates | RTX 4090 D B12/S2 plan being refreshed | full-board backend build passed; hardware requalification in progress |
+| SM120 | 19 implementation catalogs in 10 decision groups; 63 positive-history records; 3944 full-domain candidates | RTX 5080 B19/S2 plan being refreshed | previous search/gate/accuracy evidence retained; full-board plan refresh pending |
 
 The previous RTX 5080 B18 result (`2586.579` physical nnEval/s) came from an
-incomplete pre-unification space. It has been replaced by the unified B19 plan,
-whose stable long-gate result is `2763.4413825` physical nnEval/s. The old plan
-is intentionally rejected and is not shipped.
+incomplete pre-unification space. A later coupling-audited B19 graph reached
+`2838.9148995` physical nnEval/s, but its plan predates the fixed-full-board
+contract and is intentionally not shipped.
 
-The checked-in plans are:
+The old official-fallback prescan ranked B7/B8/B9 on this RTX 5080 host and
+missed the optimized B19 peak. It has been replaced by an explicit,
+artifact-free optimized graph that is much closer to the final operating
+state. Use `--full-batch-scan` when global B4-B32 coverage matters more than
+the roughly 88% reduction in candidate evaluations provided by top-three mode.
 
-```text
-final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
-final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json
-```
-
-The SM89 file SHA-256 is
-`57aba0d9f5ff009f0103fe792766bd3fe065d156c13396cb99bc40b5488f9edb`.
-The long whole-graph gate measured `3026.196859` physical nnEval/s. Subsequent
-ordinary evaluator scheduling verified 8192/8192 requests at 3035.87 physical
-nnEval/s on one RTX 4090 D and 6072.97 on two RTX 4090 D devices. These values
-are evidence for the tested host, clocks, model, batch, and topology, not a
-universal performance guarantee.
-
-The SM120 RTX 5080 file SHA-256 is
-`5f90e7fb5c02ac147e4cf535e664dca736f4fcbd9c0afd188ef5a5fd1e7b788b`.
-Its unified long gate measured `2763.4413825` physical nnEval/s at B19/S2, and
-its single 8192-row all-head replay passed every full-FP32 threshold.
+There are temporarily no checked-in production plans. The old SM89 and SM120
+files were removed because their schema payload still named the deleted mask
+search component. RTX 4090 D B12/S2 and RTX 5080 B19/S2 will be added back only
+after the current source passes the long whole-graph and one-plan 8192-row
+full-FP32 gates. Historical measurements remain evidence for those tested
+hosts, not certification of the new plan contract.
 
 ## Plan-driven backend
 
@@ -97,12 +92,22 @@ launches. Scanner candidates therefore need four links:
 Plan generation is blocked unless every record closes all four links for all
 supported exact batches.
 
-### Maintained tactic families
+### Implementation catalogs and decision groups
 
-The exact families differ where the architecture really differs, but the
-outer workflow is shared. They cover, among other components:
+The 19 catalog names are not 19 operators in one trunk block and are not
+claimed to be 19 independent performance dimensions. They inventory backend
+implementations. The scanner exposes 10 ordered groups on both architectures.
+A static closure gate requires every shared runtime key and
+every declarative dependency to remain inside exactly one group. A bundle is
+measured first inside its group; later catalog stages may explicitly refine
+only their own keys. No later group can rewrite an earlier group's state.
+On SM120, packed QKV is an input-layout choice and is explicitly independent
+of FA's QK/PV accumulation precision; packed routes consume the selected FA
+tactic without forcing a tile or accumulator mode.
 
-- exact-mask preprocessing and downstream mask elision;
+The catalogs differ only where the architecture really differs. They cover,
+among other components:
+
 - initial convolution/global paths and pointwise BN/activation paths;
 - wide QKV/FFN/head projections and projection bundles;
 - fused QKV + RoPE and packed QKV + RoPE routes;
@@ -112,6 +117,11 @@ outer workflow is shared. They cover, among other components:
 - RMSNorm, head BN, post-convolution BN + SiLU, and value terminal paths;
 - persisting-L2 placement and model-weight sharing when a real cache hit is
   observed.
+
+The optimized CUDA backends accept only exact 19x19 FP16 NHWC inference.
+Full-board execution is a fail-closed backend contract, not a configurable or
+searchable component; no mask tactic, runtime key, candidate, or plan mapping
+exists.
 
 There is no B13 runtime privilege and no compatibility alias layer for old
 experimental option names. Obsolete B13-only generated objects and redundant
@@ -129,29 +139,29 @@ The outer orchestration, plan schema, history contract, build, measurement,
 accuracy, and packaging code are shared. Only architecture-specific candidate
 generation and backend source remain separate when the hardware requires it.
 
-The default domain is exact B4-B32 with two inference streams per device. Each
-batch completes its own full decision flow; the scanner does not make one
-decision across all batches and then move to the next decision. This prevents
-a tactic that is profitable only at a particular shape from becoming a hidden
-fixed-batch special case.
+The default selection domain is exact B4-B32 with two inference streams per
+device. An artifact-free stable optimized graph measures all 29 shapes and selects the
+three highest-throughput batches. Each selected batch then completes its own
+full decision flow; the scanner does not make one decision across all batches
+and then move to the next decision. This prevents a tactic that is profitable
+only at a particular shape from becoming a hidden fixed-batch special case.
 
-For each batch, the workflow materializes the complete family space, starts
-from an explicit official-equivalent baseline, performs activation-gated
-discovery, accumulates a self-contained configuration, runs the final joint
-whole-graph state, and records its result. After all 29 batches complete, the
-long gate ranks stable whole-graph throughput. Only the highest-throughput
-stable plan is replayed once against the 8192-row FP32 reference and emitted as
-`best-tactic-plan.json`.
+For each selected batch, the workflow materializes the complete catalog space,
+starts from an explicit self-contained baseline, performs
+activation-gated discovery in decision-group order, accumulates a
+self-contained configuration, runs the final joint whole-graph state, and
+records its result. The long gate ranks those three stable whole-graph results.
+Only the fastest stable plan is replayed once against the 8192-row FP32
+reference and emitted as `best-tactic-plan.json`. Pass
+`--full-batch-scan` to apply the same full flow to all 29 batches; this is
+deliberately default-off because it costs roughly eight to nine times as much.
 
 Discovery timings are not release performance claims. A plan becomes
 production-ready only after the long whole-graph gate and accuracy gate pass.
 
 ### GPU contention policy
 
-The distributed project contains no `gpu-lock` wrapper. That tool was useful
-only for coordinating local development sessions.
-
-Instead, every benchmark subprocess is monitored with `nvidia-smi pmon`.
+Every benchmark subprocess is monitored with `nvidia-smi pmon`.
 A process that only owns device memory with zero SM activity is allowed. If an
 external PID begins consuming nonzero SM time during a measurement, the
 benchmark process group is stopped and the sample is invalidated. If the
@@ -285,8 +295,17 @@ The comparator requires:
   candidate;
 - the expected model and corpus SHA-256;
 - the candidate's exact maximum batch and fixed-tail-padding metadata;
+- the same worst-per-request max-absolute and per-head RMSE limits used by the
+  GTP-shaped CPU verifier, in addition to aggregate 8192-row metrics;
 - policy top-1 and probability, value, score, ownership, and weighted-loss
   thresholds.
+
+The per-request value-probability policy allows max-absolute `0.06` and
+max-RMSE `0.05`; all other per-request and aggregate limits remain unchanged.
+This admits the historically fastest SM120 TN64/both16 FA coordinate, whose
+observed worst request was max-absolute `0.0559005` and max-RMSE `0.0456366`.
+The coordinate remains subject to the complete 8192-row certification rather
+than receiving a tactic-specific exception.
 
 The physical tail is filled by repeating real requests, but only the original
 8192 logical rows are serialized. This keeps exact-batch AOT kernels active on

@@ -60,6 +60,12 @@ class CompareReplayKrnnTests(unittest.TestCase):
             self.assertEqual(result["exactBatch"], 4)
             self.assertEqual(result["candidateMaxBatchSize"], 4)
             self.assertTrue(result["inputAndTargetSectionsByteExact"])
+            for head in (
+                "policyProbability", "valueProbability", "scoreRaw",
+                "ownershipProbability",
+            ):
+                self.assertEqual(result["requestGate"][head]["maximumAbs"], 0.0)
+                self.assertEqual(result["requestGate"][head]["maximumRmse"], 0.0)
 
             write_krnn(candidate, 4, corrupt_input=True)
             completed = subprocess.run(command, text=True, capture_output=True)

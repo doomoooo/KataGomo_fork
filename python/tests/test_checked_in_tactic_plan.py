@@ -6,28 +6,7 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MODEL_SHA256 = "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
-EXPECTED_PLANS = {
-    "rtx4090": {
-        "path": pathlib.Path(
-            "final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json"
-        ),
-        "file_sha256": "57aba0d9f5ff009f0103fe792766bd3fe065d156c13396cb99bc40b5488f9edb",
-        "architecture": "sm89",
-        "compute_capability": [8, 9],
-        "batch": 12,
-        "records": 62,
-    },
-    "rtx5080": {
-        "path": pathlib.Path(
-            "final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json"
-        ),
-        "file_sha256": "5f90e7fb5c02ac147e4cf535e664dca736f4fcbd9c0afd188ef5a5fd1e7b788b",
-        "architecture": "sm120",
-        "compute_capability": [12, 0],
-        "batch": 19,
-        "records": 64,
-    },
-}
+EXPECTED_PLANS = {}
 
 
 class CheckedInTacticPlanTests(unittest.TestCase):

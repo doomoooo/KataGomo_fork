@@ -8,18 +8,24 @@ from types import SimpleNamespace
 
 
 PYTHON_DIR = pathlib.Path(__file__).resolve().parents[1]
+REPO = PYTHON_DIR.parent
 sys.path.insert(0, str(PYTHON_DIR))
 
 from cuda_tactic_workflow import (  # noqa: E402
     ARTIFACT_BUNDLE_KIND,
     ALL_FAMILIES,
     SM89_FAMILIES,
+    SM89_DECISION_GROUPS,
     SM120_FAMILIES,
+    SM120_DECISION_GROUPS,
     RESULT_KIND,
     SM89_RUNTIME_CONFIG_KEYS,
     SM120_RUNTIME_CONFIG_KEYS,
     _compile_metadata,
     build_plan,
+    build_parser,
+    canonical_architecture,
+    canonical_refinement_rows,
     candidate_config,
     candidate_map,
     choose_history_stage_winner,
@@ -29,11 +35,16 @@ from cuda_tactic_workflow import (  # noqa: E402
     make_generation_plan,
     materialize_space,
     nvcc_arch_flag,
+    official_fallback_overrides,
+    positive_history_seed_candidate_ids,
+    refinement_top_candidates,
     resolve_candidate_config_state,
     runtime_tactic_baseline,
     scan_command,
     sha256_file,
     stable_metric,
+    stable_optimized_prescan_state,
+    stable_prescan_candidate_ids,
     summarize_samples,
     tactic_overrides,
     validate_artifact_bundle,
@@ -117,16 +128,27 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             ALL_FAMILIES,
             tuple(dict.fromkeys((*SM89_FAMILIES, *SM120_FAMILIES))),
         )
-        self.assertIn("exact_mask", SM89_FAMILIES)
-        self.assertIn("exact_mask", SM120_FAMILIES)
+        self.assertNotIn("exact_mask", ALL_FAMILIES)
         self.assertIn("postconv_bn", SM120_FAMILIES)
         self.assertIn("weight_sharing", SM120_FAMILIES)
         self.assertIn("wide_head", SM120_FAMILIES)
         self.assertIn("head_bn", SM120_FAMILIES)
-        self.assertIn("swiglu", SM120_FAMILIES)
+        self.assertNotIn("swiglu", SM120_FAMILIES)
+        self.assertNotIn("wide_ffn", SM120_FAMILIES)
+        self.assertIn("dual_ffn", SM120_FAMILIES)
         self.assertIn("wide_projection", SM120_FAMILIES)
         self.assertIn("wide_projection", SM89_FAMILIES)
         self.assertNotIn("outer_projection", ALL_FAMILIES)
+        self.assertEqual(len(SM89_DECISION_GROUPS), 10)
+        self.assertEqual(len(SM120_DECISION_GROUPS), 10)
+        self.assertEqual(
+            tuple(family for group in SM89_DECISION_GROUPS for family in group),
+            SM89_FAMILIES,
+        )
+        self.assertEqual(
+            tuple(family for group in SM120_DECISION_GROUPS for family in group),
+            SM120_FAMILIES,
+        )
 
     def test_space_materializes_sm120_native_families_for_every_batch(self):
         space = materialize_space(
@@ -143,15 +165,37 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                 self.assertIn(f"{family}-keep-incumbent", values)
         self.assertIn(
             "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed",
-            candidate_map(space, "wide_qkv", 4),
+            candidate_map(space, "qkv_rope", 4),
+        )
+        self.assertIn(
+            "fa4-b19-s361-h12-d32-tm128-tn64-s1-both16",
+            candidate_map(space, "fa4", 19),
         )
         projections = candidate_map(space, "wide_projection", 4)[
             "wide-projections-s1-bundle"
         ]
         self.assertEqual(
-            projections["supersedes"],
-            ["wide_qkv", "wide_ffn", "qkv_rope", "swiglu", "dual_ffn"],
+            projections["activation_marker_keys"],
+            {
+                "SM120 backend: strided-batched QKV projection active": [
+                    "cudaUseQKVStridedSm120",
+                ],
+                "SM120 backend: single-wide FFN projection active": [
+                    "cudaUseWideFFNSingleGemm",
+                ],
+            },
         )
+        self.assertEqual(
+            candidate_map(space, "policy_p1", 19)["policy_p1-off"]
+                ["supersedes"],
+            ["wide_head"],
+        )
+        self.assertEqual(
+            candidate_map(space, "head_bn", 19)["head_bn-off"]
+                ["supersedes"],
+            ["wide_head"],
+        )
+        self.assertNotIn("supersedes", projections)
         self.assertEqual(len(projections["activation_markers"]), 2)
         self.assertIn(
             "preconv-cutlass-warp64x64",
@@ -164,7 +208,11 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         bundle = candidate_map(space, "postconv_bn", 32)[
             "outer-projection-cutlass-warp64x64-bundle"
         ]
-        self.assertEqual(bundle["supersedes"], ["preconv"])
+        self.assertNotIn("supersedes", bundle)
+        self.assertIn(
+            "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x64",
+            bundle["activation_marker_keys"],
+        )
         self.assertEqual(len(bundle["activation_markers"]), 2)
 
     def test_space_materializes_sm89_all_batches(self):
@@ -252,21 +300,54 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         dual = candidate_map(sm120, "dual_ffn", 4)[
             "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2"
         ]
-        self.assertEqual(dual["supersedes"], ["wide_ffn", "swiglu"])
+        self.assertNotIn("supersedes", dual)
         self.assertFalse(dual["config"]["cudaUseWideFFNSingleGemm"])
-        swiglu = candidate_map(sm120, "swiglu", 4)["swiglu-on"]
-        legacy_dual = dict(dual)
-        legacy_dual["supersedes"] = ["wide_ffn"]
-        effective, superseded, _, _ = resolve_candidate_config_state({
-            "swiglu": swiglu,
-            "dual_ffn": legacy_dual,
-        })
-        self.assertNotIn("swiglu", effective)
-        self.assertEqual(superseded["swiglu"], "dual_ffn")
+        ffn = candidate_map(sm120, "dual_ffn", 4)
+        self.assertIn("wide_ffn-single-projection", ffn)
+        self.assertIn("swiglu-on", ffn)
+        self.assertFalse(ffn["swiglu-on"]["config"]["cudaUseWideFFNSingleGemm"])
         linear2 = candidate_map(sm120, "linear2", 4)[
             "linear2-m128-n128-k32-s3-cutlass"
         ]
         self.assertTrue(linear2["config"]["cudaUseFusedResidualGemmSm120"])
+
+    def test_optimized_prescan_is_self_contained_and_custom_backend_active(self):
+        self.assertEqual(canonical_architecture("sm120", "rtx5080"), "sm120")
+        self.assertEqual(canonical_architecture(None, "rtx4090"), "sm89")
+        for architecture, gpu_class in (
+            ("sm89", "rtx4090"), ("sm120", "rtx5080"),
+        ):
+            overrides, selected, markers = stable_optimized_prescan_state(
+                architecture, gpu_class, 1, 2, 19,
+            )
+            self.assertEqual(selected, stable_prescan_candidate_ids(
+                architecture, gpu_class, 19,
+            ))
+            self.assertTrue(markers)
+            self.assertEqual(
+                overrides["cudaSm89Backend"], architecture == "sm89",
+            )
+            self.assertEqual(
+                overrides["cudaSm89Forward"], architecture == "sm89",
+            )
+            self.assertEqual(
+                overrides["cudaSm120Backend"], architecture == "sm120",
+            )
+            self.assertEqual(overrides["nnMaxBatchSize"], 19)
+            self.assertEqual(overrides["numNNServerThreadsPerModel"], 2)
+
+        # The official path remains available only as an explicit diagnostic
+        # comparator; it is no longer wired into batch selection.
+        diagnostic = official_fallback_overrides("sm120", 1, 2, 19)
+        self.assertFalse(diagnostic["cudaSm120Backend"])
+
+        parsed = build_parser().parse_args([
+            "baseline-prescan", "--architecture", "sm120",
+            "--gpu-class", "rtx5080", "--binary", "katago",
+            "--config", "bench.cfg", "--model", "model.bin.gz",
+            "--raw-dir", "raw", "--output", "prescan.json",
+        ])
+        self.assertEqual(parsed.top_batches, 3)
 
     def test_sm89_c384_pointwise_explicitly_reopens_the_fused_boundary(self):
         space = materialize_space("sm89", "rtx4090", 0, [4], 2)
@@ -291,6 +372,7 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         linear2 = candidate_map(space, "linear2", 4)[
             "linear2-cutlass-m128-n128-k32-w64-n64-s4-sw1-postbn"
         ]
+        self.assertNotIn("cudaUseExactMask", repr(linear2))
         effective, superseded, applied, overridden = resolve_candidate_config_state({
             "linear2": linear2,
             "postconv_bn": postconv,
@@ -325,56 +407,59 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                 f"KATAGO_SM89_ROPE_BATCH_GROUP_CASE({batch})", source
             )
 
-    def test_sm120_qkv_rope_bundles_have_explicit_artifact_and_supersession(self):
+    def test_sm120_qkv_rope_never_rewrites_the_fa_winner(self):
         space = materialize_space("sm120", "rtx5080", 0, [4], 2)
-        qkv = candidate_map(space, "wide_qkv", 4)
+        qkv = candidate_map(space, "qkv_rope", 4)
         packed = qkv[
             "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed"
         ]
-        self.assertEqual(packed["supersedes"], ["fa4"])
-        self.assertEqual(
-            packed["config"]["cudaFlashAttentionAotTacticSm120"],
-            "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16",
-        )
-        self.assertIn({
-            "family": "fa4",
-            "candidate_id": "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16",
-        }, packed["artifact_dependencies"])
-
-        exact_fa_marker = (
-            "SM120 backend: FA4 AOT active, tactic="
-            "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16"
-        )
-        for candidate in [
-            *candidate_map(space, "wide_qkv", 4).values(),
-            *candidate_map(space, "qkv_rope", 4).values(),
-        ]:
-            if candidate["config"].get("cudaFlashAttentionAotTacticSm120") == (
-                "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16"
-            ):
-                self.assertIn(exact_fa_marker, candidate["activation_markers"])
+        self.assertEqual(packed["requires"], {"fa4.supports_packed": True})
+        fa_keys = {
+            "cudaUseFlashAttentionSm120",
+            "cudaFlashAttentionSm120Accum",
+            "cudaFlashAttentionAotTacticSm120",
+        }
+        for candidate in candidate_map(space, "qkv_rope", 4).values():
+            self.assertFalse(fa_keys & set(candidate["config"]))
 
         rope = candidate_map(space, "qkv_rope", 4)[
             "qkv-rope-half2-with-"
             "wide_qkv-m128-n128-k64-s2-tilelang-planar"
         ]
-        self.assertEqual(rope["supersedes"], ["wide_qkv"])
+        self.assertNotIn("supersedes", rope)
         self.assertEqual(rope["artifact_dependencies"], [{
-            "family": "wide_qkv",
+            "family": "qkv_rope",
             "candidate_id":
                 "wide_qkv-m128-n128-k64-s2-tilelang-planar",
         }])
         effective, superseded = effective_candidate_map({
             "fa4": candidate_map(space, "fa4", 4)[
-                "fa4-b4-s361-h12-d32-tm128-tn64-s1-both16"
-            ],
-            "wide_qkv": qkv[
-                "wide_qkv-m128-n128-k64-s2-tilelang-planar"
+                "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16"
             ],
             "qkv_rope": rope,
         })
         self.assertEqual(list(effective), ["fa4", "qkv_rope"])
-        self.assertEqual(superseded, {"wide_qkv": "qkv_rope"})
+        self.assertEqual(superseded, {})
+        _, _, applied, _ = resolve_candidate_config_state({
+            "fa4": candidate_map(space, "fa4", 4)[
+                "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16"
+            ],
+            "qkv_rope": rope,
+        })
+        self.assertEqual(
+            applied["cudaFlashAttentionAotTacticSm120"],
+            "fa4-b4-s361-h12-d32-tm128-tn96-s1-both16",
+        )
+
+        backend = (
+            REPO / "cpp/neuralnet/cudabackend_sm120.cpp"
+        ).read_text()
+        packed_gate = backend.split(
+            "const bool packedAttentionReady", 1
+        )[1].split("const bool useQKVRopeAot", 1)[0]
+        self.assertIn("allowPackedOutput", packed_gate)
+        self.assertIn("options.useFlashAttention", packed_gate)
+        self.assertNotIn("flashAttentionAccum", packed_gate)
 
     def test_sm89_partial_key_ownership_and_wide_head_bundle_are_explicit(self):
         space = materialize_space("sm89", "rtx4090", 0, [4], 2)
@@ -401,20 +486,34 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             "policy-p1-block96x1"
         ]
         wide_head = candidate_map(space, "wide_head", 4)["wide-head-on"]
-        effective, superseded, applied, overridden = (
-            resolve_candidate_config_state({
-                "policy_p1": policy,
-                "wide_head": wide_head,
-            })
+        policy_off = candidate_map(space, "policy_p1", 4)[
+            "policy-p1-disabled"
+        ]
+        self.assertFalse(policy_off["config"]["cudaUseWideHeadProjection"])
+        self.assertIn(
+            "cudaUseWideHeadProjection", policy_off["overrides_keys"]
         )
-        self.assertEqual(list(effective), ["wide_head"])
-        self.assertEqual(superseded, {"policy_p1": "wide_head"})
-        self.assertEqual(applied["cudaPolicyP1RowsPerBlockSm89"], 5)
+        effective, superseded, applied, overridden = resolve_candidate_config_state({
+            "wide_head": wide_head,
+            "policy_p1": policy,
+        })
+        self.assertEqual(list(effective), ["wide_head", "policy_p1"])
+        self.assertEqual(superseded, {})
+        self.assertEqual(applied["cudaPolicyP1RowsPerBlockSm89"], 1)
         self.assertEqual(overridden, {
-            "policy_p1": {
-                "cudaPolicyP1RowsPerBlockSm89": "wide_head",
+            "wide_head": {
+                "cudaPolicyP1RowsPerBlockSm89": "policy_p1",
             },
         })
+
+    def test_full_board_invariant_is_not_a_search_component(self):
+        for architecture, gpu_class in (
+            ("sm89", "rtx4090"), ("sm120", "rtx5080")
+        ):
+            space = materialize_space(architecture, gpu_class, 0, [4], 2)
+            self.assertNotIn("exact_mask", space["families"])
+            self.assertNotIn("ExactMask", repr(space))
+            self.assertNotIn("exact-mask", repr(space))
 
     def test_only_long_stable_values_are_final_metrics(self):
         stable = summarize_samples([100.0, 101.0], iterations=1000, warmup=50)
@@ -467,6 +566,12 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                 "value": {"outcomeRmse": 0.0},
                 "score": {"meanRmse": 0.0},
                 "ownership": {"sigmoidRmse": 0.0},
+                "requestGate": {
+                    "policyProbability": {"maximumAbs": 0.0, "maximumRmse": 0.0},
+                    "valueProbability": {"maximumAbs": 0.0, "maximumRmse": 0.0},
+                    "scoreRaw": {"maximumAbs": 0.0, "maximumRmse": 0.0},
+                    "ownershipProbability": {"maximumAbs": 0.0, "maximumRmse": 0.0},
+                },
             })
             command_certify(SimpleNamespace(
                 gate=str(gate), comparison=[f"4={report}"], output=str(output),
@@ -476,6 +581,29 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                 certified["accuracy_certification"]["reference_sha256"],
                 "3" * 64,
             )
+
+            payload = json.loads(report.read_text())
+            payload["requestGate"]["valueProbability"]["maximumAbs"] = 0.061
+            write_json(report, payload)
+            with self.assertRaisesRegex(
+                ValueError, "request_value_probability_abs"
+            ):
+                command_certify(SimpleNamespace(
+                    gate=str(gate), comparison=[f"4={report}"],
+                    output=str(output), batches="4",
+                ))
+            payload["requestGate"]["valueProbability"]["maximumAbs"] = 0.0
+            payload["requestGate"]["valueProbability"]["maximumRmse"] = 0.051
+            write_json(report, payload)
+            with self.assertRaisesRegex(
+                ValueError, "request_value_probability_rmse"
+            ):
+                command_certify(SimpleNamespace(
+                    gate=str(gate), comparison=[f"4={report}"],
+                    output=str(output), batches="4",
+                ))
+            payload["requestGate"]["valueProbability"]["maximumRmse"] = 0.0
+            write_json(report, payload)
 
             gate_payload = json.loads(gate.read_text())
             gate_payload["rows"].append({
@@ -521,6 +649,74 @@ class CudaTacticWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(winner["candidate_id"], "family-new")
 
+    def test_refinement_top_k_always_retests_the_incumbent(self):
+        rows = [
+            {
+                "candidate_id": f"candidate-{index}",
+                "status": "measured",
+                "nn_evals_per_sec_median": float(100 - index),
+            }
+            for index in range(12)
+        ]
+        selected = refinement_top_candidates(rows, "candidate-11", 10)
+        self.assertEqual(len(selected), 10)
+        self.assertIn("candidate-11", [row["candidate_id"] for row in selected])
+        self.assertNotIn("candidate-9", [row["candidate_id"] for row in selected])
+        with self.assertRaisesRegex(ValueError, "positive"):
+            refinement_top_candidates(rows, "candidate-11", 0)
+        with self.assertRaisesRegex(ValueError, "absent"):
+            refinement_top_candidates(rows, "missing", 10)
+
+    def test_refinement_does_not_treat_empty_keep_as_a_concrete_alternative(self):
+        rows = [
+            {
+                "candidate_id": "fa4-keep-incumbent",
+                "status": "measured",
+                "nn_evals_per_sec_median": 200.0,
+            },
+            {
+                "candidate_id": "fa4-concrete",
+                "status": "measured",
+                "nn_evals_per_sec_median": 100.0,
+            },
+        ]
+        selected = refinement_top_candidates(rows, "fa4-concrete", 2)
+        self.assertEqual(
+            [row["candidate_id"] for row in selected], ["fa4-concrete"]
+        )
+
+    def test_5080_positive_history_seed_is_materialized_for_every_batch(self):
+        for batch in range(4, 33):
+            space = materialize_space("sm120", "rtx5080", 0, [batch], 2)
+            seed = positive_history_seed_candidate_ids(
+                "sm120", "rtx5080", batch,
+            )
+            self.assertEqual(set(seed), set(SM120_FAMILIES))
+            for family, candidate_id in seed.items():
+                self.assertIn(candidate_id, candidate_map(space, family, batch))
+
+    def test_4090_positive_history_seed_is_materialized_for_every_batch(self):
+        for batch in range(4, 33):
+            space = materialize_space("sm89", "rtx4090", 0, [batch], 2)
+            seed = positive_history_seed_candidate_ids(
+                "sm89", "rtx4090", batch,
+            )
+            self.assertEqual(set(seed), set(SM89_FAMILIES))
+            for family, candidate_id in seed.items():
+                self.assertIn(candidate_id, candidate_map(space, family, batch))
+
+    def test_refinement_rows_replace_first_pass_without_duplicate_keys(self):
+        first = [
+            {"family": "fa4", "batch": 9, "candidate_id": "a", "refinement_pass": 1},
+            {"family": "fa4", "batch": 9, "candidate_id": "b", "refinement_pass": 1},
+        ]
+        refined = [
+            {"family": "fa4", "batch": 9, "candidate_id": "b", "refinement_pass": 2},
+        ]
+        rows = canonical_refinement_rows(first, refined)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["refinement_pass"] for row in rows], [1, 2])
+
     def test_plan_selects_per_batch_long_stable_maximum(self):
         with tempfile.TemporaryDirectory() as temporary_text:
             temporary = pathlib.Path(temporary_text)
@@ -534,9 +730,18 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             result_paths = []
             for family in SM89_FAMILIES:
                 result_path = temporary / f"{family}.json"
+                result = _make_result(
+                    space_path, space, family, [1, 13], model_path, config_path,
+                )
+                if family == "fa4":
+                    for row in result["rows"]:
+                        if row["history_stage_winner"]:
+                            row["history_incumbent_candidate_id"] = row["candidate_id"]
+                            row["history_accepted_change"] = False
+                            row["history_improvement_fraction_vs_incumbent"] = 0.0
                 write_json(
                     result_path,
-                    _make_result(space_path, space, family, [1, 13], model_path, config_path),
+                    result,
                 )
                 result_paths.append(result_path)
             plan = build_plan(result_paths, space_path, SM89_FAMILIES, [1, 13])
@@ -559,14 +764,13 @@ class CudaTacticWorkflowTests(unittest.TestCase):
                     "cudaUseWideFFN": "dual_ffn",
                 },
             )
-            self.assertFalse(
+            self.assertTrue(
                 plan["families"]["policy_p1"]["batches"]["13"]
                     ["effective"]
             )
-            self.assertEqual(
+            self.assertIsNone(
                 plan["families"]["policy_p1"]["batches"]["13"]
-                    ["superseded_by"],
-                "wide_head",
+                    ["superseded_by"]
             )
             checked = validate_plan(
                 plan,

@@ -131,7 +131,7 @@ void Sm89Ctx::markTacticActive(const string& marker) {
 }
 
 Sm89Scratch::Sm89Scratch(
-  bool useFP16, bool useExactMaskElision, int maxBatchSize, int xySize
+  bool useFP16, int maxBatchSize, int xySize
 )
   : allocator(
       [](size_t size) {
@@ -145,21 +145,19 @@ Sm89Scratch::Sm89Scratch(
     ),
     zeroBuf(NULL),
     oneBuf(NULL),
-    fullBoardMaskSumBuf(NULL)
+    fullBoardAreaBuf(NULL)
 {
   CudaUtils::hostMallocZeroOneBufs(zeroBuf, oneBuf, useFP16);
-  if(useExactMaskElision) {
-    vector<float> fullBoardMaskSums(maxBatchSize, (float)xySize);
-    CudaUtils::mallocAndCopyToDevice(
-      "Sm89Scratch:fullBoardMaskSum", fullBoardMaskSums,
-      fullBoardMaskSumBuf, false
-    );
-  }
+  vector<float> fullBoardAreas(maxBatchSize, (float)xySize);
+  CudaUtils::mallocAndCopyToDevice(
+    "Sm89Scratch:fullBoardArea", fullBoardAreas,
+    fullBoardAreaBuf, false
+  );
 }
 
 Sm89Scratch::~Sm89Scratch() {
-  if(fullBoardMaskSumBuf != NULL)
-    cudaFree(fullBoardMaskSumBuf);
+  if(fullBoardAreaBuf != NULL)
+    cudaFree(fullBoardAreaBuf);
   free(zeroBuf);
   free(oneBuf);
 }
@@ -2761,8 +2759,6 @@ struct Sm89Forward::Impl {
   const int policyP1RowsPerBlock;
   const bool useHeadBNHalfToFloat;
   const bool useWideHeadProjection;
-  const bool useExactMaskDownstreamElision;
-  const bool useExactMaskElision;
   const bool useFusedValueTerminal;
   const bool shareModelWeights;
   Sm89Ctx ctx;
@@ -2814,8 +2810,6 @@ struct Sm89Forward::Impl {
     int policyP1RowsPerBlock_,
     bool useHeadBNHalfToFloat_,
     bool useWideHeadProjection_,
-    bool useExactMaskDownstreamElision_,
-    bool useExactMaskElision_,
     bool useFusedValueTerminal_,
     const string& dualFfnAotTactic_,
     const string& linear2AotTactic_,
@@ -2864,8 +2858,6 @@ struct Sm89Forward::Impl {
       policyP1RowsPerBlock(policyP1RowsPerBlock_),
       useHeadBNHalfToFloat(useHeadBNHalfToFloat_),
       useWideHeadProjection(useWideHeadProjection_),
-      useExactMaskDownstreamElision(useExactMaskDownstreamElision_),
-      useExactMaskElision(useExactMaskElision_),
       useFusedValueTerminal(useFusedValueTerminal_),
       shareModelWeights(shareModelWeights_),
       ctx(
@@ -2874,9 +2866,7 @@ struct Sm89Forward::Impl {
         dualFfnCutlassTactic_, linear2CutlassTactic_,
         outProjCutlassTactic_, preConvCutlassTactic_,
         postConvCutlassTactic_),
-      scratch(
-        useFP16, useExactMaskElision_, maxBatchSize_, nnXLen_ * nnYLen_
-      ),
+      scratch(useFP16, maxBatchSize_, nnXLen_ * nnYLen_),
       trunk(&ctx, &desc->trunk, maxBatchSize_, nnXLen_, nnYLen_, useFP16, useNHWC,
         useWideQKV_, useWideFFN_, useFusedResidual_, useRMSNormOpt_, useFusedQKRoPE_,
         usePrecomputedQKRoPE_, useQKVRoPEGemm_, useSplitQKVRoPEGemm_,
@@ -2911,7 +2901,6 @@ struct Sm89Forward::Impl {
 
   void apply(
     int batchSize,
-    bool requireExactNNLen,
     void* inputBuf,
     void* inputGlobalBuf,
     void* inputMetaBuf,
@@ -2930,69 +2919,18 @@ struct Sm89Forward::Impl {
     (void)workspaceBytes;
     int xySize = nnXLen * nnYLen;
 
-    std::unique_ptr<SizedBuf<void*>> maskBuf;
-    std::unique_ptr<SizedBuf<void*>> maskFloatBuf;
-    std::unique_ptr<SizedBuf<void*>> maskSumBuf;
     SizedBuf<void*> trunkBuf(&scratch.allocator, scratch.getBufSizeXY(trunk.trunkNumChannels, maxBatchSize, xySize, usingFP16));
-
-    void* mask = NULL;
-    float* maskFloat = NULL;
-    float* maskSum = NULL;
-    const bool elideExactMask =
-      useExactMaskElision && requireExactNNLen &&
-      scratch.fullBoardMaskSumBuf != NULL;
-    if(elideExactMask) {
-      maskSum = (float*)scratch.fullBoardMaskSumBuf;
-      ctx.markTacticActive("cudaUseExactMaskElisionSm89");
-      if(useExactMaskDownstreamElision)
-        ctx.markTacticActive("cudaUseExactMaskDownstreamElisionSm89");
-    }
-    else {
-      maskBuf = std::make_unique<SizedBuf<void*>>(
-        &scratch.allocator,
-        scratch.getBufSize(1, maxBatchSize, usingFP16) * xySize
-      );
-      maskFloatBuf = std::make_unique<SizedBuf<void*>>(
-        &scratch.allocator,
-        scratch.getBufSizeFloat(1, maxBatchSize) * xySize
-      );
-      maskSumBuf = std::make_unique<SizedBuf<void*>>(
-        &scratch.allocator, scratch.getBufSizeFloat(1, maxBatchSize)
-      );
-
-      if(!usingFP16) {
-        if(inputsUseNHWC)
-          customCudaChannel0ExtractNHWC((const float*)inputBuf, (float*)maskBuf->buf, batchSize, xySize, numInputChannels, ctx.stream);
-        else
-          customCudaChannel0ExtractNCHW((const float*)inputBuf, (float*)maskBuf->buf, batchSize, numInputChannels, xySize, ctx.stream);
-        customCudaPoolRowsSumNCHW((const float*)maskBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0, ctx.stream);
-      }
-      else {
-        if(inputsUseNHWC)
-          customCudaChannel0ExtractNHWC((const half*)inputBuf, (half*)maskBuf->buf, batchSize, xySize, numInputChannels, ctx.stream);
-        else
-          customCudaChannel0ExtractNCHW((const half*)inputBuf, (half*)maskBuf->buf, batchSize, numInputChannels, xySize, ctx.stream);
-        customCudaCopyFromHalf((const half*)maskBuf->buf, (float*)maskFloatBuf->buf, batchSize * xySize, ctx.stream);
-        customCudaPoolRowsSumNCHW((const float*)maskFloatBuf->buf, (float*)maskSumBuf->buf, batchSize, 1, xySize, 1.0, ctx.stream);
-      }
-      CUDA_ERR("Sm89Forward",cudaPeekAtLastError());
-
-      const bool elideDownstreamMask =
-        requireExactNNLen && useExactMaskDownstreamElision;
-      if(elideDownstreamMask)
-        ctx.markTacticActive("cudaUseExactMaskDownstreamElisionSm89");
-      mask = elideDownstreamMask ? NULL : maskBuf->buf;
-      maskFloat = elideDownstreamMask ? NULL : (float*)maskFloatBuf->buf;
-      maskSum = (float*)maskSumBuf->buf;
-    }
+    if(scratch.fullBoardAreaBuf == NULL)
+      throw StringError("SM89 full-board area buffer is unavailable");
+    float* fullBoardArea = (float*)scratch.fullBoardAreaBuf;
 
     trunk.apply(
-      &ctx, &scratch, batchSize, inputBuf, inputGlobalBuf, mask, trunkBuf.buf,
+      &ctx, &scratch, batchSize, inputBuf, inputGlobalBuf, NULL, trunkBuf.buf,
       convWorkspace, convWorkspaceBytes, inputConsumedEvent
     );
     std::unique_ptr<SizedBuf<void*>> wideHeadBuf;
     const half* wideHead = nullptr;
-    if(requireExactNNLen && usingFP16 && usingNHWC && useWideHeadProjection) {
+    if(usingFP16 && usingNHWC && useWideHeadProjection) {
       wideHeadBuf = std::make_unique<SizedBuf<void*>>(
         &scratch.allocator, scratch.getBufSizeXY(384, maxBatchSize, xySize, true)
       );
@@ -3013,8 +2951,8 @@ struct Sm89Forward::Impl {
         ctx.stream,outputConsumedEvent,flags
       ));
     }
-    policyHead.apply(&ctx, &scratch, batchSize, mask, maskFloat, maskSum, trunkBuf.buf, wideHead, policyPassBuf, policyBuf, convWorkspace, convWorkspaceBytes);
-    valueHead.apply(&ctx, &scratch, batchSize, mask, maskSum, trunkBuf.buf, wideHead, valueBuf, scoreValueBuf, ownershipBuf, convWorkspace, convWorkspaceBytes);
+    policyHead.apply(&ctx, &scratch, batchSize, NULL, NULL, fullBoardArea, trunkBuf.buf, wideHead, policyPassBuf, policyBuf, convWorkspace, convWorkspaceBytes);
+    valueHead.apply(&ctx, &scratch, batchSize, NULL, fullBoardArea, trunkBuf.buf, wideHead, valueBuf, scoreValueBuf, ownershipBuf, convWorkspace, convWorkspaceBytes);
   }
 
 };
@@ -3080,8 +3018,6 @@ Sm89Forward::Sm89Forward(
   int policyP1RowsPerBlock,
   bool useHeadBNHalfToFloat,
   bool useWideHeadProjection,
-  bool useExactMaskDownstreamElision,
-  bool useExactMaskElision,
   bool useFusedValueTerminal,
   const string& dualFfnAotTactic,
   const string& linear2AotTactic,
@@ -3110,8 +3046,6 @@ Sm89Forward::Sm89Forward(
       useScaleBiasSiluVec4C384,
       useInitialConvFrontend, useInitialGlobalMatMulAdd,
       policyP1RowsPerBlock, useHeadBNHalfToFloat, useWideHeadProjection,
-      useExactMaskDownstreamElision,
-      useExactMaskElision,
       useFusedValueTerminal,
       dualFfnAotTactic,
       linear2AotTactic,
@@ -3128,7 +3062,6 @@ Sm89Forward::~Sm89Forward() = default;
 
 void Sm89Forward::apply(
   int batchSize,
-  bool requireExactNNLen,
   void* inputBuf,
   void* inputGlobalBuf,
   void* inputMetaBuf,
@@ -3143,7 +3076,7 @@ void Sm89Forward::apply(
   cudaEvent_t outputConsumedEvent
 ) {
   impl->apply(
-    batchSize, requireExactNNLen,
+    batchSize,
     inputBuf, inputGlobalBuf, inputMetaBuf,
     policyPassBuf, policyBuf, valueBuf, scoreValueBuf, ownershipBuf,
     workspaceBuf, workspaceBytes, inputConsumedEvent, outputConsumedEvent

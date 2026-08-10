@@ -11,7 +11,7 @@
     "tune_ffn_swiglu.py": "1369b13904aa1e7075f954619ceccc696d9859cba33c6705c9459dce9c1efa0b"
   },
   "maintainedSourceEdits": {
-    "tune_ffn_swiglu.py": "Removed the development-only external GPU lock; frozen B1-B32 device sources and their hashes are unchanged."
+    "tune_ffn_swiglu.py": "Frozen B1-B32 device sources and their hashes are unchanged."
   },
   "dependencies": {
     "pythonHistorical": "3.10.12",

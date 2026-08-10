@@ -30,6 +30,7 @@ default_build_jobs() {
     (( memory_jobs < 1 )) && memory_jobs=1
     (( memory_jobs < cpu_jobs )) && cpu_jobs="${memory_jobs}"
   fi
+  (( cpu_jobs > 8 )) && cpu_jobs=8
   printf '%s\n' "${cpu_jobs}"
 }
 

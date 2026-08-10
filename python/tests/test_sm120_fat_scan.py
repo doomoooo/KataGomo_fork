@@ -60,6 +60,29 @@ class FatScanTests(unittest.TestCase):
             symbol_token("wide_qkv", 32, "same-tactic"),
         )
 
+    def test_merged_qkv_coordinate_keeps_the_wide_qkv_artifact_abi(self) -> None:
+        space = {
+            "schema": 1,
+            "kind": "cuda-tactic-search-space",
+            "architecture": "sm120",
+            "batches": [{
+                "batch": 19,
+                "qkv_rope": [{
+                    "id": "qkv-tile",
+                    "implementation": "tilelang",
+                    "artifact_family": "wide_qkv",
+                }],
+            }],
+        }
+        requests = select_tilelang_requests(space, "wide_qkv", [19])
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["family"], "qkv_rope")
+        self.assertEqual(requests[0]["artifact_family"], "wide_qkv")
+        self.assertEqual(
+            requests[0]["launch_symbol"],
+            launch_symbol("wide_qkv", requests[0]["symbol_token"]),
+        )
+
     def test_registry_contains_exact_batch_and_id_entries(self) -> None:
         requests = select_tilelang_requests(
             test_space(), "dual_ffn", (1, 32), ("tile-a",)

@@ -178,13 +178,6 @@ Options parseOptions(ConfigParser& cfg) {
     throw StringError("cudaPolicyP1RowsPerBlockSm89 must be 0, 1, or 5");
   o.useHeadBNHalfToFloat = getBoolOpt(cfg, "cudaUseHeadBNHalfToFloat", false);
   o.useWideHeadProjection = getBoolOpt(cfg, "cudaUseWideHeadProjection", false);
-  o.useExactMaskDownstreamElision =
-    getBoolOpt(cfg, "cudaUseExactMaskDownstreamElisionSm89", false);
-  o.useExactMaskElision = getBoolOpt(cfg, "cudaUseExactMaskElisionSm89", false);
-  if(o.useExactMaskElision && !o.useExactMaskDownstreamElision)
-    throw StringError(
-      "cudaUseExactMaskElisionSm89 requires "
-      "cudaUseExactMaskDownstreamElisionSm89=true");
   o.useFusedValueTerminal = getBoolOpt(cfg, "cudaUseFusedValueTerminalSm89", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
@@ -236,6 +229,8 @@ Sm89Model::Sm89Model(
 {
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm89Model: null construction argument");
+  if(nnXLen != 19 || nnYLen != 19)
+    throw StringError("SM89 optimized backend supports only exact 19x19 inference");
   if(options.useForward && Sm89Forward::supports(*desc, useFP16, useNHWC)) {
     const PersistingL2Plan persistingL2 =
       (options.usePersistingL2Trunk || options.usePersistingL2Inner)
@@ -267,8 +262,6 @@ Sm89Model::Sm89Model(
       options.policyP1RowsPerBlock,
       options.useHeadBNHalfToFloat,
       options.useWideHeadProjection,
-      options.useExactMaskDownstreamElision,
-      options.useExactMaskElision,
       options.useFusedValueTerminal,
       options.dualFfnAotTactic,
       options.linear2AotTactic,
@@ -317,7 +310,6 @@ void Sm89Model::apply(
   (void)cudaHandles_;
   (void)scratch;
   (void)batchSize;
-  (void)requireExactNNLen;
   (void)inputBuf;
   (void)inputGlobalBuf;
   (void)inputMetaBuf;
@@ -329,10 +321,12 @@ void Sm89Model::apply(
   (void)workspaceBuf;
   (void)workspaceBytes;
 
+  if(!requireExactNNLen)
+    throw StringError("SM89 optimized backend supports only exact 19x19 inference");
+
   if(forwardActive) {
     forward->apply(
       batchSize,
-      requireExactNNLen,
       inputBuf,
       inputGlobalBuf,
       inputMetaBuf,

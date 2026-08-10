@@ -238,6 +238,9 @@ def main() -> None:
                 "--s1-warmup", str(args.s1_warmup),
                 "--s1-iterations", str(args.s1_iterations),
             ]
+            candidate_family = request.get("family", args.family)
+            if candidate_family != args.family:
+                command.extend(["--candidate-family", candidate_family])
             run_generator(command, logs_dir / f"{index:04d}-{token}")
         metadata = json.loads(metadata_path.read_text())
         source_sha256 = sha256_file(source_path)

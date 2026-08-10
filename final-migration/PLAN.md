@@ -50,9 +50,13 @@ snapshots are preserved by the refs in `FREEZE-GATES.md`; migration may fix
 bugs but must not edit the source optimization worktrees.
 
 This phase ships one offline source-based tar for SM89 and SM120. It detects the
-selected GPU through CUDA, builds the corresponding fat search binary once,
-scans exact B4-B32 by default, performs the long whole-graph gate, and emits a
-versioned plan containing:
+selected GPU through CUDA and first scans exact B4-B32 with an explicit,
+artifact-free stable optimized baseline. By default it builds the corresponding
+fat search binary for the three fastest shapes, completes one whole optimization
+flow per selected batch, performs the long whole-graph gate, certifies only the
+fastest stable result, and emits a versioned single-batch plan. Exhaustive
+B4-B32 optimization remains available through `--full-batch-scan`. The plan
+contains:
 
 - device identity and compatibility constraints;
 - batch/shape domain;

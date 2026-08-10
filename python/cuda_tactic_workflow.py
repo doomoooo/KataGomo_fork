@@ -57,53 +57,92 @@ SPACE_KIND = "cuda-tactic-search-space"
 PLAN_KIND = "cuda-tactic-plan"
 RESULT_KIND = "cuda-tactic-scan"
 ARTIFACT_BUNDLE_KIND = "cuda-tactic-artifact-bundle"
-SM89_FAMILIES = (
-    "wide_projection",
-    "fused_residual",
-    "rmsnorm",
-    "exact_mask",
-    "qkv_rope",
-    "fa4",
-    "dual_ffn",
-    "linear2",
-    "outproj",
-    "preconv",
-    "postconv_bn",
-    "pointwise",
-    "l2",
-    "weight_sharing",
-    "initial_conv",
-    "initial_global",
-    "policy_p1",
-    "head_bn",
-    "wide_head",
-    "value_terminal",
+BASELINE_SCAN_KIND = "cuda-stable-optimized-batch-prescan"
+# A family is an implementation catalog. A decision group is the actual
+# ordered coordinate: every runtime dependency/overlap stays inside one group,
+# and no later group may own the same config key. Bundle setup comes first;
+# finer components may then explicitly refine individual keys without erasing
+# an unrelated component of the bundle.
+SM89_DECISION_GROUPS = (
+    ("wide_projection", "qkv_rope", "dual_ffn"),
+    (
+        "fused_residual", "linear2", "outproj", "postconv_bn", "pointwise",
+    ),
+    ("rmsnorm",),
+    ("fa4",),
+    ("preconv",),
+    ("l2",),
+    ("weight_sharing",),
+    ("initial_conv",),
+    ("wide_head", "initial_global", "policy_p1", "head_bn"),
+    ("value_terminal",),
 )
-SM120_FAMILIES = (
-    "fa4",
-    "wide_qkv",
-    "wide_ffn",
-    "fused_residual",
-    "rmsnorm",
-    "exact_mask",
-    "qkv_rope",
-    "swiglu",
-    "dual_ffn",
-    "wide_projection",
-    "linear2",
-    "outproj",
-    "preconv",
-    "postconv_bn",
-    "pointwise",
-    "l2",
-    "weight_sharing",
-    "initial_conv",
-    "initial_global",
-    "policy_p1",
-    "head_bn",
-    "wide_head",
-    "value_terminal",
+SM120_DECISION_GROUPS = (
+    ("fa4", "wide_projection", "qkv_rope", "dual_ffn"),
+    ("fused_residual", "linear2", "outproj"),
+    ("postconv_bn", "preconv", "pointwise"),
+    ("wide_head", "policy_p1", "head_bn"),
+    ("rmsnorm",),
+    ("l2",),
+    ("weight_sharing",),
+    ("initial_conv",),
+    ("initial_global",),
+    ("value_terminal",),
 )
+SM89_FAMILIES = tuple(
+    family for group in SM89_DECISION_GROUPS for family in group
+)
+SM120_FAMILIES = tuple(
+    family for group in SM120_DECISION_GROUPS for family in group
+)
+# The remaining shared keys are deliberate whole-boundary decisions. This is
+# an exhaustive allow-list, not a compatibility mechanism: adding a second
+# owner to any other runtime key is a search-space error. FA is intentionally
+# absent because its tile/accumulator winner must never be rewritten by a QKV
+# or RoPE bundle.
+EXPECTED_CROSS_FAMILY_OWNERS = {
+    "sm89": {
+        "cudaPolicyP1RowsPerBlockSm89": ("wide_head", "policy_p1"),
+        "cudaUseFusedResidual": ("fused_residual", "linear2", "outproj"),
+        "cudaUseHeadBNHalfToFloat": ("wide_head", "head_bn"),
+        "cudaUseInitialGlobalMatMulAdd": ("wide_head", "initial_global"),
+        "cudaUseLinear2PostBNSiluSm89": ("linear2", "pointwise"),
+        "cudaUsePostConvBNSiluSm89": ("postconv_bn", "pointwise"),
+        "cudaUseWideFFN": ("wide_projection", "dual_ffn"),
+        "cudaUseWideHeadProjection": ("wide_head", "policy_p1"),
+        "cudaUseWideQKV": ("wide_projection", "qkv_rope"),
+    },
+    "sm120": {
+        "cudaFusedFFNAotTacticSm120": ("wide_projection", "dual_ffn"),
+        "cudaOuterProjectionDownTacticSm120": ("postconv_bn", "preconv"),
+        "cudaQKVRopeAotTacticSm120": ("wide_projection", "qkv_rope"),
+        "cudaUseBatchSharedRoPE": ("wide_projection", "qkv_rope"),
+        "cudaUseBatchSharedRoPEUnrolledSm120": (
+            "wide_projection", "qkv_rope",
+        ),
+        "cudaUseFusedFFN": ("wide_projection", "dual_ffn"),
+        "cudaUseFusedPolicyP1": ("wide_head", "policy_p1"),
+        "cudaUseFusedQKRoPE": ("wide_projection", "qkv_rope"),
+        "cudaUseFusedQKRoPEHalf2Sm120": (
+            "wide_projection", "qkv_rope",
+        ),
+        "cudaUseFusedResidualGemmSm120": (
+            "fused_residual", "linear2", "outproj",
+        ),
+        "cudaUseHeadBNHalfToFloat": ("wide_head", "head_bn"),
+        "cudaUseQKVGemmAot": ("wide_projection", "qkv_rope"),
+        "cudaUseQKVStridedSm120": (
+            "wide_projection", "qkv_rope",
+        ),
+        "cudaUseWideFFNSingleGemm": (
+            "wide_projection", "dual_ffn",
+        ),
+        "cudaUseWideQKV": ("wide_projection", "qkv_rope"),
+        "cudaWideQKVAotTacticSm120": (
+            "wide_projection", "qkv_rope",
+        ),
+    },
+}
 ALL_FAMILIES = tuple(dict.fromkeys((*SM89_FAMILIES, *SM120_FAMILIES)))
 SM89_RUNTIME_CONFIG_KEYS = frozenset({
     "cudaFusedFFNAotTacticSm89",
@@ -120,8 +159,6 @@ SM89_RUNTIME_CONFIG_KEYS = frozenset({
     "cudaRMSNormRowsPerBlockSm89",
     "cudaRoPEBatchGroupSm89",
     "cudaShareModelWeights",
-    "cudaUseExactMaskElisionSm89",
-    "cudaUseExactMaskDownstreamElisionSm89",
     "cudaUseFusedQKRoPE",
     "cudaUseFusedResidual",
     "cudaUseFusedValueTerminalSm89",
@@ -161,7 +198,6 @@ SM120_RUNTIME_CONFIG_KEYS = frozenset({
     "cudaUseFusedQKRoPEHalf2Sm120",
     "cudaUseFusedResidual",
     "cudaUseFusedResidualGemmSm120",
-    "cudaUseExactMaskElisionSm120",
     "cudaUseHeadBNHalfToFloat",
     "cudaInitialConvFrontendPlanSm120",
     "cudaUseInitialGlobalMatMulAdd",
@@ -198,8 +234,6 @@ SM89_RUNTIME_BASELINE: dict[str, object] = {
     "cudaRMSNormRowsPerBlockSm89": 4,
     "cudaRoPEBatchGroupSm89": 1,
     "cudaShareModelWeights": False,
-    "cudaUseExactMaskElisionSm89": False,
-    "cudaUseExactMaskDownstreamElisionSm89": False,
     "cudaUseFusedQKRoPE": False,
     "cudaUseFusedResidual": False,
     "cudaUseFusedValueTerminalSm89": False,
@@ -239,7 +273,6 @@ SM120_RUNTIME_BASELINE: dict[str, object] = {
     "cudaUseFusedQKRoPEHalf2Sm120": False,
     "cudaUseFusedResidual": False,
     "cudaUseFusedResidualGemmSm120": False,
-    "cudaUseExactMaskElisionSm120": False,
     "cudaUseHeadBNHalfToFloat": False,
     "cudaInitialConvFrontendPlanSm120": "disabled",
     "cudaUseInitialGlobalMatMulAdd": False,
@@ -445,6 +478,22 @@ def architecture_families(architecture: str) -> tuple[str, ...]:
     return tuple(ARCHITECTURES[architecture]["families"])
 
 
+def architecture_decision_groups(
+    architecture: str,
+) -> tuple[tuple[str, ...], ...]:
+    if architecture == "sm89":
+        groups = SM89_DECISION_GROUPS
+    elif architecture == "sm120":
+        groups = SM120_DECISION_GROUPS
+    else:
+        raise ValueError(f"unknown CUDA architecture: {architecture}")
+    if tuple(family for group in groups for family in group) != architecture_families(
+        architecture
+    ):
+        raise ValueError(f"{architecture} decision groups do not flatten to families")
+    return groups
+
+
 def runtime_tactic_baseline(architecture: str) -> dict[str, object]:
     if architecture == "sm89":
         return dict(SM89_RUNTIME_BASELINE)
@@ -640,24 +689,6 @@ def _gemm_candidates(architecture: str, family: str, batch: int) -> list[dict[st
 def _history_candidates(architecture: str, family: str, batch: int) -> list[dict[str, object]]:
     if family in ("dual_ffn", "linear2"):
         return _gemm_candidates(architecture, family, batch)
-    if family == "exact_mask":
-        return [
-            _config_candidate(
-                family, batch, "exact-mask-off",
-                cudaUseExactMaskDownstreamElisionSm89=False,
-                cudaUseExactMaskElisionSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "exact-mask-downstream-on",
-                cudaUseExactMaskDownstreamElisionSm89=True,
-                cudaUseExactMaskElisionSm89=False,
-            ),
-            _config_candidate(
-                family, batch, "exact-mask-preprocess-on",
-                cudaUseExactMaskDownstreamElisionSm89=True,
-                cudaUseExactMaskElisionSm89=True,
-            ),
-        ]
     toggle_keys = {
         "fused_residual": "cudaUseFusedResidual",
         "initial_conv": "cudaUseInitialConvFrontend",
@@ -681,26 +712,19 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
                 cudaUseWideFFN=False,
             ),
             _config_candidate(
-                family, batch, "wide-projection-qkv-only",
-                cudaUseWideQKV=True,
-                cudaUseWideFFN=False,
-            ),
-            _config_candidate(
-                family, batch, "wide-projection-ffn-only",
-                cudaUseWideQKV=False,
-                cudaUseWideFFN=True,
-            ),
-            _config_candidate(
                 family, batch, "wide-projection-both",
                 cudaUseWideQKV=True,
                 cudaUseWideFFN=True,
             ),
         ]
     if family == "policy_p1":
-        return [
+        values = [
             _config_candidate(
                 family, batch, "policy-p1-disabled",
                 cudaPolicyP1RowsPerBlockSm89=0,
+                # Wide-head storage is consumed by the fused P1 route. A
+                # disabled P1 control must disable that producer as well.
+                cudaUseWideHeadProjection=False,
             ),
             _config_candidate(
                 family, batch, "policy-p1-block96x1",
@@ -711,6 +735,7 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
                 cudaPolicyP1RowsPerBlockSm89=5,
             ),
         ]
+        return values
     if family == "rmsnorm":
         return [
             _config_candidate(
@@ -953,7 +978,7 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
                 values.append(value)
         return values
     if family == "wide_head":
-        return [
+        values = [
             _config_candidate(
                 family, batch, "wide-head-off", cudaUseWideHeadProjection=False,
             ),
@@ -970,6 +995,7 @@ def _history_candidates(architecture: str, family: str, batch: int) -> list[dict
                 cudaUseWideHeadProjection=True,
             ),
         ]
+        return values
     raise ValueError(f"unsupported tactic family: {family}")
 
 
@@ -991,21 +1017,22 @@ def _sm89_candidates(family: str, batch: int) -> list[dict[str, object]]:
         partial_overrides = {
             "qkv_rope": {"cudaUseWideQKV"},
             "dual_ffn": {"cudaUseWideFFN"},
-            "linear2": {"cudaUseFusedResidual"},
+            "linear2": {
+                "cudaUseFusedResidual",
+            },
             "outproj": {"cudaUseFusedResidual"},
+            "initial_global": {"cudaUseInitialGlobalMatMulAdd"},
+            "policy_p1": {
+                "cudaPolicyP1RowsPerBlockSm89",
+                "cudaUseWideHeadProjection",
+            },
+            "head_bn": {"cudaUseHeadBNHalfToFloat"},
         }
         overridden_keys = sorted(
             set(config) & partial_overrides.get(family, set())
         )
         if overridden_keys:
             value["overrides_keys"] = overridden_keys
-        if family == "wide_head" and value.get("id") == "wide-head-on":
-            value["supersedes"] = ["policy_p1"]
-        if (
-            family == "wide_head" and
-            value.get("id") == "wide-head-stage52-intrinsic-bundle"
-        ):
-            value["supersedes"] = ["initial_global", "policy_p1", "head_bn"]
         markers: list[str] = []
         for key, item in config.items():
             if key in {
@@ -1076,13 +1103,12 @@ def _sm120_value(
     }
     if implementation == "cute":
         generated[implementation] = {
-            "wide_qkv": "cute_qkv",
             "qkv_rope": "cute_qkv_rope",
             "dual_ffn": "cute_fused_ffn",
         }[family]
     if implementation in generated:
         parameters["requires_artifact"] = True
-        parameters["generator"] = generated[implementation]
+        parameters.setdefault("generator", generated[implementation])
         parameters.pop("prelinked_artifact", None)
     return candidate(
         candidate_id,
@@ -1178,70 +1204,10 @@ def _sm120_qkv_route_marker(candidate_id: str) -> str | None:
     return "SM120 backend: wide QKV AOT active, tactic=" + candidate_id
 
 
-def _sm120_packed_fa_id(batch: int) -> str:
-    return f"fa4-b{batch}-s361-h12-d32-tm128-tn96-s1-both16"
-
-
 def _sm120_candidates(
     family: str, batch: int, gpu_class: str,
 ) -> list[dict[str, object]]:
     keep = _config_candidate(family, batch, f"{family}-keep-incumbent")
-
-    if family == "wide_qkv":
-        keep["output"] = "planar"
-        values = []
-        for candidate_id, implementation, output, parameters in SM120_WIDE_QKV_ROUTES:
-            marker = _sm120_qkv_route_marker(candidate_id)
-            config = _sm120_qkv_route_config(candidate_id)
-            extra: dict[str, object] = {}
-            markers = [marker] if marker else []
-            if output == "packed":
-                packed_fa_id = _sm120_packed_fa_id(batch)
-                config.update({
-                    "cudaUseFusedQKRoPE": True,
-                    "cudaUseFusedQKRoPEHalf2Sm120": False,
-                    "cudaUseBatchSharedRoPE": True,
-                    "cudaUseBatchSharedRoPEUnrolledSm120": False,
-                    "cudaUseFlashAttentionSm120": True,
-                    "cudaFlashAttentionSm120Accum": "both16",
-                    "cudaFlashAttentionAotTacticSm120": packed_fa_id,
-                })
-                markers.append(
-                    "SM120 backend: batch-shared fused Q/K RoPE active"
-                )
-                markers.append(
-                    "SM120 backend: FA4 AOT active, tactic=" + packed_fa_id
-                )
-                extra["supersedes"] = ["fa4"]
-                extra["artifact_dependencies"] = [{
-                    "family": "fa4", "candidate_id": packed_fa_id,
-                }]
-            values.append(_sm120_value(
-                family, batch, candidate_id, implementation,
-                config,
-                output=output,
-                **({"activation_markers": markers} if markers else {}),
-                prelinked_artifact=True,
-                **extra,
-                **parameters,
-            ))
-        return [keep, *values]
-
-    if family == "wide_ffn":
-        return [
-            keep,
-            _sm120_value(
-                family, batch, "wide_ffn-off", "fallback",
-                {"cudaUseWideFFNSingleGemm": False},
-            ),
-            _sm120_value(
-                family, batch, "wide_ffn-single-projection", "builtin",
-                {"cudaUseWideFFNSingleGemm": True},
-                activation_markers=[
-                    "SM120 backend: single-wide FFN projection active"
-                ],
-            ),
-        ]
 
     if family == "fused_residual":
         return [keep, *_sm120_toggle(
@@ -1279,12 +1245,6 @@ def _sm120_candidates(
             ),
         ]
 
-    if family == "exact_mask":
-        return [keep, *_sm120_toggle(
-            family, batch, "cudaUseExactMaskElisionSm120",
-            marker="SM120 backend: exact full-board mask preprocessing elided",
-        )]
-
     if family == "qkv_rope":
         fused_aot_id = (
             "qkv-packed-cute-precomputed-rope-static-register-"
@@ -1297,7 +1257,44 @@ def _sm120_candidates(
             "cudaUseBatchSharedRoPEUnrolledSm120": False,
             "cudaQKVRopeAotTacticSm120": "disabled",
         }
+        # QKV projection and RoPE used to be two sequential families even
+        # though the latter enumerated and superseded every QKV route again.
+        # Keep the official-RoPE controls and all fused/packed combinations in
+        # one boundary coordinate so a measured QKV winner cannot be silently
+        # replaced later in the same batch.
         values = []
+        for qkv_id, implementation, output, parameters in SM120_WIDE_QKV_ROUTES:
+            config = _sm120_qkv_route_config(qkv_id)
+            markers = []
+            qkv_marker = _sm120_qkv_route_marker(qkv_id)
+            if qkv_marker is not None:
+                markers.append(qkv_marker)
+            extra: dict[str, object] = {}
+            if implementation == "cute":
+                extra["generator"] = "cute_qkv"
+            if implementation in {"tilelang", "cute"}:
+                extra["artifact_family"] = "wide_qkv"
+            if output == "packed":
+                config.update({
+                    "cudaUseFusedQKRoPE": True,
+                    "cudaUseFusedQKRoPEHalf2Sm120": False,
+                    "cudaUseBatchSharedRoPE": True,
+                    "cudaUseBatchSharedRoPEUnrolledSm120": False,
+                })
+                markers.append(
+                    "SM120 backend: batch-shared fused Q/K RoPE active"
+                )
+                extra["requires"] = {"fa4.supports_packed": True}
+            values.append(_sm120_value(
+                family, batch, qkv_id, implementation, config,
+                output=output,
+                qkv_variant=qkv_id,
+                rope_variant=("batch-shared" if output == "packed" else "official"),
+                activation_markers=markers,
+                prelinked_artifact=True,
+                **extra,
+                **parameters,
+            ))
         rope_modes = {
             "scalar": (
                 {}, "SM120 backend: fused Q/K learnable RoPE active",
@@ -1329,10 +1326,11 @@ def _sm120_candidates(
             ): "qkv-rope-batch-shared-unrolled",
         }
         for qkv_id, qkv_implementation, output, _ in SM120_WIDE_QKV_ROUTES:
+            # Packed+batch-shared is already the base packed candidate above.
             modes = (
                 ("scalar", "half2", "batch-shared")
                 if output == "planar" else
-                ("batch-shared", "batch-shared-unrolled")
+                ("batch-shared-unrolled",)
             )
             for rope_mode in modes:
                 candidate_id = legacy_ids.get(
@@ -1345,37 +1343,24 @@ def _sm120_candidates(
                     **_sm120_qkv_route_config(qkv_id),
                     **rope_config,
                 }
-                supersedes = ["wide_qkv"]
                 markers = [rope_marker]
-                if output == "packed":
-                    packed_fa_id = _sm120_packed_fa_id(batch)
-                    config.update({
-                        "cudaUseFlashAttentionSm120": True,
-                        "cudaFlashAttentionSm120Accum": "both16",
-                        "cudaFlashAttentionAotTacticSm120": packed_fa_id,
-                    })
-                    supersedes.append("fa4")
-                    markers.append(
-                        "SM120 backend: FA4 AOT active, tactic=" + packed_fa_id
-                    )
+                requires = (
+                    {"fa4.supports_packed": True}
+                    if output == "packed" else {}
+                )
                 qkv_marker = _sm120_qkv_route_marker(qkv_id)
                 if qkv_marker is not None:
                     markers.insert(0, qkv_marker)
                 artifact_dependencies = []
                 if qkv_implementation in {"tilelang", "cute"}:
                     artifact_dependencies.append({
-                        "family": "wide_qkv", "candidate_id": qkv_id,
-                    })
-                if output == "packed":
-                    artifact_dependencies.append({
-                        "family": "fa4",
-                        "candidate_id": _sm120_packed_fa_id(batch),
+                        "family": "qkv_rope", "candidate_id": qkv_id,
                     })
                 values.append(_sm120_value(
                     family, batch, candidate_id, "builtin_bundle", config,
                     qkv_variant=qkv_id,
                     rope_variant=rope_mode,
-                    supersedes=supersedes,
+                    requires=requires,
                     artifact_dependencies=artifact_dependencies,
                     activation_markers=markers,
                 ))
@@ -1388,28 +1373,31 @@ def _sm120_candidates(
                 "cudaUseQKVStridedSm120": False,
                 "cudaWideQKVAotTacticSm120": "disabled",
                 "cudaQKVRopeAotTacticSm120": fused_aot_id,
-                "cudaUseFlashAttentionSm120": True,
-                "cudaFlashAttentionSm120Accum": "both16",
-                "cudaFlashAttentionAotTacticSm120":
-                    _sm120_packed_fa_id(batch),
             },
             exact_batch_aot=True,
             packed_output=True,
             rope_epilogue="fp16-register-fragment",
             requires_artifact=True,
             generator="cute_qkv_rope",
-            supersedes=["fa4", "wide_qkv"],
-            artifact_dependencies=[{
-                "family": "fa4",
-                "candidate_id": _sm120_packed_fa_id(batch),
-            }],
+            requires={"fa4.supports_packed": True},
             activation_markers=[
                 "SM120 backend: packed QKV+RoPE AOT active, tactic=" +
                 fused_aot_id,
-                "SM120 backend: FA4 AOT active, tactic=" +
-                _sm120_packed_fa_id(batch),
             ],
         ))
+        for value in values:
+            overridden = sorted(
+                set(candidate_config(family, value)) & {
+                    "cudaUseWideQKV", "cudaUseQKVGemmAot",
+                    "cudaUseQKVStridedSm120", "cudaWideQKVAotTacticSm120",
+                    "cudaUseFusedQKRoPE", "cudaUseFusedQKRoPEHalf2Sm120",
+                    "cudaUseBatchSharedRoPE",
+                    "cudaUseBatchSharedRoPEUnrolledSm120",
+                    "cudaQKVRopeAotTacticSm120",
+                }
+            )
+            if overridden:
+                value["overrides_keys"] = overridden
         return [keep, *values]
 
     if family == "fa4":
@@ -1433,6 +1421,7 @@ def _sm120_candidates(
                     seq_len=361, heads=12, head_dim=32, tile_m=128,
                     tile_n=tile_n, num_stages=1,
                     accumulation=accumulation,
+                    supports_packed=True,
                     exact_shape_aot=True, requires_artifact=True,
                     generator="fa4_cute",
                     activation_markers=[
@@ -1444,11 +1433,40 @@ def _sm120_candidates(
             {
                 "cudaUseFlashAttentionSm120": False,
             },
+            supports_packed=False,
         ))
         return [keep, *values]
 
     if family == "dual_ffn":
-        values = []
+        # These were previously three sequential families that repeatedly
+        # rewrote cudaUseWideFFNSingleGemm. They are one mutually-exclusive
+        # FFN boundary and are therefore scanned as one coordinate.
+        values = [
+            _sm120_value(
+                family, batch, "wide_ffn-single-projection", "builtin",
+                {
+                    "cudaUseFusedFFN": False,
+                    "cudaFusedFFNAotTacticSm120": "disabled",
+                    "cudaUseWideFFNSingleGemm": True,
+                    "cudaUseSwiGLU1152Sm120": False,
+                },
+                activation_markers=[
+                    "SM120 backend: single-wide FFN projection active"
+                ],
+            ),
+            _sm120_value(
+                family, batch, "swiglu-on", "builtin",
+                {
+                    "cudaUseFusedFFN": False,
+                    "cudaFusedFFNAotTacticSm120": "disabled",
+                    "cudaUseWideFFNSingleGemm": False,
+                    "cudaUseSwiGLU1152Sm120": True,
+                },
+                activation_markers=[
+                    "SM120 backend: contiguous half8 C1152 SwiGLU active"
+                ],
+            ),
+        ]
         cutlass_shared_a_id = (
             "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2"
         )
@@ -1553,13 +1571,22 @@ def _sm120_candidates(
             {
                 "cudaUseFusedFFN": False,
                 "cudaFusedFFNAotTacticSm120": "disabled",
+                "cudaUseWideFFNSingleGemm": False,
+                "cudaUseSwiGLU1152Sm120": False,
             },
         ))
         for value in values:
-            if value.get("id") != "dual_ffn-fallback-cublas-swiglu":
+            if str(value.get("id", "")).startswith("dual_ffn-"):
                 value["config"]["cudaUseWideFFNSingleGemm"] = False
-                value["overrides_keys"] = ["cudaUseWideFFNSingleGemm"]
-                value["supersedes"] = ["wide_ffn", "swiglu"]
+                value["config"]["cudaUseSwiGLU1152Sm120"] = False
+            overridden = sorted(
+                set(candidate_config(family, value)) & {
+                    "cudaUseFusedFFN", "cudaFusedFFNAotTacticSm120",
+                    "cudaUseWideFFNSingleGemm",
+                }
+            )
+            if overridden:
+                value["overrides_keys"] = overridden
         return [keep, *values]
 
     if family == "wide_projection":
@@ -1581,23 +1608,18 @@ def _sm120_candidates(
                     "cudaUseBatchSharedRoPEUnrolledSm120": False,
                     "cudaQKVRopeAotTacticSm120": "disabled",
                 },
-                supersedes=[
-                    "wide_qkv", "wide_ffn", "qkv_rope", "swiglu", "dual_ffn",
-                ],
-                overrides_keys=[
-                    "cudaUseWideFFNSingleGemm", "cudaUseFusedFFN",
-                    "cudaFusedFFNAotTacticSm120", "cudaUseWideQKV",
-                    "cudaUseQKVGemmAot", "cudaUseQKVStridedSm120",
-                    "cudaWideQKVAotTacticSm120", "cudaUseFusedQKRoPE",
-                    "cudaUseFusedQKRoPEHalf2Sm120",
-                    "cudaUseBatchSharedRoPE",
-                    "cudaUseBatchSharedRoPEUnrolledSm120",
-                    "cudaQKVRopeAotTacticSm120",
-                ],
                 activation_markers=[
                     "SM120 backend: strided-batched QKV projection active",
                     "SM120 backend: single-wide FFN projection active",
                 ],
+                activation_marker_keys={
+                    "SM120 backend: strided-batched QKV projection active": [
+                        "cudaUseQKVStridedSm120",
+                    ],
+                    "SM120 backend: single-wide FFN projection active": [
+                        "cudaUseWideFFNSingleGemm",
+                    ],
+                },
             ),
         ]
 
@@ -1682,37 +1704,8 @@ def _sm120_candidates(
         ))
         return [keep, *values]
 
-    if family == "swiglu":
-        return [
-            keep,
-            _sm120_value(
-                family, batch, "swiglu-off", "fallback",
-                {
-                    "cudaUseSwiGLU1152Sm120": False,
-                    "cudaUseWideFFNSingleGemm": True,
-                },
-                overrides_keys=["cudaUseWideFFNSingleGemm"],
-                activation_markers=[
-                    "SM120 backend: single-wide FFN projection active"
-                ],
-            ),
-            _sm120_value(
-                family, batch, "swiglu-on", "builtin",
-                {
-                    "cudaUseSwiGLU1152Sm120": True,
-                    # The single-projection route owns its own fused SwiGLU
-                    # and bypasses the independent hook below it.
-                    "cudaUseWideFFNSingleGemm": False,
-                },
-                overrides_keys=["cudaUseWideFFNSingleGemm"],
-                activation_markers=[
-                    "SM120 backend: contiguous half8 C1152 SwiGLU active"
-                ],
-            ),
-        ]
-
     if family == "preconv":
-        return [
+        values = [
             keep,
             _sm120_value(
                 family, batch, "preconv-off", "fallback",
@@ -1733,6 +1726,14 @@ def _sm120_candidates(
                 ],
             ),
         ]
+        for value in values:
+            if "cudaOuterProjectionDownTacticSm120" in candidate_config(
+                family, value,
+            ):
+                value["overrides_keys"] = [
+                    "cudaOuterProjectionDownTacticSm120"
+                ]
+        return values
 
     if family == "postconv_bn":
         return [
@@ -1753,11 +1754,15 @@ def _sm120_candidates(
                     "cudaOuterProjectionUpTacticSm120": "warp64x64",
                     "cudaUsePostConvBNSiluSm120": False,
                 },
-                supersedes=["preconv"],
                 activation_markers=[
                     "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x64",
                     "SM120 backend: C384->C768 outer projection+residual CUTLASS active, tactic=warp64x64",
                 ],
+                activation_marker_keys={
+                    "SM120 backend: C768->C384 outer projection CUTLASS active, tactic=warp64x64": [
+                        "cudaOuterProjectionDownTacticSm120",
+                    ],
+                },
             ),
             _sm120_value(
                 family, batch, "postconv-cutlass-warp64x64", "builtin_cutlass",
@@ -1891,10 +1896,20 @@ def _sm120_candidates(
             marker="SM120 backend: fused global-feature matmul+broadcast add active",
         )]
     if family == "policy_p1":
-        return [keep, *_sm120_toggle(
+        values = [keep, *_sm120_toggle(
             family, batch, "cudaUseFusedPolicyP1",
             marker="SM120 backend: fused 19x19 policy P1 active",
         )]
+        for value in values:
+            if "cudaUseFusedPolicyP1" in candidate_config(family, value):
+                value["overrides_keys"] = ["cudaUseFusedPolicyP1"]
+            if candidate_config(family, value).get("cudaUseFusedPolicyP1") is False:
+                # The SM120 wide-head route is constructed only when fused P1
+                # and direct-FP32 head BN are both active. Turning either
+                # prerequisite off removes that route rather than merely
+                # changing one independent pointwise kernel.
+                value["supersedes"] = ["wide_head"]
+        return values
     if family == "wide_head":
         return [
             keep,
@@ -1912,7 +1927,6 @@ def _sm120_candidates(
                 activation_markers=[
                     "SM120 backend: full C384 no-split wide head projection active"
                 ],
-                supersedes=["policy_p1", "head_bn"],
             ),
             _sm120_value(
                 family, batch, "wide-head-partial-c288-g1-v1", "builtin_cutlass",
@@ -1924,14 +1938,19 @@ def _sm120_candidates(
                 activation_markers=[
                     "SM120 backend: partial C288 no-split g1+v1 head active"
                 ],
-                supersedes=["policy_p1", "head_bn"],
             ),
         ]
     if family == "head_bn":
-        return [keep, *_sm120_toggle(
+        values = [keep, *_sm120_toggle(
             family, batch, "cudaUseHeadBNHalfToFloat",
             marker="SM120 backend: head BN direct FP32 output active",
         )]
+        for value in values:
+            if "cudaUseHeadBNHalfToFloat" in candidate_config(family, value):
+                value["overrides_keys"] = ["cudaUseHeadBNHalfToFloat"]
+            if candidate_config(family, value).get("cudaUseHeadBNHalfToFloat") is False:
+                value["supersedes"] = ["wide_head"]
+        return values
     if family == "value_terminal":
         return [keep, *_sm120_toggle(
             family, batch, "cudaUseFusedValueTerminalSm120",
@@ -1948,6 +1967,122 @@ def default_candidates(
     if architecture == "sm120":
         return _sm120_candidates(family, batch, gpu_class)
     raise ValueError(f"unsupported architecture: {architecture}")
+
+
+def positive_history_seed_candidate_ids(
+    architecture: str, gpu_class: str, batch: int,
+) -> dict[str, str]:
+    """Return an explicit known-good whole-graph restart when one is frozen.
+
+    This is deliberately a map of ordinary search-space candidates, not a
+    hidden override string.  Every component is therefore measured, carries
+    its normal activation proof, can be replaced by coordinate search, and is
+    serialized through the normal plan-apply mapping.  Exact-batch IDs are
+    materialized for every requested batch; there is no privileged B19 launch.
+    """
+    if architecture == "sm89" and gpu_class == "rtx4090":
+        return {
+            "fa4": "fa4-d32-m64-n96-w4-pack0-both16",
+            "wide_projection": "wide-projection-both",
+            "qkv_rope": "qkv-rope-gemm-epilogue",
+            "dual_ffn": (
+                "dual-cutlass-m128-n64-k32-w64-n32-s3-sw2-tanh-half2"
+            ),
+            "fused_residual": "fused_residual-on",
+            "linear2": (
+                "linear2-cutlass-m128-n128-k32-w64-n64-s3-sw1"
+            ),
+            "outproj": (
+                "outproj-cutlass-m128-n128-k32-w64-n64-s3-sw1"
+            ),
+            "postconv_bn": (
+                "postconv-cutlass-m128-n128-k32-w64-n64-s3-sw1"
+            ),
+            "pointwise": "pointwise-c768-vec8-c384-vec8",
+            "rmsnorm": "rmsnorm-warps4",
+            "preconv": (
+                "preconv-cutlass-m128-n128-k32-w64-n64-s3-sw1"
+            ),
+            "l2": f"l2-b{batch}-trunk-inner-r1p0",
+            "weight_sharing": "weight_sharing-on",
+            "initial_conv": "initial_conv-off",
+            "wide_head": "wide-head-on",
+            "initial_global": "initial_global-on",
+            "policy_p1": "policy-p1-block96x5",
+            "head_bn": "head_bn-off",
+            "value_terminal": "value_terminal-off",
+        }
+    if architecture == "sm120" and gpu_class == "rtx5080":
+        return {
+            "fa4": (
+                f"fa4-b{batch}-s361-h12-d32-tm128-tn64-s1-both16"
+            ),
+            "wide_projection": "wide_projection-keep-incumbent",
+            "qkv_rope": "qkv-rope-batch-shared-unrolled",
+            "dual_ffn": "dual_ffn-m128-n64-k32-s2-mb3-tanh-half2",
+            "fused_residual": "fused_residual-on",
+            "linear2": "linear2-m128-n128-k32-s3-cutlass",
+            "outproj": "outproj-m128-n128-k32-s3-cutlass",
+            "postconv_bn": "postconv-cutlass-warp64x32",
+            "preconv": "preconv-cutlass-warp64x64",
+            "pointwise": "pointwise-half2",
+            "wide_head": "wide-head-full-c384",
+            "policy_p1": "policy_p1-on",
+            "head_bn": "head_bn-on",
+            "rmsnorm": "rmsnorm-vec8",
+            "l2": "l2-trunk-inner-ratio-1p0",
+            "weight_sharing": "weight_sharing-on",
+            "initial_conv": "initial-conv-eng45-tile0-stages2",
+            "initial_global": "initial_global-on",
+            "value_terminal": "value_terminal-off",
+        }
+    return {}
+
+
+def stable_prescan_candidate_ids(
+    architecture: str, gpu_class: str, batch: int,
+) -> dict[str, str]:
+    """Return the artifact-free optimized graph used to rank exact batches.
+
+    The pre-scan intentionally runs before exact-batch source generation.  Its
+    graph may therefore use only implementations compiled into the base CUDA
+    backend.  It is explicit, fail-closed, and substantially closer to the
+    eventual optimized graph than disabling the custom backend altogether.
+    """
+    if architecture == "sm89" and gpu_class == "rtx4090":
+        # Every selected implementation is batch-generic on SM89, so the
+        # certified B12 graph itself is a valid B4-B32 ranking baseline.
+        return positive_history_seed_candidate_ids(
+            architecture, gpu_class, batch=batch,
+        )
+    if architecture == "sm120" and gpu_class in {"rtx5080", "rtx5090d"}:
+        return {
+            "fa4": "fa4-official-attention",
+            "qkv_rope": (
+                "qkv-rope-batch-shared-with-wide_qkv-strided-batched"
+            ),
+            "dual_ffn": (
+                "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2"
+            ),
+            "fused_residual": "fused_residual-on",
+            "linear2": "linear2-m128-n128-k32-s3-cutlass",
+            "outproj": "outproj-m128-n128-k32-s3-cutlass",
+            "postconv_bn": "postconv-cutlass-warp64x64",
+            "preconv": "preconv-cutlass-warp64x32",
+            "pointwise": "pointwise-half2",
+            "wide_head": "wide-head-full-c384",
+            "policy_p1": "policy_p1-on",
+            "head_bn": "head_bn-on",
+            "rmsnorm": "rmsnorm-vec8",
+            "l2": "l2-trunk-inner-ratio-1p0",
+            "weight_sharing": "weight_sharing-on",
+            "initial_conv": "initial-conv-eng45-tile0-stages2",
+            "initial_global": "initial_global-on",
+            "value_terminal": "value_terminal-off",
+        }
+    raise ValueError(
+        f"no stable pre-scan baseline for {architecture}/{gpu_class}"
+    )
 
 
 def deduplicate_candidates(values: Iterable[dict[str, object]]) -> list[dict[str, object]]:
@@ -2117,6 +2252,9 @@ def materialize_space(
         "fixed_board": [19, 19],
         "precision": ARCHITECTURES[architecture]["precision"],
         "families": list(target_families),
+        "decision_groups": [
+            list(group) for group in architecture_decision_groups(architecture)
+        ],
         "streams": streams,
         "topology": topology,
         "batch_policy": "only explicitly materialized batches; no anchor or plateau pruning",
@@ -2143,6 +2281,10 @@ def materialize_space(
                 ]
             ),
             "execution_order": list(target_families),
+            "decision_groups": [
+                list(group)
+                for group in architecture_decision_groups(architecture)
+            ],
             "search_semantics": (
                 "accepted-history-seeded coordinate search with accumulated "
                 "winners and a non-regressing incumbent at every stage"
@@ -2750,7 +2892,7 @@ def candidate_compatibility(
     """Check declarative cross-family requirements for one coordinate.
 
     Requirements use canonical family fields, for example
-    ``{"wide_qkv.output": "packed"}``. An incompatible candidate is explicit
+    ``{"fa4.supports_packed": true}``. An incompatible candidate is explicit
     scan evidence, not a silently omitted candidate and not a failed kernel.
     """
     requirements = value.get("requires", {})
@@ -2772,20 +2914,11 @@ def candidate_compatibility(
 def runtime_supersedes(
     family: str, value: dict[str, object],
 ) -> list[str]:
-    """Return boundary ownership, including backend-implied FFN ownership."""
+    """Return the candidate's explicit whole-boundary ownership."""
     supersedes = value.get("supersedes", [])
     if not isinstance(supersedes, list):
         raise ValueError(f"candidate {value.get('id')} has malformed supersedes")
-    result = [str(previous) for previous in supersedes]
-    config = candidate_config(family, value)
-    if family == "dual_ffn" and config.get("cudaUseFusedFFN") is True:
-        result.append("swiglu")
-    if (
-        family == "wide_projection" and
-        config.get("cudaUseWideFFNSingleGemm") is True
-    ):
-        result.append("swiglu")
-    return list(dict.fromkeys(result))
+    return list(dict.fromkeys(str(previous) for previous in supersedes))
 
 
 def effective_candidate_map(
@@ -2846,6 +2979,16 @@ def validate_cross_family_config_ownership(
     batch_space: dict[str, object],
 ) -> None:
     """Require every cross-family config-key owner change to be declared."""
+    exclusive_keys = {
+        "sm89": {
+            "cudaFlashAttentionTacticSm89": "fa4",
+        },
+        "sm120": {
+            "cudaUseFlashAttentionSm120": "fa4",
+            "cudaFlashAttentionSm120Accum": "fa4",
+            "cudaFlashAttentionAotTacticSm120": "fa4",
+        },
+    }[architecture]
     prior_owners: dict[str, set[str]] = {}
     for family in architecture_families(architecture):
         values = batch_space.get(family)
@@ -2857,6 +3000,13 @@ def validate_cross_family_config_ownership(
             supersedes = set(value.get("supersedes", []))
             overrides_keys = set(value.get("overrides_keys", []))
             for key in candidate_config(family, value):
+                exclusive_owner = exclusive_keys.get(key)
+                if exclusive_owner is not None and family != exclusive_owner:
+                    raise ValueError(
+                        "exclusive tactic axis is owned by another family: "
+                        f"{architecture}/{family}/B{batch}/{value.get('id')}/"
+                        f"{key}, owner={exclusive_owner}"
+                    )
                 owners = prior_owners.get(key, set())
                 if (
                     owners and key not in overrides_keys and
@@ -2878,6 +3028,59 @@ def validate_cross_family_config_ownership(
             assert isinstance(value, dict)
             for key in candidate_config(family, value):
                 prior_owners.setdefault(key, set()).add(family)
+    family_order = architecture_families(architecture)
+    actual_cross_owners = {
+        key: tuple(family for family in family_order if family in owners)
+        for key, owners in prior_owners.items()
+        if len(owners) > 1
+    }
+    expected_cross_owners = EXPECTED_CROSS_FAMILY_OWNERS[architecture]
+    if actual_cross_owners != expected_cross_owners:
+        missing = sorted(set(expected_cross_owners) - set(actual_cross_owners))
+        unexpected = sorted(set(actual_cross_owners) - set(expected_cross_owners))
+        changed = sorted(
+            key for key in set(actual_cross_owners) & set(expected_cross_owners)
+            if actual_cross_owners[key] != expected_cross_owners[key]
+        )
+        raise ValueError(
+            "cross-family ownership contract changed; merge the axis or update "
+            "the explicit joint-boundary contract: "
+            f"missing={missing}, unexpected={unexpected}, changed={changed}"
+        )
+    group_index = {
+        family: index
+        for index, group in enumerate(architecture_decision_groups(architecture))
+        for family in group
+    }
+    leaked = {
+        key: owners
+        for key, owners in actual_cross_owners.items()
+        if len({group_index[family] for family in owners}) != 1
+    }
+    if leaked:
+        raise ValueError(
+            "runtime config ownership crosses decision groups: " +
+            repr(leaked)
+        )
+    for family in architecture_families(architecture):
+        values = batch_space[family]
+        assert isinstance(values, list)
+        for value in values:
+            assert isinstance(value, dict)
+            requirements = value.get("requires", {})
+            if not isinstance(requirements, dict):
+                continue
+            for path in requirements:
+                required_family = str(path).split(".", 1)[0]
+                if (
+                    required_family not in group_index or
+                    group_index[required_family] != group_index[family]
+                ):
+                    raise ValueError(
+                        "candidate dependency crosses decision groups: "
+                        f"{architecture}/{family}/B{batch}/{value.get('id')}/"
+                        f"{path}"
+                    )
 
 
 def activation_markers(value: dict[str, object]) -> list[str]:
@@ -2896,9 +3099,17 @@ def effective_activation_markers(
 ) -> list[str]:
     """Drop only markers for config keys explicitly owned by a later family."""
     ignored = set(overridden_keys)
+    marker_keys = value.get("activation_marker_keys", {})
+    if not isinstance(marker_keys, dict):
+        raise ValueError(
+            f"candidate {value.get('id')} has malformed activation_marker_keys"
+        )
     return [
         marker for marker in activation_markers(value)
-        if not any(key in marker for key in ignored)
+        if not (
+            any(key in marker for key in ignored) or
+            bool(ignored & set(marker_keys.get(marker, [])))
+        )
     ]
 
 
@@ -3066,6 +3277,91 @@ def choose_history_stage_winner(
     if best.get("candidate_id") != incumbent_candidate_id and best_value < required:
         best = incumbent
     return best, incumbent
+
+
+def refinement_top_candidates(
+    rows: Sequence[dict[str, object]],
+    incumbent_candidate_id: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Return the first-pass top-K while always retaining the incumbent.
+
+    The second discovery pass runs on the already improved whole graph.  Its
+    candidate set must remain a deterministic projection of the first pass so
+    a resume cannot silently change the search domain after some refined rows
+    have been written.
+    """
+    if limit < 1:
+        raise ValueError("refinement top-K must be positive")
+    measured = [
+        row for row in rows
+        if row.get("status") == "measured" and
+        isinstance(row.get("nn_evals_per_sec_median"), (int, float)) and
+        math.isfinite(float(row["nn_evals_per_sec_median"]))
+    ]
+    # Once the incumbent is a concrete tactic, the empty keep row is not an
+    # alternative implementation. Treating it as one silently restored the
+    # runtime baseline during refinement (for example disabling the accepted
+    # initial-global fusion). The concrete incumbent is forced below instead.
+    if not incumbent_candidate_id.endswith("-keep-incumbent"):
+        measured = [
+            row for row in measured
+            if not str(row.get("candidate_id", "")).endswith(
+                "-keep-incumbent"
+            )
+        ]
+    by_id = {str(row.get("candidate_id")): row for row in measured}
+    if len(by_id) != len(measured):
+        raise ValueError("first-pass refinement rows contain duplicate candidates")
+    if incumbent_candidate_id not in by_id:
+        raise ValueError(
+            "refinement incumbent is absent from the first pass: "
+            f"{incumbent_candidate_id}"
+        )
+    ranked = sorted(
+        measured,
+        key=lambda row: (
+            -float(row["nn_evals_per_sec_median"]),
+            str(row.get("candidate_id")),
+        ),
+    )
+    selected = ranked[:limit]
+    if incumbent_candidate_id not in {
+        str(row.get("candidate_id")) for row in selected
+    }:
+        selected[-1] = by_id[incumbent_candidate_id]
+    return selected
+
+
+def canonical_refinement_rows(
+    first_pass_rows: Sequence[dict[str, object]],
+    refinement_rows: Sequence[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Replace retested first-pass rows without emitting duplicate keys.
+
+    The complete first pass is already retained as its own result file.  The
+    refined result is the canonical input to the long gate and plan builder,
+    so each family/batch/candidate key must describe exactly one measured
+    graph state there.
+    """
+    refined_by_key: dict[tuple[str, int, str], dict[str, object]] = {}
+    for row in refinement_rows:
+        key = _row_key(str(row.get("family")), row)
+        if key in refined_by_key:
+            raise ValueError(f"duplicate refinement row: {key}")
+        refined_by_key[key] = row
+    result: list[dict[str, object]] = []
+    first_keys: set[tuple[str, int, str]] = set()
+    for row in first_pass_rows:
+        key = _row_key(str(row.get("family")), row)
+        if key in first_keys:
+            raise ValueError(f"duplicate first-pass refinement row: {key}")
+        first_keys.add(key)
+        result.append(refined_by_key.get(key, row))
+    unexpected = sorted(set(refined_by_key) - first_keys)
+    if unexpected:
+        raise ValueError(f"refinement rows are absent from first pass: {unexpected[:4]}")
+    return result
 
 
 def require_stable_metric(row: dict[str, object]) -> float:
@@ -3434,14 +3730,17 @@ def build_plan(
             history_evidence_error = None
             if len(history_winners) == 1:
                 winner_id, winner_row = history_winners[0]
-                incumbent_id = f"{family}-keep-incumbent"
+                incumbent_id = winner_row.get(
+                    "history_incumbent_candidate_id"
+                )
                 accepted_change = winner_id != incumbent_id
                 recorded_gain = winner_row.get(
                     "history_improvement_fraction_vs_incumbent"
                 )
                 minimum_gain = winner_row.get("history_min_improvement_fraction")
                 if (
-                    winner_row.get("history_incumbent_candidate_id") != incumbent_id or
+                    not isinstance(incumbent_id, str) or
+                    incumbent_id not in expected or
                     winner_row.get("history_accepted_change") is not accepted_change or
                     not isinstance(recorded_gain, (int, float)) or
                     not isinstance(minimum_gain, (int, float)) or
@@ -3937,8 +4236,13 @@ def _active_sm_pids(device: int) -> set[int]:
             sm = float(fields[3])
         except ValueError:
             continue
-        if sm > 0.0:
-            active.add(int(fields[1]))
+        pid = int(fields[1])
+        # pmon can retain one final utilization sample after a short-lived
+        # benchmark process has exited.  It is not competing work once the
+        # process no longer exists, and treating it as such can abort the next
+        # candidate in the same scan.
+        if sm > 0.0 and pathlib.Path(f"/proc/{pid}").exists():
+            active.add(pid)
     return active
 
 
@@ -3946,6 +4250,7 @@ class _GpuOccupancyMonitor:
     def __init__(self, device: int, process: subprocess.Popen[str]):
         self.device = device
         self.process = process
+        self.process_start_time = _process_start_time(process.pid)
         self.process_group = os.getpgid(process.pid)
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -3966,11 +4271,13 @@ class _GpuOccupancyMonitor:
                 active = _active_sm_pids(self.device)
                 self.samples += 1
                 for pid in active:
-                    try:
-                        same_group = os.getpgid(pid) == self.process_group
-                    except ProcessLookupError:
-                        same_group = False
+                    same_group = pid == self.process.pid
                     if not same_group:
+                        try:
+                            same_group = os.getpgid(pid) == self.process_group
+                        except ProcessLookupError:
+                            same_group = False
+                    if not same_group and not _is_recent_completed_benchmark(pid):
                         self.foreign_pids.add(pid)
                 if self.foreign_pids:
                     os.killpg(self.process_group, signal.SIGTERM)
@@ -3992,10 +4299,58 @@ class _GpuOccupancyMonitor:
         }
 
 
+_COMPLETED_BENCHMARKS_LOCK = threading.Lock()
+_COMPLETED_BENCHMARKS: dict[int, tuple[str | None, float]] = {}
+
+
+def _process_start_time(pid: int) -> str | None:
+    try:
+        # Field 22 is the kernel start time. Splitting after the final ') '
+        # avoids spaces and parentheses in the process comm field.
+        tail = pathlib.Path(f"/proc/{pid}/stat").read_text().rpartition(") ")[2]
+        return tail.split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _remember_completed_benchmark(pid: int, start_time: str | None) -> None:
+    now = time.monotonic()
+    with _COMPLETED_BENCHMARKS_LOCK:
+        expired = [
+            old_pid for old_pid, (_, deadline) in _COMPLETED_BENCHMARKS.items()
+            if deadline <= now
+        ]
+        for old_pid in expired:
+            _COMPLETED_BENCHMARKS.pop(old_pid, None)
+        _COMPLETED_BENCHMARKS[pid] = (start_time, now + 10.0)
+
+
+def _is_recent_completed_benchmark(pid: int) -> bool:
+    with _COMPLETED_BENCHMARKS_LOCK:
+        identity = _COMPLETED_BENCHMARKS.get(pid)
+    if identity is None or identity[1] <= time.monotonic():
+        return False
+    return _process_start_time(pid) == identity[0]
+
+
 def _run_benchmark_with_occupancy(
     command: Sequence[str], *, device: int, timeout: int,
 ) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
-    baseline = _active_sm_pids(device)
+    baseline = {
+        pid for pid in _active_sm_pids(device)
+        if not _is_recent_completed_benchmark(pid)
+    }
+    if baseline:
+        # A CUDA process may remain visible to pmon and /proc for a fraction
+        # of a second after the preceding benchmark has returned. Confirm the
+        # activity once before classifying it as competing work. Persistent
+        # or newly arriving SM users remain fail-closed here and in the
+        # monitor below.
+        time.sleep(0.5)
+        baseline = {
+            pid for pid in _active_sm_pids(device)
+            if not _is_recent_completed_benchmark(pid)
+        }
     if baseline:
         raise RuntimeError(
             "GPU has active SM work before benchmark: "
@@ -4024,6 +4379,7 @@ def _run_benchmark_with_occupancy(
         stderr = _timeout_text(stderr or exc.stderr)
     finally:
         monitor.stop()
+        _remember_completed_benchmark(process.pid, monitor.process_start_time)
     evidence = monitor.evidence()
     if monitor.error:
         stderr = (stderr or "") + "\nGPU occupancy monitor: " + monitor.error
@@ -4066,6 +4422,261 @@ def scan_command(
         "-json",
     ]
     return command, overrides
+
+
+def official_fallback_overrides(
+    architecture: str, device: int, streams: int, batch: int,
+) -> dict[str, object]:
+    """Return an exact-batch topology with both custom backends disabled."""
+    if architecture not in ARCHITECTURES:
+        raise ValueError(f"unsupported architecture: {architecture}")
+    values: dict[str, object] = {
+        "cudaSm89Backend": False,
+        "cudaSm89Forward": False,
+        "cudaSm120Backend": False,
+        "cudaDisableWarmup": True,
+        "cudaWarmupOnlyMaxBatchSize": True,
+        "nnMaxBatchSize": batch,
+        "numNNServerThreadsPerModel": streams,
+    }
+    for index in range(streams):
+        values[f"cudaDeviceToUseThread{index}"] = device
+    return values
+
+
+def stable_optimized_prescan_state(
+    architecture: str, gpu_class: str, device: int, streams: int, batch: int,
+) -> tuple[dict[str, object], dict[str, str], list[str]]:
+    """Materialize the self-contained, artifact-free batch-ranking graph."""
+    requested = stable_prescan_candidate_ids(architecture, gpu_class, batch)
+    unknown = sorted(set(requested) - set(architecture_families(architecture)))
+    if unknown:
+        raise ValueError(f"pre-scan baseline has unknown families: {unknown}")
+    selected: dict[str, dict[str, object]] = {}
+    for family in architecture_families(architecture):
+        candidate_id = requested.get(family)
+        if candidate_id is None:
+            continue
+        choices = {
+            str(value["id"]): value
+            for value in default_candidates(
+                architecture, family, batch, gpu_class,
+            )
+        }
+        if candidate_id not in choices:
+            raise ValueError(
+                f"stable pre-scan candidate is absent from B{batch}: "
+                f"{family}/{candidate_id}"
+            )
+        value = choices[candidate_id]
+        dependencies = value.get("artifact_dependencies", [])
+        if value.get("requires_artifact") or dependencies:
+            raise ValueError(
+                "stable pre-scan must not depend on exact-batch artifacts: "
+                f"{family}/{candidate_id}"
+            )
+        if candidate_id.endswith("-keep-incumbent"):
+            raise ValueError(
+                f"stable pre-scan is not self-contained: {family}/{candidate_id}"
+            )
+        selected[family] = value
+
+    effective, _, applied, overridden_by = resolve_candidate_config_state(selected)
+    markers: list[str] = []
+    for family, value in effective.items():
+        markers.extend(effective_activation_markers(
+            value, overridden_by.get(family, {}),
+        ))
+    markers = list(dict.fromkeys(markers))
+
+    values = runtime_tactic_baseline(architecture)
+    values.update(applied)
+    values.update(topology_overrides(architecture, device, streams))
+    values.update({
+        "cudaSm89Backend": architecture == "sm89",
+        "cudaSm89Forward": architecture == "sm89",
+        "cudaSm120Backend": architecture == "sm120",
+        "cudaDisableWarmup": True,
+        "cudaWarmupOnlyMaxBatchSize": True,
+        "nnMaxBatchSize": batch,
+    })
+    return values, {
+        family: str(value["id"]) for family, value in selected.items()
+    }, markers
+
+
+def run_stable_optimized_batch_prescan(args: argparse.Namespace) -> None:
+    """Rank exact batches on an explicit, stable optimized CUDA graph."""
+    architecture = canonical_architecture(args.architecture, args.gpu_class)
+    gpu_class = str(args.gpu_class)
+    validate_gpu_class(architecture, gpu_class)
+    if args.streams < 1:
+        raise ValueError("--streams must be positive")
+    if args.iterations < MIN_DISCOVERY_ITERATIONS:
+        raise ValueError(
+            f"optimized prescan requires at least {MIN_DISCOVERY_ITERATIONS} iterations"
+        )
+    if args.warmup < MIN_DISCOVERY_WARMUP:
+        raise ValueError(
+            f"optimized prescan requires at least {MIN_DISCOVERY_WARMUP} warmups"
+        )
+    if args.repeats < MIN_STABLE_SAMPLES:
+        raise ValueError(
+            f"optimized prescan requires at least {MIN_STABLE_SAMPLES} repeats"
+        )
+    if args.top_batches < 1:
+        raise ValueError("--top-batches must be positive")
+    batches = parse_int_set(args.batches)
+    if args.top_batches > len(batches):
+        raise ValueError("--top-batches exceeds the prescan batch domain")
+
+    binary = pathlib.Path(args.binary).resolve()
+    config = pathlib.Path(args.config).resolve()
+    model = pathlib.Path(args.model).resolve()
+    for path, label in ((binary, "binary"), (config, "config"), (model, "model")):
+        if not path.is_file():
+            raise ValueError(f"{label} does not exist: {path}")
+    try:
+        from portable_cuda_device import query_cuda_device
+    except ModuleNotFoundError:
+        from python.portable_cuda_device import query_cuda_device
+    device_properties = query_cuda_device(args.device)
+    expected_cc = ARCHITECTURES[architecture]["compute_capability"]
+    if cuda_compute_capability(device_properties) != expected_cc:
+        raise ValueError("CUDA prescan device capability does not match architecture")
+
+    output = pathlib.Path(args.output).resolve()
+    raw_dir = pathlib.Path(args.raw_dir).resolve()
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    for batch in batches:
+        overrides, baseline_candidates, activation_proof = (
+            stable_optimized_prescan_state(
+                architecture, gpu_class, args.device, args.streams, batch,
+            )
+        )
+        command = [
+            str(binary), "benchmarknn", "-config", str(config),
+            "-override-config", config_string(overrides),
+            "-model", str(model), "-iterations", str(args.iterations),
+            "-warmup", str(args.warmup), "-batch-size", str(batch),
+            "-boardsize", "19", "-json",
+        ]
+        samples: list[float] = []
+        runs: list[dict[str, object]] = []
+        for repeat in range(args.repeats):
+            completed = None
+            occupancy: dict[str, object] = {}
+            attempts: list[dict[str, object]] = []
+            for attempt in range(args.max_attempts):
+                completed, timed_out, occupancy = _run_benchmark_with_occupancy(
+                    command, device=args.device, timeout=args.timeout_seconds,
+                )
+                stem = f"optimized-baseline-b{batch}-r{repeat}-a{attempt}"
+                stdout_path = raw_dir / f"{stem}.out"
+                stderr_path = raw_dir / f"{stem}.err"
+                stdout_path.write_text(completed.stdout, encoding="utf-8")
+                stderr_path.write_text(completed.stderr, encoding="utf-8")
+                attempts.append({
+                    "attempt": attempt, "returncode": completed.returncode,
+                    "timed_out": timed_out, "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                })
+                foreign = occupancy.get("foreign_active_sm_pids", [])
+                monitor_error = occupancy.get("error")
+                if (
+                    completed.returncode == 0 and not foreign and
+                    not monitor_error
+                ):
+                    break
+            assert completed is not None
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"optimized baseline benchmark failed for B{batch}; "
+                    f"see {attempts[-1]['stderr']}"
+                )
+            combined_output = completed.stdout + "\n" + completed.stderr
+            missing_markers = [
+                marker for marker in activation_proof
+                if marker not in combined_output
+            ]
+            if missing_markers:
+                raise RuntimeError(
+                    f"optimized baseline silently fell back for B{batch}: "
+                    + "; ".join(missing_markers)
+                )
+            record = _parse_benchmark_record(completed.stdout)
+            throughput = result_metric(record)
+            samples.append(throughput)
+            runs.append({
+                "repeat": repeat, "throughput": throughput,
+                "benchmark": record, "attempts": attempts,
+                "gpu_occupancy": occupancy,
+                "activation_markers": activation_proof,
+            })
+        summary = summarize_samples(
+            samples, iterations=args.iterations, warmup=args.warmup,
+            max_relative_spread=args.max_relative_spread,
+        )
+        spread = summary.get("measurement_relative_spread")
+        if not isinstance(spread, (int, float)) or spread > args.max_relative_spread:
+            raise RuntimeError(
+                f"optimized baseline B{batch} is unstable: relative spread={spread}"
+            )
+        row = {
+            "batch": batch, "status": "measured", "command": command,
+            "overrides": overrides, "runs": runs, **summary,
+            "baseline_candidates": baseline_candidates,
+        }
+        rows.append(row)
+        print(
+            f"optimized baseline B{batch}: "
+            f"{row['nn_evals_per_sec_median']:.3f} nnEval/s",
+            flush=True,
+        )
+    ranked = sorted(
+        rows,
+        key=lambda row: (-float(row["nn_evals_per_sec_median"]), int(row["batch"])),
+    )
+    selected = sorted(int(row["batch"]) for row in ranked[:args.top_batches])
+    payload = {
+        "schema": SCHEMA,
+        "kind": BASELINE_SCAN_KIND,
+        "created_utc": utc_now(),
+        "architecture": architecture,
+        "gpu_class": gpu_class,
+        "compute_capability": expected_cc,
+        "device_ordinal": args.device,
+        "streams": args.streams,
+        "requested_batches": batches,
+        "top_batch_count": args.top_batches,
+        "baseline": {
+            "policy": "artifact-free certified optimized graph",
+            "candidate_ids_by_batch": {
+                str(batch): stable_prescan_candidate_ids(
+                    architecture, gpu_class, batch,
+                )
+                for batch in batches
+            },
+            "official_fallback_is_selector": False,
+        },
+        "measurement_request": {
+            "iterations": args.iterations,
+            "warmup": args.warmup,
+            "repeats": args.repeats,
+        },
+        "selected_batches": selected,
+        "ranking": [int(row["batch"]) for row in ranked],
+        "rows": rows,
+        "identity": {
+            "binary_sha256": sha256_file(binary),
+            "config_sha256": sha256_file(config),
+            "model_sha256": sha256_file(model),
+        },
+        "device": device_properties,
+    }
+    write_json(output, payload)
+    print(json.dumps({"output": str(output), "selected_batches": selected}))
 
 
 def run_scan(args: argparse.Namespace) -> None:
@@ -4173,6 +4784,7 @@ def run_scan(args: argparse.Namespace) -> None:
     rows: list[dict[str, object]] = []
     started = utc_now()
     implementation_identity = workflow_implementation_identity()
+    resumed_compatible = False
     if args.resume and output.is_file():
         previous = read_json(output)
         previous_identity = previous.get("identity", {})
@@ -4185,11 +4797,29 @@ def run_scan(args: argparse.Namespace) -> None:
             previous_identity.get("model_sha256") == current_identity_model_sha256
         ):
             rows = [row for row in previous.get("rows", []) if isinstance(row, dict)]
+            resumed_compatible = True
     provenance = collect_provenance(
         pathlib.Path(__file__).resolve().parents[1], binary=binary, config=config, model=model,
         device=device,
     ) if not args.dry_run else {"schema": 1, "captured_utc": utc_now(), "dry_run": True}
     raw_dir.mkdir(parents=True, exist_ok=True)
+    persisted_rows = (
+        json.dumps(rows, sort_keys=True, separators=(",", ":"))
+        if resumed_compatible else None
+    )
+
+    def checkpoint_if_changed() -> None:
+        nonlocal persisted_rows
+        serialized = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+        if serialized == persisted_rows:
+            return
+        _write_scan_payload(
+            output, space_path, space, architecture, gpu_class, device,
+            streams, args, started, provenance, artifact_bundle_metadata,
+            rows, device_properties, implementation_identity,
+        )
+        persisted_rows = serialized
+
     for batch in batches:
         # Seed coordinate search from the accepted configuration file. The
         # previous all-off reset destroyed interactions between already-
@@ -4288,6 +4918,7 @@ def run_scan(args: argparse.Namespace) -> None:
                             "timed_out": timed_out,
                             "stdout": str(stdout_path),
                             "stderr": str(stderr_path),
+                            "gpu_occupancy": occupancy_evidence,
                         })
                         if completed.returncode == 0:
                             break
@@ -4306,12 +4937,7 @@ def run_scan(args: argparse.Namespace) -> None:
                             "finished_utc": utc_now(),
                         }
                         rows.append(row)
-                        _write_scan_payload(
-                            output, space_path, space, architecture, gpu_class, device,
-                            streams, args, started, provenance,
-                            artifact_bundle_metadata, rows, device_properties,
-                            implementation_identity,
-                        )
+                        checkpoint_if_changed()
                         raise RuntimeError(
                             f"benchmark failed for {family}/B{batch}/{value['id']} "
                             f"after {args.max_attempts} attempts; see {stderr_path}"
@@ -4353,6 +4979,11 @@ def run_scan(args: argparse.Namespace) -> None:
                 ]
                 rows.append(row)
                 stage_rows.append(row)
+                # A single exact batch can still contain hundreds of
+                # candidates. Persist every completed measurement so an
+                # external-SM abort or host interruption resumes at the next
+                # candidate rather than repeating the entire batch.
+                checkpoint_if_changed()
                 metric = row.get("stable_long_nn_evals_per_sec")
                 print(f"{family} B{batch} {value['id']}: {metric if metric is not None else row['nn_evals_per_sec_median']:.3f} nnEval/s ({row['measurement_kind']})", flush=True)
             if args.dry_run:
@@ -4407,18 +5038,667 @@ def run_scan(args: argparse.Namespace) -> None:
         # Atomic batch-level checkpoint. On an unexpected interruption only
         # the current batch is repeated; explicit candidate failures still
         # checkpoint immediately above with their logs and return code.
-        _write_scan_payload(
-            output, space_path, space, architecture, gpu_class, device,
-            streams, args, started, provenance,
-            artifact_bundle_metadata, rows, device_properties,
-            implementation_identity,
-        )
-    _write_scan_payload(
-        output, space_path, space, architecture, gpu_class, device,
-        streams, args, started, provenance, artifact_bundle_metadata, rows,
-        device_properties, implementation_identity,
-    )
+        checkpoint_if_changed()
+    checkpoint_if_changed()
     print(json.dumps({"output": str(output), "rows": len(rows), "dry_run": args.dry_run}))
+
+
+def run_refine(args: argparse.Namespace) -> None:
+    """Retest each family's first-pass top-K on the improved whole graph."""
+    if args.top_k < 1:
+        raise ValueError("--top-k must be positive")
+    if args.iterations < MIN_DISCOVERY_ITERATIONS:
+        raise ValueError(
+            f"refinement requires at least {MIN_DISCOVERY_ITERATIONS} iterations"
+        )
+    if args.warmup < MIN_DISCOVERY_WARMUP:
+        raise ValueError(
+            f"refinement requires at least {MIN_DISCOVERY_WARMUP} warmups"
+        )
+    if args.repeats < 1 or args.max_attempts < 1:
+        raise ValueError("refinement repeats and max attempts must be positive")
+    if args.max_sweeps < 1:
+        raise ValueError("--max-sweeps must be positive")
+    if args.resweep_top_k < 1 or args.resweep_top_k > args.top_k:
+        raise ValueError("--resweep-top-k must be in [1,--top-k]")
+    if args.confirmation_iterations < MIN_DISCOVERY_ITERATIONS:
+        raise ValueError(
+            f"--confirmation-iterations must be at least {MIN_DISCOVERY_ITERATIONS}"
+        )
+    if not 0.0 <= args.min_improvement_fraction < 1.0:
+        raise ValueError("--min-improvement-fraction must be in [0,1)")
+
+    space_path = pathlib.Path(args.space).resolve()
+    discovery_path = pathlib.Path(args.discovery).resolve()
+    space = read_json(space_path)
+    discovery = read_json(discovery_path)
+    if space.get("schema") != SCHEMA or space.get("kind") != SPACE_KIND:
+        raise ValueError("refine requires a cuda-tactic-search-space file")
+    if discovery.get("kind") != RESULT_KIND:
+        raise ValueError("refine input is not a scan result")
+    if discovery.get("space_sha256") != sha256_file(space_path):
+        raise ValueError("refine input does not match --space")
+    architecture = str(space["architecture"])
+    gpu_class = str(space["gpu_class"])
+    families = space_families(space)
+    streams = int(space["streams"])
+    device = int(args.device if args.device is not None else space.get("device_ordinal", 0))
+    batches = parse_int_set(args.batches) if args.batches else sorted(space_batches(space))
+    for batch in batches:
+        if batch not in space_batches(space):
+            raise ValueError(f"B{batch} is absent from the search space")
+
+    binary = pathlib.Path(args.binary).resolve()
+    config = pathlib.Path(args.config).resolve()
+    model = pathlib.Path(args.model).resolve()
+    model_identity = pathlib.Path(
+        args.model_identity if args.model_identity else args.model
+    ).resolve()
+    for path, label in (
+        (binary, "binary"), (config, "config"), (model, "model"),
+        (model_identity, "model identity"),
+    ):
+        if not path.is_file():
+            raise ValueError(f"refine {label} does not exist: {path}")
+    expected_identity = {
+        "model_sha256": sha256_file(model_identity),
+        "execution_model_sha256": sha256_file(model),
+        "config_sha256": sha256_file(config),
+    }
+    discovery_identity = discovery.get("identity", {})
+    if not isinstance(discovery_identity, dict) or any(
+        discovery_identity.get(key) != value
+        for key, value in expected_identity.items()
+    ):
+        raise ValueError("refine binary inputs differ from first-pass discovery")
+    binary_sha256 = sha256_file(binary)
+    first_pass_rows = [
+        row for row in discovery.get("rows", [])
+        if isinstance(row, dict) and row.get("status") == "measured"
+    ]
+    if not first_pass_rows or any(
+        row.get("binary_sha256") != binary_sha256 for row in first_pass_rows
+    ):
+        raise ValueError("refine binary differs from first-pass discovery")
+
+    try:
+        from portable_cuda_device import query_cuda_device
+    except ModuleNotFoundError:
+        from python.portable_cuda_device import query_cuda_device
+    device_properties = query_cuda_device(device)
+    if cuda_compute_capability(device_properties) != space.get("compute_capability"):
+        raise ValueError("refine device capability does not match the search space")
+
+    artifact_required = [
+        (family, batch, candidate_id)
+        for batch in batches
+        for family in families
+        for candidate_id, value in candidate_map(space, family, batch).items()
+        if value.get("requires_artifact")
+    ]
+    artifact_evidence: dict[tuple[str, int, str], dict[str, object]] = {}
+    if artifact_required:
+        if not args.artifact_bundle:
+            raise ValueError("refinement of AOT candidates requires --artifact-bundle")
+        artifact_evidence, _ = validate_artifact_bundle(
+            pathlib.Path(args.artifact_bundle).resolve(),
+            space_path=space_path, space=space, binary=binary,
+            required=artifact_required,
+        )
+
+    source_sha256 = sha256_file(discovery_path)
+    output = pathlib.Path(args.output).resolve()
+    raw_dir = pathlib.Path(args.raw_dir).resolve() if args.raw_dir else (
+        output.parent / f"{output.stem}-raw"
+    )
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    runner = shlex.split(args.runner) if args.runner else []
+    refinement_rows: list[dict[str, object]] = []
+    if args.resume and output.is_file():
+        previous = read_json(output)
+        metadata = previous.get("refinement", {})
+        if (
+            isinstance(metadata, dict) and
+            metadata.get("source_discovery_sha256") == source_sha256 and
+            metadata.get("top_k") == args.top_k and
+            metadata.get("iterations") == args.iterations and
+            metadata.get("warmup") == args.warmup and
+            metadata.get("repeats") == args.repeats and
+            metadata.get("max_sweeps") == args.max_sweeps and
+            metadata.get("resweep_top_k") == args.resweep_top_k and
+            # A checkpoint written before adaptive ABBA was added still has
+            # valid broad-scan rows. Reuse those exact command matches and add
+            # confirmation evidence only at the decision boundary.
+            metadata.get("confirmation_iterations") in (
+                None, args.confirmation_iterations,
+            ) and
+            previous.get("space_sha256") == sha256_file(space_path)
+        ):
+            refinement_rows = [
+                row for row in previous.get("rows", [])
+                if isinstance(row, dict) and row.get("refinement_pass") == 2
+            ]
+
+    base_rows: list[dict[str, object]] = []
+    for original in first_pass_rows:
+        row = dict(original)
+        row["first_pass_history_stage_winner"] = bool(
+            row.get("history_stage_winner")
+        )
+        row["first_pass_history_final_joint"] = bool(
+            row.get("history_final_joint")
+        )
+        row["history_stage_winner"] = False
+        row["history_final_joint"] = False
+        row.pop("history_accumulated_overrides", None)
+        row["refinement_pass"] = 1
+        base_rows.append(row)
+
+    started = utc_now()
+    scan_parameters = discovery.get("scan_parameters", {})
+    source_override_config = (
+        str(scan_parameters.get("override_config", ""))
+        if isinstance(scan_parameters, dict) else ""
+    )
+
+    def write_checkpoint(complete: bool) -> None:
+        payload = dict(discovery)
+        payload["started_utc"] = started
+        payload["finished_utc"] = utc_now()
+        payload["rows"] = canonical_refinement_rows(
+            base_rows, refinement_rows,
+        )
+        payload["refinement"] = {
+            "schema": 1,
+            "complete": complete,
+            "source_discovery": str(discovery_path),
+            "source_discovery_sha256": source_sha256,
+            "semantics": "first_pass_top_k_retested_on_improved_whole_graph",
+            "top_k": args.top_k,
+            "iterations": args.iterations,
+            "warmup": args.warmup,
+            "repeats": args.repeats,
+            "max_sweeps": args.max_sweeps,
+            "resweep_top_k": args.resweep_top_k,
+            "confirmation_iterations": args.confirmation_iterations,
+            "min_improvement_fraction": args.min_improvement_fraction,
+            "implementation_identity": workflow_implementation_identity(),
+        }
+        write_json(output, payload, compact=True)
+
+    first_by_key = {
+        (str(row.get("family")), int(row.get("batch", -1)),
+         str(row.get("candidate_id"))): row
+        for row in first_pass_rows
+    }
+    for batch in batches:
+        selected: dict[str, dict[str, object]] = {}
+        for family in families:
+            expected = candidate_map(space, family, batch)
+            missing = [
+                candidate_id for candidate_id in expected
+                if (family, batch, candidate_id) not in first_by_key
+            ]
+            if missing:
+                raise ValueError(
+                    f"first-pass coverage is incomplete for {family}/B{batch}: "
+                    f"{missing[:4]}"
+                )
+            winners = [
+                first_by_key[(family, batch, candidate_id)]
+                for candidate_id in expected
+                if first_by_key[(family, batch, candidate_id)].get(
+                    "history_stage_winner"
+                ) is True
+            ]
+            if len(winners) != 1:
+                raise ValueError(
+                    f"first pass has {len(winners)} winners for {family}/B{batch}"
+                )
+            selected[family] = expected[str(winners[0]["candidate_id"])]
+
+        seed_ids = positive_history_seed_candidate_ids(
+            architecture, gpu_class, batch,
+        )
+        for family, candidate_id in seed_ids.items():
+            if family not in selected:
+                raise ValueError(
+                    f"positive-history seed has unknown family: {family}"
+                )
+            expected = candidate_map(space, family, batch)
+            if candidate_id not in expected:
+                raise ValueError(
+                    "positive-history seed is absent from the materialized "
+                    f"space: {family}/B{batch}/{candidate_id}"
+                )
+            selected[family] = expected[candidate_id]
+
+        completed_sweeps = 0
+        for sweep in range(1, args.max_sweeps + 1):
+            changed_families: list[str] = []
+            for family_index, family in enumerate(families):
+                expected = candidate_map(space, family, batch)
+                incumbent_id = str(selected[family]["id"])
+                current_effective, _ = effective_candidate_map(selected)
+                if family not in current_effective:
+                    print(
+                        f"refine {family} B{batch}: skipped because the "
+                        "current joint boundary explicitly supersedes it",
+                        flush=True,
+                    )
+                    continue
+                first_family_rows = [
+                    first_by_key[(family, batch, candidate_id)]
+                    for candidate_id in expected
+                ]
+                top_rows = refinement_top_candidates(
+                    first_family_rows, incumbent_id,
+                    args.top_k if sweep == 1 else args.resweep_top_k,
+                )
+                top_ids = [str(row["candidate_id"]) for row in top_rows]
+                stage_rows: list[dict[str, object]] = []
+                for candidate_id in top_ids:
+                    value = expected[candidate_id]
+                    tentative = dict(selected)
+                    tentative[family] = value
+                    compatible = True
+                    incompatibility = None
+                    for selected_family, selected_value in tentative.items():
+                        compatible, incompatibility = candidate_compatibility(
+                            selected_value, tentative,
+                        )
+                        if not compatible:
+                            incompatibility = (
+                                f"{selected_family}: {incompatibility}"
+                            )
+                            break
+                    if not compatible:
+                        print(
+                            f"refine {family} B{batch} {candidate_id}: "
+                            f"incompatible with improved graph ({incompatibility})",
+                            flush=True,
+                        )
+                        continue
+                    effective, _, applied, overridden_by = (
+                        resolve_candidate_config_state(tentative)
+                    )
+                    full_state = runtime_tactic_baseline(architecture)
+                    full_state.update(parse_key_values(source_override_config))
+                    full_state.update(applied)
+                    full_state["nnMaxBatchSize"] = batch
+                    full_state["cudaWarmupOnlyMaxBatchSize"] = True
+                    full_state["cudaDisableWarmup"] = True
+                    # The resolved full graph already includes the current
+                    # candidate and every later owner. Reapplying a family here
+                    # would resurrect keys superseded by another family.
+                    overrides = dict(full_state)
+                    overrides.update(
+                        topology_overrides(
+                            architecture, device, streams, space,
+                        )
+                    )
+                    command = list(runner) + [
+                        str(binary), "benchmarknn",
+                        "-config", str(config),
+                        "-override-config", config_string(overrides),
+                        "-model", str(model),
+                        "-iterations", str(args.iterations),
+                        "-warmup", str(args.warmup),
+                        "-batch-size", str(batch),
+                        "-boardsize", "19",
+                        "-json",
+                    ]
+                    previous = next((
+                        row for row in refinement_rows
+                        if row.get("status") == "measured" and
+                        row.get("family") == family and
+                        int(row.get("batch", -1)) == batch and
+                        row.get("candidate_id") == candidate_id and
+                        row.get("candidate") == value and
+                        row.get("command") == command and
+                        row.get("overrides") == overrides and
+                        row.get("binary_sha256") == binary_sha256 and
+                        int(row.get("measurement_iterations", -1)) == args.iterations and
+                        int(row.get("measurement_warmup", -1)) == args.warmup and
+                        int(row.get("measurement_sample_count", -1)) == args.repeats
+                    ), None)
+                    if previous is not None:
+                        stage_rows.append(previous)
+                        continue
+                    samples: list[float] = []
+                    run_records: list[dict[str, object]] = []
+                    for repeat in range(args.repeats):
+                        completed = None
+                        stdout_path = None
+                        stderr_path = None
+                        attempt_records: list[dict[str, object]] = []
+                        occupancy_evidence: dict[str, object] = {}
+                        for attempt in range(args.max_attempts):
+                            completed, timed_out, occupancy_evidence = (
+                                _run_benchmark_with_occupancy(
+                                    command, device=device,
+                                    timeout=args.timeout_seconds,
+                                )
+                            )
+                            stem = re.sub(
+                                r"[^A-Za-z0-9_.-]+", "_",
+                                f"refine-s{sweep}-{family}-b{batch}-{candidate_id}-r{repeat}-a{attempt}",
+                            )
+                            stdout_path = raw_dir / f"{stem}.out"
+                            stderr_path = raw_dir / f"{stem}.err"
+                            stdout_path.write_text(
+                                completed.stdout, encoding="utf-8",
+                            )
+                            stderr_path.write_text(
+                                completed.stderr, encoding="utf-8",
+                            )
+                            attempt_records.append({
+                                "attempt": attempt,
+                                "returncode": completed.returncode,
+                                "timed_out": timed_out,
+                                "stdout": str(stdout_path),
+                                "stderr": str(stderr_path),
+                                "gpu_occupancy": occupancy_evidence,
+                            })
+                            if completed.returncode == 0:
+                                break
+                        assert completed is not None
+                        assert stdout_path is not None
+                        assert stderr_path is not None
+                        if completed.returncode != 0:
+                            write_checkpoint(False)
+                            raise RuntimeError(
+                                f"refinement failed for {family}/B{batch}/"
+                                f"{candidate_id} after {args.max_attempts} "
+                                f"attempts; see {stderr_path}"
+                            )
+                        combined_output = (
+                            completed.stdout + "\n" + completed.stderr
+                        )
+                        for active_family, active_value in effective.items():
+                            # Compatibility for result files materialized
+                            # before policy/head-BN explicitly superseded the
+                            # wide-head route.
+                            if (
+                                architecture == "sm120" and
+                                active_family == "wide_head" and
+                                (
+                                    applied.get("cudaUseFusedPolicyP1") is False or
+                                    applied.get("cudaUseHeadBNHalfToFloat") is False
+                                )
+                            ):
+                                continue
+                            require_activation_markers(
+                                active_value, combined_output,
+                                overridden_by.get(active_family, {}),
+                            )
+                        record = _parse_benchmark_record(completed.stdout)
+                        throughput = result_metric(record)
+                        samples.append(throughput)
+                        run_records.append({
+                            "repeat": repeat,
+                            "throughput": throughput,
+                            "benchmark": record,
+                            "stdout": str(stdout_path),
+                            "stderr": str(stderr_path),
+                            "attempts": attempt_records,
+                            "gpu_occupancy": occupancy_evidence,
+                        })
+                    row = {
+                        "family": family,
+                        "batch": batch,
+                        "candidate_id": candidate_id,
+                        "candidate": value,
+                        "implementation": value.get("implementation"),
+                        "status": "measured",
+                        "command": command,
+                        "overrides": overrides,
+                        "history_base_overrides": config_string(full_state),
+                        "history_stage_winner": False,
+                        "history_final_joint": False,
+                        "refinement_pass": 2,
+                        "refinement_sweep": sweep,
+                        "refinement_top_k": args.top_k,
+                        "finished_utc": utc_now(),
+                        "binary_sha256": binary_sha256,
+                        "config_sha256": sha256_file(config),
+                        "correctness": artifact_evidence.get(
+                            (family, batch, candidate_id), {}
+                        ).get("correctness", value.get("correctness")),
+                        "runs": run_records,
+                        **summarize_samples(
+                            samples, iterations=args.iterations,
+                            warmup=args.warmup,
+                            max_relative_spread=args.max_relative_spread,
+                        ),
+                    }
+                    refinement_rows = [
+                        old for old in refinement_rows
+                        if not (
+                            old.get("family") == family and
+                            int(old.get("batch", -1)) == batch and
+                            old.get("candidate_id") == candidate_id
+                        )
+                    ]
+                    refinement_rows.append(row)
+                    stage_rows.append(row)
+                    write_checkpoint(False)
+                    print(
+                        f"refine sweep{sweep} {family} B{batch} "
+                        f"{candidate_id}: "
+                        f"{row['nn_evals_per_sec_median']:.3f} nnEval/s",
+                        flush=True,
+                    )
+                incumbent_rows = [
+                    row for row in stage_rows
+                    if row.get("candidate_id") == incumbent_id
+                ]
+                if len(incumbent_rows) != 1:
+                    raise ValueError(
+                        "refinement did not measure its incumbent exactly "
+                        f"once: {family}/B{batch}/{incumbent_id}"
+                    )
+                incumbent = incumbent_rows[0]
+                provisional = max(
+                    stage_rows,
+                    key=lambda row: (
+                        float(row["nn_evals_per_sec_median"]),
+                        row.get("candidate_id") == incumbent_id,
+                    ),
+                )
+                required = float(incumbent["nn_evals_per_sec_median"]) * (
+                    1.0 + args.min_improvement_fraction
+                )
+                best = incumbent
+                incumbent_selection_metric = float(
+                    incumbent["nn_evals_per_sec_median"]
+                )
+                best_selection_metric = incumbent_selection_metric
+                if (
+                    provisional.get("candidate_id") != incumbent_id and
+                    float(provisional["nn_evals_per_sec_median"]) >= required
+                ):
+                    pair_rows = {
+                        "incumbent": incumbent,
+                        "challenger": provisional,
+                    }
+                    pair_samples: dict[str, list[float]] = {
+                        "incumbent": [], "challenger": [],
+                    }
+                    pair_runs: list[dict[str, object]] = []
+                    for sequence, label in enumerate((
+                        "incumbent", "challenger", "challenger", "incumbent",
+                    )):
+                        pair_row = pair_rows[label]
+                        confirm_command = list(pair_row["command"])
+                        iterations_index = confirm_command.index("-iterations") + 1
+                        confirm_command[iterations_index] = str(
+                            args.confirmation_iterations
+                        )
+                        completed = None
+                        stdout_path = None
+                        stderr_path = None
+                        occupancy_evidence: dict[str, object] = {}
+                        attempt_records: list[dict[str, object]] = []
+                        for attempt in range(args.max_attempts):
+                            completed, timed_out, occupancy_evidence = (
+                                _run_benchmark_with_occupancy(
+                                    confirm_command, device=device,
+                                    timeout=args.timeout_seconds,
+                                )
+                            )
+                            stem = re.sub(
+                                r"[^A-Za-z0-9_.-]+", "_",
+                                f"confirm-s{sweep}-{family}-b{batch}-"
+                                f"{label}-q{sequence}-a{attempt}",
+                            )
+                            stdout_path = raw_dir / f"{stem}.out"
+                            stderr_path = raw_dir / f"{stem}.err"
+                            stdout_path.write_text(
+                                completed.stdout, encoding="utf-8",
+                            )
+                            stderr_path.write_text(
+                                completed.stderr, encoding="utf-8",
+                            )
+                            attempt_records.append({
+                                "attempt": attempt,
+                                "returncode": completed.returncode,
+                                "timed_out": timed_out,
+                                "stdout": str(stdout_path),
+                                "stderr": str(stderr_path),
+                                "gpu_occupancy": occupancy_evidence,
+                            })
+                            if completed.returncode == 0:
+                                break
+                        assert completed is not None
+                        assert stdout_path is not None
+                        assert stderr_path is not None
+                        if completed.returncode != 0:
+                            write_checkpoint(False)
+                            raise RuntimeError(
+                                f"ABBA confirmation failed for {family}/B{batch}/"
+                                f"{label}; see {stderr_path}"
+                            )
+                        throughput = result_metric(
+                            _parse_benchmark_record(completed.stdout)
+                        )
+                        pair_samples[label].append(throughput)
+                        pair_runs.append({
+                            "sequence": sequence,
+                            "label": label,
+                            "candidate_id": pair_row["candidate_id"],
+                            "throughput": throughput,
+                            "command": confirm_command,
+                            "stdout": str(stdout_path),
+                            "stderr": str(stderr_path),
+                            "attempts": attempt_records,
+                            "gpu_occupancy": occupancy_evidence,
+                        })
+                    incumbent_selection_metric = statistics.mean(
+                        pair_samples["incumbent"]
+                    )
+                    challenger_selection_metric = statistics.mean(
+                        pair_samples["challenger"]
+                    )
+                    confirmation = {
+                        "schema": 1,
+                        "order": [
+                            "incumbent", "challenger", "challenger", "incumbent",
+                        ],
+                        "iterations": args.confirmation_iterations,
+                        "warmup": args.warmup,
+                        "incumbent_candidate_id": incumbent_id,
+                        "challenger_candidate_id": provisional["candidate_id"],
+                        "incumbent_samples": pair_samples["incumbent"],
+                        "challenger_samples": pair_samples["challenger"],
+                        "incumbent_mean_nn_evals_per_sec": (
+                            incumbent_selection_metric
+                        ),
+                        "challenger_mean_nn_evals_per_sec": (
+                            challenger_selection_metric
+                        ),
+                        "runs": pair_runs,
+                    }
+                    incumbent["selection_confirmation"] = confirmation
+                    provisional["selection_confirmation"] = confirmation
+                    if challenger_selection_metric >= (
+                        incumbent_selection_metric *
+                        (1.0 + args.min_improvement_fraction)
+                    ):
+                        best = provisional
+                        best_selection_metric = challenger_selection_metric
+                    else:
+                        best_selection_metric = incumbent_selection_metric
+                    print(json.dumps({
+                        "refinement_confirmation": family,
+                        "batch": batch,
+                        "sweep": sweep,
+                        "incumbent": incumbent_id,
+                        "challenger": provisional["candidate_id"],
+                        "incumbent_mean": incumbent_selection_metric,
+                        "challenger_mean": challenger_selection_metric,
+                        "accepted": best is provisional,
+                    }), flush=True)
+                for row in refinement_rows:
+                    if (
+                        row.get("family") == family and
+                        int(row.get("batch", -1)) == batch
+                    ):
+                        row["history_stage_winner"] = row is best
+                        row["history_final_joint"] = False
+                winner_id = str(best["candidate_id"])
+                if winner_id != incumbent_id:
+                    changed_families.append(family)
+                selected[family] = expected[winner_id]
+                _, _, selected_applied, _ = resolve_candidate_config_state(selected)
+                accumulated = runtime_tactic_baseline(architecture)
+                accumulated.update(parse_key_values(source_override_config))
+                accumulated.update(selected_applied)
+                accumulated["nnMaxBatchSize"] = batch
+                accumulated["cudaWarmupOnlyMaxBatchSize"] = True
+                accumulated["cudaDisableWarmup"] = True
+                best["history_accumulated_overrides"] = config_string(accumulated)
+                best["history_incumbent_candidate_id"] = incumbent_id
+                best["history_incumbent_nn_evals_per_sec"] = float(
+                    incumbent_selection_metric
+                )
+                best["history_selection_nn_evals_per_sec"] = float(
+                    best_selection_metric
+                )
+                best["history_accepted_change"] = winner_id != incumbent_id
+                best["history_min_improvement_fraction"] = (
+                    args.min_improvement_fraction
+                )
+                best["history_improvement_fraction_vs_incumbent"] = (
+                    float(best_selection_metric) /
+                    float(incumbent_selection_metric) - 1.0
+                )
+                best["history_final_joint"] = family_index + 1 == len(families)
+                write_checkpoint(False)
+            completed_sweeps = sweep
+            print(json.dumps({
+                "refinement_sweep": sweep,
+                "batch": batch,
+                "changed_families": changed_families,
+            }), flush=True)
+            if not changed_families:
+                break
+        if completed_sweeps == args.max_sweeps and changed_families:
+            print(
+                f"refine B{batch}: reached --max-sweeps={args.max_sweeps} "
+                f"with changes in {','.join(changed_families)}",
+                flush=True,
+            )
+    write_checkpoint(True)
+    print(json.dumps({
+        "output": str(output),
+        "first_pass_rows": len(base_rows),
+        "refinement_rows": len(refinement_rows),
+        "top_k": args.top_k,
+        "max_sweeps": args.max_sweeps,
+        "resweep_top_k": args.resweep_top_k,
+        "confirmation_iterations": args.confirmation_iterations,
+    }))
 
 
 def run_gate(args: argparse.Namespace) -> None:
@@ -4835,6 +6115,14 @@ def command_certify(args: argparse.Namespace) -> None:
         "maximum_value_outcome_rmse": 0.01,
         "maximum_score_mean_rmse": 0.01,
         "maximum_ownership_sigmoid_rmse": 0.001,
+        "maximum_request_policy_probability_abs": 0.025,
+        "maximum_request_policy_probability_rmse": 0.002,
+        "maximum_request_value_probability_abs": 0.06,
+        "maximum_request_value_probability_rmse": 0.05,
+        "maximum_request_score_raw_abs": 0.60,
+        "maximum_request_score_raw_rmse": 0.30,
+        "maximum_request_ownership_probability_abs": 0.025,
+        "maximum_request_ownership_probability_rmse": 0.006,
     }
     certified = 0
     reference_hashes: set[str] = set()
@@ -4924,6 +6212,11 @@ def command_certify(args: argparse.Namespace) -> None:
         value = report.get("value", {})
         score = report.get("score", {})
         ownership = report.get("ownership", {})
+        request_gate = report.get("requestGate", {})
+        request_policy = request_gate.get("policyProbability", {})
+        request_value = request_gate.get("valueProbability", {})
+        request_score = request_gate.get("scoreRaw", {})
+        request_ownership = request_gate.get("ownershipProbability", {})
         p0_delta = abs(
             float(policy.get("p0lossCandidateWeighted", math.inf)) -
             float(policy.get("p0lossReferenceWeighted", -math.inf))
@@ -4936,6 +6229,14 @@ def command_certify(args: argparse.Namespace) -> None:
             "value_outcome_rmse": float(value.get("outcomeRmse", math.inf)) <= thresholds["maximum_value_outcome_rmse"],
             "score_mean_rmse": float(score.get("meanRmse", math.inf)) <= thresholds["maximum_score_mean_rmse"],
             "ownership_sigmoid_rmse": float(ownership.get("sigmoidRmse", math.inf)) <= thresholds["maximum_ownership_sigmoid_rmse"],
+            "request_policy_probability_abs": float(request_policy.get("maximumAbs", math.inf)) <= thresholds["maximum_request_policy_probability_abs"],
+            "request_policy_probability_rmse": float(request_policy.get("maximumRmse", math.inf)) <= thresholds["maximum_request_policy_probability_rmse"],
+            "request_value_probability_abs": float(request_value.get("maximumAbs", math.inf)) <= thresholds["maximum_request_value_probability_abs"],
+            "request_value_probability_rmse": float(request_value.get("maximumRmse", math.inf)) <= thresholds["maximum_request_value_probability_rmse"],
+            "request_score_raw_abs": float(request_score.get("maximumAbs", math.inf)) <= thresholds["maximum_request_score_raw_abs"],
+            "request_score_raw_rmse": float(request_score.get("maximumRmse", math.inf)) <= thresholds["maximum_request_score_raw_rmse"],
+            "request_ownership_probability_abs": float(request_ownership.get("maximumAbs", math.inf)) <= thresholds["maximum_request_ownership_probability_abs"],
+            "request_ownership_probability_rmse": float(request_ownership.get("maximumRmse", math.inf)) <= thresholds["maximum_request_ownership_probability_rmse"],
         }
         status = "passed" if all(checks.values()) else "failed"
         row["correctness"] = {
@@ -4954,6 +6255,7 @@ def command_certify(args: argparse.Namespace) -> None:
                 "value_outcome_rmse": value.get("outcomeRmse"),
                 "score_mean_rmse": score.get("meanRmse"),
                 "ownership_sigmoid_rmse": ownership.get("sigmoidRmse"),
+                "request_gate": request_gate,
             },
         }
         row["finished_utc"] = utc_now()
@@ -5119,6 +6421,32 @@ def build_parser() -> argparse.ArgumentParser:
     artifact.add_argument("--output", required=True)
     artifact.set_defaults(function=command_artifact_bundle)
 
+    prescan = sub.add_parser(
+        "baseline-prescan",
+        help="rank exact batches with an artifact-free stable optimized graph",
+    )
+    prescan.add_argument("--architecture", choices=tuple(ARCHITECTURES), required=True)
+    prescan.add_argument("--gpu-class", required=True)
+    prescan.add_argument("--device", type=int, default=0)
+    prescan.add_argument("--streams", type=int, default=2)
+    prescan.add_argument("--batches", default="4-32")
+    prescan.add_argument("--top-batches", type=int, default=3)
+    prescan.add_argument("--binary", required=True)
+    prescan.add_argument("--config", required=True)
+    prescan.add_argument("--model", required=True)
+    prescan.add_argument("--iterations", type=int, default=200)
+    prescan.add_argument("--warmup", type=int, default=50)
+    prescan.add_argument("--repeats", type=int, default=2)
+    prescan.add_argument("--max-attempts", type=int, default=2)
+    prescan.add_argument("--timeout-seconds", type=float, default=120.0)
+    prescan.add_argument(
+        "--max-relative-spread", type=float,
+        default=DEFAULT_MAX_RELATIVE_SPREAD,
+    )
+    prescan.add_argument("--raw-dir", required=True)
+    prescan.add_argument("--output", required=True)
+    prescan.set_defaults(function=run_stable_optimized_batch_prescan)
+
     certify = sub.add_parser(
         "certify", help="attach an accepted 8192-row FP32 replay to long-gate rows",
     )
@@ -5179,6 +6507,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="complete generation/link manifest whose binary hash matches --binary",
     )
     scan.set_defaults(function=run_scan)
+
+    refine = sub.add_parser(
+        "refine",
+        help="retest each family's first-pass top-K on the improved whole graph",
+    )
+    refine.add_argument("--space", required=True)
+    refine.add_argument("--discovery", required=True)
+    refine.add_argument("--binary", required=True)
+    refine.add_argument("--config", required=True)
+    refine.add_argument("--model", required=True)
+    refine.add_argument("--model-identity")
+    refine.add_argument("--output", required=True)
+    refine.add_argument("--raw-dir")
+    refine.add_argument("--device", type=int)
+    refine.add_argument("--batches")
+    refine.add_argument("--top-k", type=int, default=10)
+    refine.add_argument("--max-sweeps", type=int, default=3)
+    refine.add_argument("--resweep-top-k", type=int, default=3)
+    refine.add_argument("--confirmation-iterations", type=int, default=300)
+    refine.add_argument("--iterations", type=int, default=MIN_DISCOVERY_ITERATIONS)
+    refine.add_argument("--warmup", type=int, default=MIN_DISCOVERY_WARMUP)
+    refine.add_argument("--repeats", type=int, default=1)
+    refine.add_argument("--max-attempts", type=int, default=2)
+    refine.add_argument("--timeout-seconds", type=float, default=60.0)
+    refine.add_argument(
+        "--max-relative-spread", type=float,
+        default=DEFAULT_MAX_RELATIVE_SPREAD,
+    )
+    refine.add_argument(
+        "--min-improvement-fraction", type=float,
+        default=DEFAULT_MIN_DISCOVERY_IMPROVEMENT_FRACTION,
+    )
+    refine.add_argument("--runner")
+    refine.add_argument("--resume", action="store_true")
+    refine.add_argument("--artifact-bundle")
+    refine.set_defaults(function=run_refine)
 
     gate = sub.add_parser(
         "gate", help="long-stability gate for discovery's final accumulated joint winner",

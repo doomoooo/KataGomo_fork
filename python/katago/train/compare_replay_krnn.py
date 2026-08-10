@@ -94,6 +94,25 @@ def rmse(a, b):
     return float(np.sqrt(np.mean((a - b) ** 2)))
 
 
+def maximum_row_error(a, b):
+    """Return the worst per-request absolute error and per-request RMSE."""
+    if a.shape != b.shape or a.ndim != 2:
+        raise ValueError("row-error inputs must be equally shaped 2D arrays")
+    differences = np.abs(a - b)
+    row_max_abs = np.max(differences, axis=1)
+    row_rmse = np.sqrt(np.mean(differences * differences, axis=1))
+    max_abs_row = int(np.argmax(row_max_abs))
+    max_abs_index = int(np.argmax(differences[max_abs_row]))
+    max_rmse_row = int(np.argmax(row_rmse))
+    return {
+        "maximumAbs": float(row_max_abs[max_abs_row]),
+        "maximumAbsRow": max_abs_row,
+        "maximumAbsIndex": max_abs_index,
+        "maximumRmse": float(row_rmse[max_rmse_row]),
+        "maximumRmseRow": max_rmse_row,
+    }
+
+
 def top1_agreement(a, b):
     return float(np.mean(np.argmax(a, axis=-1) == np.argmax(b, axis=-1)))
 
@@ -159,6 +178,8 @@ def main():
 
     ref_value_probs = stable_softmax(ref[2])
     cand_value_probs = stable_softmax(cand[2])
+    ref_ownership_probs = 1.0 / (1.0 + np.exp(-ref[4]))
+    cand_ownership_probs = 1.0 / (1.0 + np.exp(-cand[4]))
 
     target_global_ref = ref[6]
     target_global_cand = cand[6]
@@ -214,9 +235,19 @@ def main():
         },
         "ownership": {
             "rawLogitsRmse": rmse(cand[4], ref[4]),
-            "sigmoidRmse": rmse(
-                1.0 / (1.0 + np.exp(-cand[4])),
-                1.0 / (1.0 + np.exp(-ref[4])),
+            "sigmoidRmse": rmse(cand_ownership_probs, ref_ownership_probs),
+        },
+        # These are the same per-request all-head limits enforced by the
+        # ordinary-evaluator GTP stress harness. Aggregate metrics alone can
+        # hide one bad position among 8,192 otherwise accurate rows.
+        "requestGate": {
+            "policyProbability": maximum_row_error(cand_probs0, ref_probs0),
+            "valueProbability": maximum_row_error(
+                cand_value_probs, ref_value_probs
+            ),
+            "scoreRaw": maximum_row_error(cand[3], ref[3]),
+            "ownershipProbability": maximum_row_error(
+                cand_ownership_probs, ref_ownership_probs
             ),
         },
         "maxPolicyAbsError": {

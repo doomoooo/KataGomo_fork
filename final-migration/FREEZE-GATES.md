@@ -36,10 +36,13 @@ gate is a production plan and serial 8,192-row full-FP32 hardware certificate
 on SM120.
 
 An independent read-only comparison against the frozen SM89 and SM120 source
-trees completed on 2026-08-08 with no remaining four-link blocker. It
-materialized 3,738 SM89 coordinates across 20 families and 4,234 SM120
-coordinates across 23 families for exact B4-B32; all 62/64 positive-history
-records closed.
+trees completed on 2026-08-08. A subsequent coupling audit merged overlapping
+catalogs, restored missing joint candidates, and removed candidates that could
+rewrite an earlier decision. The resulting full B4-B32 domain materializes
+3,564 SM89 coordinates and 3,944 SM120 coordinates. Both architectures expose
+19 implementation catalogs organized into 10 ownership-closed decision groups.
+All 60/63 positive-history records close
+the implementation, scan, activation, and plan-apply links.
 
 SM89 is certified on the remote RTX 4090 D. A single-device B12/S2 replay
 verified 8,192/8,192 results against the immutable FP32 reference at 3,035.87
@@ -49,11 +52,10 @@ used SM time during that measurement. A later 20-pass correctness stress
 verified 163,840/163,840 results, but its throughput is explicitly invalid
 because an external job began using the second GPU during the run.
 
-The existing RTX 5080 long gate predates the final positive-history union and
-is not eligible for migration: it is the known 2,586.58 `nnEval/s` B18 result
-from the incomplete search space. SM120 runtime certification must use a new
-unified-scan `best-tactic-plan.json`; the production loader correctly refuses
-the old non-production plan.
+The existing RTX 5080 long gate predates the final coupling audit and is not
+eligible for migration. SM120 runtime certification must use a newly generated
+`best-tactic-plan.json`; the production loader correctly refuses an
+incompatible or non-production plan.
 
 ## Frontend gate — OPEN (SM89 integrated and certified)
 

@@ -311,7 +311,6 @@ Options parseOptions(ConfigParser& cfg) {
     throw StringError(
       "cudaAffineSiluTacticSm120 must be disabled, half2, half2x3, "
       "or flat-vec8-c768");
-  o.useExactMaskElision = getBoolOpt(cfg, "cudaUseExactMaskElisionSm120", false);
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
   o.persistingL2Streams = cfg.contains("cudaPersistingL2StreamsSm120") ?
@@ -727,7 +726,7 @@ Sm120Model::Sm120Model(
   options(options_),
   sm120NumSms(0),
   logger(NULL),
-  exactMaskSumBuf(NULL),
+  fullBoardAreaBuf(NULL),
   loggedFallback(false),
   loggedFa4(false),
   loggedFa4AtMaxBatch(false),
@@ -766,6 +765,10 @@ Sm120Model::Sm120Model(
 {
   if(officialApplyContext == NULL || officialApply == NULL || cudaHandles == NULL || desc == NULL)
     throw StringError("Sm120Model: null construction argument");
+  if(nnXLen != 19 || nnYLen != 19 || !inputsUseNHWC || !useFP16 || !useNHWC ||
+     maxBatchSize <= 0)
+    throw StringError(
+      "SM120 optimized backend requires exact 19x19 FP16 NHWC inference");
   int device = 0;
   cudaDeviceProp deviceProp = {};
   CUDA_ERR("Sm120Model", cudaGetDevice(&device));
@@ -773,15 +776,12 @@ Sm120Model::Sm120Model(
   sm120NumSms = deviceProp.multiProcessorCount;
   if(sm120NumSms <= 0)
     throw StringError("Sm120Model: CUDA reported no streaming multiprocessors");
-  if(options.useExactMaskElision && nnXLen == 19 && nnYLen == 19 &&
-     inputsUseNHWC && useFP16 && useNHWC && maxBatchSize > 0) {
-    std::vector<float> fullBoardMaskSums(maxBatchSize, 361.0f);
-    CUDA_ERR("Sm120ExactMaskSum", cudaMalloc(
-      (void**)&exactMaskSumBuf, fullBoardMaskSums.size() * sizeof(float)));
-    CUDA_ERR("Sm120ExactMaskSum", cudaMemcpy(
-      exactMaskSumBuf, fullBoardMaskSums.data(),
-      fullBoardMaskSums.size() * sizeof(float), cudaMemcpyHostToDevice));
-  }
+  std::vector<float> fullBoardAreas(maxBatchSize, 361.0f);
+  CUDA_ERR("Sm120FullBoardArea", cudaMalloc(
+    (void**)&fullBoardAreaBuf, fullBoardAreas.size() * sizeof(float)));
+  CUDA_ERR("Sm120FullBoardArea", cudaMemcpy(
+    fullBoardAreaBuf, fullBoardAreas.data(),
+    fullBoardAreas.size() * sizeof(float), cudaMemcpyHostToDevice));
   wideHeadProjectionWeights = NULL;
   wideHeadProjectionHandle = NULL;
   dualFfnSharedAHandle = NULL;
@@ -935,8 +935,8 @@ Sm120Model::~Sm120Model() {
     katago_destroy_outer_projection_down_sm120(wideHeadProjectionHandle);
   if(wideHeadProjectionWeights != NULL)
     cudaFree(wideHeadProjectionWeights);
-  if(exactMaskSumBuf != NULL)
-    cudaFree(exactMaskSumBuf);
+  if(fullBoardAreaBuf != NULL)
+    cudaFree(fullBoardAreaBuf);
   for(const auto& entry: fusedFFNPairedWeights)
     cudaFree(entry.second);
   for(const auto& entry: wideFFNSingleGemmWeights)
@@ -965,8 +965,8 @@ bool Sm120Model::hasPersistingL2Inner() const {
   return persistingL2InnerActive;
 }
 
-float* Sm120Model::getExactMaskSumBuf() const {
-  return exactMaskSumBuf;
+float* Sm120Model::getFullBoardAreaBuf() const {
+  return fullBoardAreaBuf;
 }
 
 void Sm120Model::apply(
@@ -992,7 +992,6 @@ void Sm120Model::apply(
   (void)cudaHandles_;
   (void)scratch;
   (void)batchSize;
-  (void)requireExactNNLen;
   (void)inputBuf;
   (void)inputGlobalBuf;
   (void)inputMetaBuf;
@@ -1003,6 +1002,9 @@ void Sm120Model::apply(
   (void)ownershipBuf;
   (void)workspaceBuf;
   (void)workspaceBytes;
+
+  if(!requireExactNNLen)
+    throw StringError("SM120 optimized backend supports only exact 19x19 inference");
 
   if(!loggedFallback) {
     if(logger != NULL)
@@ -1443,11 +1445,13 @@ bool Sm120Model::qkvStrided(
   const WideQKVAotTactic* qkvTactic = wideQKVAotByBatch[batchSize];
   const WideQKVRopeAotTactic* qkvRopeTactic =
     wideQKVRopeAotByBatch[batchSize];
-  const bool packedAttentionReady = allowPackedOutput &&
-    options.useFlashAttention && options.flashAttentionAccum == "both16";
+  // Packed Q/K/V describes the input layout consumed by FA4. It is
+  // independent of whether the QK and PV reductions accumulate in FP16 or
+  // FP32, so do not couple a projection tactic to the FA accumulator choice.
+  const bool packedAttentionReady =
+    allowPackedOutput && options.useFlashAttention;
   const bool packedPathReady = packedAttentionReady && options.useFusedQKRoPE &&
-    options.useBatchSharedRoPE && options.useFlashAttention &&
-    options.flashAttentionAccum == "both16";
+    options.useBatchSharedRoPE;
   const bool useQKVRopeAot =
     qkvRopeTactic != nullptr && packedAttentionReady && ropeFreqs != NULL;
   const bool useQKVAot =

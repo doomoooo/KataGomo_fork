@@ -46,16 +46,24 @@ Supported mappings:
 
 | CUDA CC | workflow | default batches | streams |
 | --- | --- | --- | --- |
-| 8.9 | shared CUDA workflow, SM89 family catalog | 4-32 | 2 |
-| 12.0 | shared CUDA workflow, SM120 family catalog | 4-32 | 2 |
-| 12.0 | SM120 coordinate, 5 families | 4-32 | 2 |
+| 8.9 | shared CUDA workflow, SM89 catalogs / 10 decision groups | optimized B4-B32 prescan, then top 3 | 2 |
+| 12.0 | shared CUDA workflow, SM120 catalogs / 10 decision groups | optimized B4-B32 prescan, then top 3 | 2 |
 
-All AOT candidates for the selected batch domain are generated first and one
-fat search binary is linked.  Candidate measurements must only switch runtime
-tactics in that binary.  Discovery uses 100 timed iterations, 50 warmup and
-one repeat with a 0.1% acceptance threshold.  The final joint gate uses at
-least 1000 timed iterations, 50 warmup and two repeats with at most 10%
-relative spread.
+The prescan uses an explicit, artifact-free stable optimized graph and ranks
+physical `nnEval/s`; it is only a shape selector. All AOT candidates for the
+selected three-batch domain are then generated and one fat search binary is
+linked. Candidate measurements must only switch runtime tactics in that
+binary. `--full-batch-scan` instead selects all 29 shapes without changing the
+per-batch flow. Discovery uses 100 timed iterations, 50 warmup and one repeat
+with a 0.1% acceptance threshold. The final joint gate uses at least 1000 timed
+iterations, 50 warmup and two repeats with at most 10% relative spread.
+
+An implementation catalog is not an independent operator claim. The static
+space contract groups catalogs by shared config ownership and declared runtime
+dependencies. No config key or dependency may cross a decision-group boundary.
+Within a group a historical bundle is measured first and later stages may only
+refine explicitly declared keys; FA tile/accumulation keys are exclusively
+owned by the FA catalog.
 
 ## 3. Plan contract
 
@@ -84,7 +92,8 @@ certificate.  The latter must remain false when the golden is unavailable.
 The release-qualification `reference` phase may create that golden only by
 forcing `useFP16=false` and disabling both optimized architecture backends;
 its sidecar binds the binary, model, corpus, command and output SHA-256. The
-`accuracy` phase first requires complete long-gate coverage for B4-B32, then
+`accuracy` phase first requires complete long-gate coverage for the selected
+domain (top 3 by default, B4-B32 in exhaustive mode), then
 selects the batch with the highest stable physical `nnEval/s` and replays only
 that accumulated override against the same file. It pads the physical tail
 batch with repeated real inputs without serializing the padding, deletes the
@@ -92,7 +101,10 @@ candidate dump after comparison, and emits only that certified batch in
 `best-tactic-plan.json`.
 Golden reuse additionally requires the current model and corpus hashes. Each
 comparison verifies KRNN exact-batch/tail-padding metadata and byte-identical
-targets and inputs before computing output tolerances.
+targets and inputs before computing output tolerances. Certification checks
+both aggregate metrics and the GTP-shaped verifier's worst-per-request
+max-absolute/per-head RMSE envelope. A single failing row is a hard accuracy
+failure even when the corpus-wide RMSE passes.
 
 The 8192-row input corpus is not a hand-maintained workspace prerequisite.
 Release construction resolves the newest dated `.tgz` in the official

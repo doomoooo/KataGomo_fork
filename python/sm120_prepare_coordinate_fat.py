@@ -94,16 +94,20 @@ def requests_for(
     implementations: set[str],
 ) -> list[dict]:
     by_batch = batch_map(space)
+    search_family = "qkv_rope" if family == "wide_qkv" else family
     requests = []
     for batch in batches:
         if batch not in by_batch:
             raise ValueError(f"search space has no B{batch}")
-        for candidate in by_batch[batch].get(family, []):
+        for candidate in by_batch[batch].get(search_family, []):
             if implementation(candidate) not in implementations:
+                continue
+            if candidate.get("artifact_family", search_family) != family:
                 continue
             token = symbol_token(family, batch, candidate["id"])
             requests.append({
-                "family": family,
+                "family": search_family,
+                "artifact_family": family,
                 "batch": batch,
                 "candidate_id": candidate["id"],
                 "candidate": candidate,
@@ -402,7 +406,7 @@ def validate_coverage(space: dict, batches: list[int], entries: list[dict]) -> N
             space, batches, family,
             {"tilelang", "historical_tilelang", "cute", "fa4_cute"},
         ):
-            expected.add((family, *exact_key(item)))
+            expected.add((item["family"], *exact_key(item)))
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing or extra:
@@ -417,7 +421,10 @@ def build_commands(
     args: argparse.Namespace, entries: list[dict], registries: dict[str, pathlib.Path],
 ) -> tuple[list[str], list[str]]:
     by_family = {
-        family: [item for item in entries if item["family"] == family]
+        family: [
+            item for item in entries
+            if item.get("artifact_family", item["family"]) == family
+        ]
         for family in FAT_FAMILIES
     }
     tile_sources = {
@@ -491,11 +498,13 @@ def load_coordinate_fat_bundle(
     # Space-level metadata may grow, but every implementation-bearing exact
     # candidate is checked byte-for-byte by validate_coverage and the entries.
     current = {
-        (family, item["batch"], candidate["id"]): candidate
-        for item in space.get("batches", [])
+        (request["family"], request["batch"], request["candidate_id"]):
+            request["candidate"]
         for family in FAT_FAMILIES
-        for candidate in item.get(family, [])
-        if implementation(candidate) != "fallback"
+        for request in requests_for(
+            space, batches, family,
+            {"tilelang", "historical_tilelang", "cute", "fa4_cute"},
+        )
     }
     for item in entries:
         key = (item["family"], item["batch"], item["candidate_id"])
@@ -594,7 +603,8 @@ def main() -> None:
         suffix = ".cpp" if family == "fa4" else ".cu"
         path = registry_dir / f"sm120_search_{family}_fat_registry{suffix}"
         write_registry(path, family, [
-            item for item in entries if item["family"] == family
+            item for item in entries
+            if item.get("artifact_family", item["family"]) == family
         ])
         registries[family] = path.resolve()
 

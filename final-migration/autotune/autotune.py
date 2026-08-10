@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""One entry point for the frozen SM89 and SM120 B4-B32 workflows."""
+"""One entry point for SM89/SM120 optimized-baseline and exact-batch tuning."""
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import math
@@ -24,6 +25,10 @@ except ModuleNotFoundError:  # running from the source tree instead of a release
 def run(command: list[str], *, cwd: pathlib.Path, env: dict[str, str]) -> None:
     print("[autotune] +", shlex.join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def load_json(path: pathlib.Path) -> dict[str, Any]:
@@ -136,6 +141,108 @@ def tilelang_root_from_manifests(*manifests: dict[str, Any]) -> pathlib.Path:
     for relative in ("src/tl_templates/cuda/debug.h", "3rdparty/cutlass/include/cutlass/cutlass.h"):
         ensure_file(root / relative, "TileLang build input")
     return root
+
+
+def baseline_runtime(paths: dict[str, pathlib.Path]) -> tuple[pathlib.Path, pathlib.Path]:
+    out, repo = paths["out"], paths["repo"]
+    config = (
+        repo / "docs/baseline-configs/bench-cuda-gpu0-4090-s2.cfg"
+        if paths["workflow"].name == "sm89"
+        else repo / "docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg"
+    )
+    return out / "baseline-prescan-build/katago", config
+
+
+def prepare_baseline_prescan_binary(
+    args: argparse.Namespace,
+    paths: dict[str, pathlib.Path],
+    env: dict[str, str],
+) -> None:
+    repo, prefix = paths["repo"], paths["prefix"]
+    binary, _ = baseline_runtime(paths)
+    build = binary.parent
+    architecture = paths["workflow"].name
+    configure = [
+        "cmake", "-S", str(repo / "cpp"), "-B", str(build), "-G", "Ninja",
+        "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
+        f"-DKATAGO_CUDA_ARCHITECTURES={'89' if architecture == 'sm89' else '120'}",
+        *common_cmake(prefix),
+    ]
+    if architecture == "sm89":
+        configure.append(
+            f"-DSM89_FLASH_ATTN_ROOT={prefix / 'sources/flash-attention'}"
+        )
+    if not binary.is_file() or args.force:
+        run(configure, cwd=repo, env=env)
+        run(
+            ["cmake", "--build", str(build), "--parallel", str(args.jobs)],
+            cwd=repo, env=env,
+        )
+    ensure_file(binary, "optimized baseline prescan binary")
+
+
+def workflow_baseline_prescan(
+    args: argparse.Namespace,
+    paths: dict[str, pathlib.Path],
+    env: dict[str, str],
+    requested_batches: str,
+) -> list[int]:
+    prepare_baseline_prescan_binary(args, paths, env)
+    repo, out, python = paths["repo"], paths["out"], paths["python"]
+    binary, config = baseline_runtime(paths)
+    result = out / "optimized-baseline-batch-prescan.json"
+    requested = parse_batch_set(requested_batches)
+    top_count = min(args.top_batches, len(requested))
+    reusable = False
+    if result.is_file() and not args.force:
+        payload = load_json(result)
+        identity = payload.get("identity", {})
+        reusable = (
+            payload.get("kind") == "cuda-stable-optimized-batch-prescan" and
+            payload.get("architecture") == paths["workflow"].name and
+            payload.get("gpu_class") == paths["gpu_class"].name and
+            payload.get("requested_batches") == requested and
+            payload.get("top_batch_count") == top_count and
+            payload.get("device_ordinal") == args.device and
+            payload.get("streams") == args.streams and
+            payload.get("measurement_request") == {
+                "iterations": args.baseline_iterations,
+                "warmup": args.warmup,
+                "repeats": args.baseline_repeats,
+            } and
+            isinstance(identity, dict) and
+            identity.get("binary_sha256") == sha256(binary) and
+            identity.get("config_sha256") == sha256(config) and
+            identity.get("model_sha256") == sha256(paths["model"])
+        )
+    if not reusable:
+        run([
+            str(python), "python/cuda_tactic_workflow.py", "baseline-prescan",
+            "--architecture", paths["workflow"].name,
+            "--gpu-class", paths["gpu_class"].name,
+            "--device", str(args.device), "--streams", str(args.streams),
+            "--batches", requested_batches, "--top-batches", str(top_count),
+            "--binary", str(binary), "--config", str(config),
+            "--model", str(paths["model"]),
+            "--iterations", str(args.baseline_iterations),
+            "--warmup", str(args.warmup),
+            "--repeats", str(args.baseline_repeats),
+            "--raw-dir", str(out / "raw-optimized-baseline-prescan"),
+            "--output", str(result),
+        ], cwd=repo, env=env)
+    payload = load_json(result)
+    selected = payload.get("selected_batches")
+    if (
+        not isinstance(selected, list) or len(selected) != top_count or
+        any(not isinstance(batch, int) or batch not in requested for batch in selected)
+    ):
+        raise RuntimeError("optimized baseline prescan has an invalid top-batch selection")
+    print(
+        "[autotune] full tactic search batches: " +
+        ",".join(f"B{batch}" for batch in selected),
+        flush=True,
+    )
+    return sorted(selected)
 
 
 def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
@@ -267,6 +374,7 @@ def workflow_discovery(
 ) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
     binary, config, artifact_args = workflow_runtime(paths)
+    first_pass = out / "discovery-first-pass.json"
     run([
         str(python), "python/cuda_tactic_workflow.py", "scan",
         "--space", str(out / "space.json"), "--binary", str(binary),
@@ -277,8 +385,26 @@ def workflow_discovery(
         "--iterations", str(args.discovery_iterations),
         "--warmup", str(args.warmup), "--repeats", "1",
         "--min-improvement-fraction", "0.001", "--resume",
+        "--output", str(first_pass),
+        "--raw-dir", str(out / "raw-discovery-first-pass"),
+    ], cwd=repo, env=env)
+    run([
+        str(python), "python/cuda_tactic_workflow.py", "refine",
+        "--space", str(out / "space.json"),
+        "--discovery", str(first_pass),
+        "--binary", str(binary), "--config", str(config),
+        "--model", str(paths["model"]),
+        "--model-identity", str(paths["model"]), *artifact_args,
+        "--device", str(args.device), "--batches", args.batches,
+        "--top-k", str(args.refinement_top_k),
+        "--max-sweeps", str(args.refinement_max_sweeps),
+        "--resweep-top-k", str(args.refinement_resweep_top_k),
+        "--confirmation-iterations", str(args.refinement_confirmation_iterations),
+        "--iterations", str(args.discovery_iterations),
+        "--warmup", str(args.warmup), "--repeats", "1",
+        "--min-improvement-fraction", "0.001", "--resume",
         "--output", str(out / "discovery.json"),
-        "--raw-dir", str(out / "raw-discovery"),
+        "--raw-dir", str(out / "raw-discovery-refinement"),
     ], cwd=repo, env=env)
 
 
@@ -493,7 +619,11 @@ def workflow_accuracy(
                 existing.get("candidateMaxBatchSize") == batch and
                 existing.get("candidateFixedBatchTailPadding") is True and
                 existing.get("referenceFixedBatchTailPadding") is True and
-                existing.get("inputAndTargetSectionsByteExact") is True
+                existing.get("inputAndTargetSectionsByteExact") is True and
+                set(existing.get("requestGate", {})) == {
+                    "policyProbability", "valueProbability", "scoreRaw",
+                    "ownershipProbability",
+                }
             ):
                 print(f"[autotune] reusing accuracy report {report}", flush=True)
                 continue
@@ -548,15 +678,61 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=conservative_build_jobs())
     parser.add_argument(
         "--phase",
-        choices=("detect", "prepare", "discovery", "gate", "reference", "accuracy", "all"),
+        choices=(
+            "detect", "prescan", "prepare", "discovery", "gate",
+            "reference", "accuracy", "all",
+        ),
         default="all",
     )
+    parser.add_argument(
+        "--full-batch-scan", action="store_true",
+        help="skip optimized baseline prescan and fully optimize every --batches value",
+    )
+    parser.add_argument(
+        "--top-batches", type=int, default=3,
+        help="number of optimized-baseline winners receiving full tactic search",
+    )
+    parser.add_argument("--baseline-iterations", type=int, default=200)
+    parser.add_argument("--baseline-repeats", type=int, default=2)
     parser.add_argument("--discovery-iterations", type=int, default=100)
+    parser.add_argument(
+        "--refinement-top-k", type=int, default=10,
+        help=(
+            "after the full first pass, retest this many first-pass leaders "
+            "per family on the improved whole graph"
+        ),
+    )
+    parser.add_argument(
+        "--refinement-max-sweeps", type=int, default=3,
+        help="repeat whole-graph Top-K coordinate refinement until unchanged",
+    )
+    parser.add_argument(
+        "--refinement-resweep-top-k", type=int, default=3,
+        help="candidate count per family after the first Top-K refinement sweep",
+    )
+    parser.add_argument(
+        "--refinement-confirmation-iterations", type=int, default=300,
+        help="timed iterations in each leg of a provisional-winner ABBA check",
+    )
     parser.add_argument("--gate-iterations", type=int, default=1000)
     parser.add_argument("--gate-repeats", type=int, default=2)
-    parser.add_argument("--warmup", type=int, default=50)
+    parser.add_argument("--warmup", type=int, default=80)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
+    if args.top_batches < 1:
+        parser.error("--top-batches must be positive")
+    if args.refinement_top_k < 1:
+        parser.error("--refinement-top-k must be positive")
+    if args.refinement_max_sweeps < 1:
+        parser.error("--refinement-max-sweeps must be positive")
+    if not 1 <= args.refinement_resweep_top_k <= args.refinement_top_k:
+        parser.error(
+            "--refinement-resweep-top-k must be in [1,--refinement-top-k]"
+        )
+    if args.refinement_confirmation_iterations < 100:
+        parser.error("--refinement-confirmation-iterations must be at least 100")
+    if args.full_batch_scan and args.phase == "prescan":
+        parser.error("--phase prescan cannot be combined with --full-batch-scan")
     script_dir = pathlib.Path(__file__).resolve().parent
     if args.prefix is None:
         pointer = script_dir / "runtime-prefix.txt"
@@ -568,7 +744,12 @@ def main() -> int:
     for path, label in ((python, "configured Python"), (model, "model")):
         ensure_file(path, label)
     hardware = detect(repo, args.device)
-    out = (args.output_dir or prefix / "results" / f"{hardware['workflow']}-{args.batches}-s{args.streams}-gpu{args.device}").resolve()
+    requested_batches = args.batches
+    mode = "full" if args.full_batch_scan else f"top{args.top_batches}"
+    out = (
+        args.output_dir or prefix / "results" /
+        f"{hardware['workflow']}-{mode}-from-{requested_batches}-s{args.streams}-gpu{args.device}"
+    ).resolve()
     out.mkdir(parents=True, exist_ok=True)
     (out / "device.json").write_text(json.dumps(hardware, indent=2, sort_keys=True) + "\n")
     print(json.dumps(hardware, indent=2, sort_keys=True), flush=True)
@@ -588,6 +769,15 @@ def main() -> int:
     paths = {"prefix": prefix, "repo": repo, "python": python, "model": model,
              "out": out, "gpu_class": pathlib.Path(hardware["gpu_class"]),
              "workflow": pathlib.Path(hardware["workflow"])}
+    if args.full_batch_scan:
+        selected_batches = parse_batch_set(requested_batches)
+    else:
+        selected_batches = workflow_baseline_prescan(
+            args, paths, env, requested_batches,
+        )
+    args.batches = ",".join(str(batch) for batch in selected_batches)
+    if args.phase == "prescan":
+        return 0
     prepare = sm89_prepare if hardware["workflow"] == "sm89" else sm120_prepare
     if args.phase in ("prepare", "all"):
         prepare(args, paths, env)

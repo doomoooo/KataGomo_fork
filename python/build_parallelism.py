@@ -9,6 +9,7 @@ import pathlib
 _BYTES_PER_HEAVY_JOB = 2 * 1024**3
 _BUDGET_NUMERATOR = 3
 _BUDGET_DENOMINATOR = 4
+_MAX_DEFAULT_JOBS = 8
 
 
 def _read_integer(path: pathlib.Path) -> int | None:
@@ -45,7 +46,7 @@ def conservative_build_jobs() -> int:
         cpu_jobs = os.cpu_count() or 1
     available = available_memory_bytes()
     if available is None:
-        return max(1, cpu_jobs)
+        return max(1, min(cpu_jobs, _MAX_DEFAULT_JOBS))
     budget = available * _BUDGET_NUMERATOR // _BUDGET_DENOMINATOR
     memory_jobs = max(1, budget // _BYTES_PER_HEAVY_JOB)
-    return max(1, min(cpu_jobs, memory_jobs))
+    return max(1, min(cpu_jobs, memory_jobs, _MAX_DEFAULT_JOBS))

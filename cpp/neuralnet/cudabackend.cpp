@@ -353,9 +353,8 @@ struct CudaHandles {
   void* sm120AffineSiluContext;
   Sm120Backend::Sm120PostConvBNSiluFn sm120PostConvBNSilu;
   void* sm120PostConvBNSiluContext;
-  float* sm120ExactMaskSumBuf;
-  int sm120ExactMaskCapacity;
-  bool loggedSm120ExactMaskElision;
+  float* sm120FullBoardAreaBuf;
+  int sm120FullBoardCapacity;
   bool sm120UseHeadBNHalfToFloat;
   bool loggedSm120HeadBNHalfToFloat;
   bool sm120ShareModelWeights;
@@ -408,9 +407,8 @@ struct CudaHandles {
       sm120AffineSiluContext(NULL),
       sm120PostConvBNSilu(NULL),
       sm120PostConvBNSiluContext(NULL),
-      sm120ExactMaskSumBuf(NULL),
-      sm120ExactMaskCapacity(0),
-      loggedSm120ExactMaskElision(false),
+      sm120FullBoardAreaBuf(NULL),
+      sm120FullBoardCapacity(0),
       sm120UseHeadBNHalfToFloat(false),
       loggedSm120HeadBNHalfToFloat(false),
       sm120ShareModelWeights(false),
@@ -3867,20 +3865,13 @@ struct Model {
     float* maskFloatBuf = (float*)maskFloat.buf;
     float* maskSumBuf = (float*)maskSum.buf;
 
-    const bool useExactMaskElision =
-      requireExactNNLen && batchSize <= cudaHandles->sm120ExactMaskCapacity &&
-      nnXLen == 19 && nnYLen == 19 && usingFP16 && inputsUsingNHWC &&
-      cudaHandles->sm120ExactMaskSumBuf != NULL;
-    if(useExactMaskElision) {
+    const bool useSm120FullBoardContract =
+      batchSize <= cudaHandles->sm120FullBoardCapacity &&
+      cudaHandles->sm120FullBoardAreaBuf != NULL;
+    if(useSm120FullBoardContract) {
       maskBuf = NULL;
       maskFloatBuf = NULL;
-      maskSumBuf = cudaHandles->sm120ExactMaskSumBuf;
-      if(!cudaHandles->loggedSm120ExactMaskElision) {
-        if(cudaHandles->logger != NULL)
-          cudaHandles->logger->write(
-            "SM120 backend: exact full-board mask preprocessing elided");
-        cudaHandles->loggedSm120ExactMaskElision = true;
-      }
+      maskSumBuf = cudaHandles->sm120FullBoardAreaBuf;
     }
     else if(!usingFP16) {
       if(inputsUsingNHWC)
@@ -3897,7 +3888,7 @@ struct Model {
       CUDA_ERR("modelExtractMask",cudaPeekAtLastError());
     }
 
-    if(!useExactMaskElision)
+    if(!useSm120FullBoardContract)
       fillMaskFloatBufAndMaskSumBuf(cudaHandles,maskBuf,maskFloatBuf,maskSumBuf,usingFP16,batchSize,nnXLen,nnYLen);
 
     //Don't do any masking if we know the board is exactly the desired size
@@ -4331,11 +4322,9 @@ struct ComputeHandle {
         maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
         context->sm120Options
       );
-      if(context->sm120Options.useExactMaskElision) {
-        cudaHandles->sm120ExactMaskSumBuf = sm120Model->getExactMaskSumBuf();
-        if(cudaHandles->sm120ExactMaskSumBuf != NULL)
-          cudaHandles->sm120ExactMaskCapacity = maxBatchSize;
-      }
+      cudaHandles->sm120FullBoardAreaBuf = sm120Model->getFullBoardAreaBuf();
+      if(cudaHandles->sm120FullBoardAreaBuf != NULL)
+        cudaHandles->sm120FullBoardCapacity = maxBatchSize;
       if(sm120Model->hasPersistingL2Trunk()) {
         cudaHandles->sm120PersistingL2 = &Sm120Backend::applyPersistingL2Window;
         cudaHandles->sm120PersistingL2Context = sm120Model.get();

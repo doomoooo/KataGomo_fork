@@ -5,45 +5,55 @@ scope is SM89 and SM120, exact 19x19 batches and the natural two-stream
 whole-graph topology. SM120 support and repository-wide integration are owned
 by final-migration.
 
-The workflow turns `/workspace/results/4090/HISTORY.md` and
-`/workspace/4090-optimization-portability.md` into a finite, reproducible
-search. B13 is neither an anchor nor a special case. Every requested batch
-starts from a complete explicit official-equivalent tactic baseline and
-visits the same ordered optimization stages. Every stage still measures its
-explicit off control, an explicit keep-incumbent no-op, and local variants. A replacement
-must exceed the freshly measured incumbent by at least 0.1%; otherwise the
-incumbent is carried into the next stage. This preserves interactions between
-already accepted optimizations while allowing any individual stage to be
-rejected for a different batch.
+The workflow turns the retained SM89 and SM120 optimization histories into a
+finite, reproducible search. B13 is neither an anchor nor a special case.
+Every selected batch starts from a complete explicit official-equivalent
+tactic baseline and completes its own ordered optimization flow. Every stage
+measures its explicit off control, an explicit keep-incumbent no-op, and local
+variants. A replacement must exceed the freshly measured incumbent by at
+least 0.1%; otherwise the incumbent is carried forward.
 
 The baseline covers every runtime tactic key, and generated plans carry it
 verbatim before applying measured winners. No `keep` result can inherit a
 parser default, and the runtime has no `auto`/B13-special winner selection.
 
-## Search stages
+## Implementation catalogs and decision groups
 
-The 20 ordered families are:
+The 19 family names are backend implementation catalogs, not 19 independent
+operators in a trunk block. The actual ordered coordinates are 10 groups on
+both SM89 and SM120. Exact 19x19 is a backend invariant, not a tactic:
 
-1. wide QKV;
-2. wide FFN;
-3. fused projection residual;
-4. transformer RMSNorm;
-5. exact-board mask/attention-bias elision;
-6. fused, precomputed, grouped and GEMM-epilogue QKV/RoPE paths;
-7. the linked M64/N96 FA4 path with FP32 or both16 accumulation;
-8. dual GEMM + SwiGLU, including exact-batch TileLang tactics;
-9. linear2 residual/post-BN, including exact-batch TileLang tactics;
-10. outProj residual GEMM;
-11. nested preConv GEMM;
-12. postConv GEMM and postConv+BN/SiLU;
-13. C768 vec8 and C384 vec4 pointwise paths;
-14. persisting-L2 scope and hit-ratio policy;
-15. initial-conv cuDNN frontend engine 45;
-16. initial-global fusion;
-17. fused policy P1;
-18. wide-head projection;
-19. head BN half-to-float;
-20. fused value terminal.
+| SM89 group | Catalogs |
+| --- | --- |
+| projection/attention | `wide_projection`, `qkv_rope`, `dual_ffn` |
+| residual/pointwise | `fused_residual`, `linear2`, `outproj`, `postconv_bn`, `pointwise` |
+| normalization | `rmsnorm` |
+| attention kernel | `fa4` |
+| pre-convolution | `preconv` |
+| persisting L2 | `l2` |
+| weight sharing | `weight_sharing` |
+| initial convolution | `initial_conv` |
+| heads | `wide_head`, `initial_global`, `policy_p1`, `head_bn` |
+| value terminal | `value_terminal` |
+
+| SM120 group | Catalogs |
+| --- | --- |
+| attention/projection | `fa4`, `wide_projection`, `qkv_rope`, `dual_ffn` |
+| residual projections | `fused_residual`, `linear2`, `outproj` |
+| outer projection/pointwise | `postconv_bn`, `preconv`, `pointwise` |
+| heads | `wide_head`, `policy_p1`, `head_bn` |
+| normalization | `rmsnorm` |
+| persisting L2 | `l2` |
+| weight sharing | `weight_sharing` |
+| initial convolution | `initial_conv` |
+| initial global | `initial_global` |
+| value terminal | `value_terminal` |
+
+A static space gate rejects a runtime key or declared dependency that crosses
+a decision-group boundary. Historical bundles are measured before the finer
+catalogs in their group, and those catalogs may refine only explicitly owned
+keys. In particular, QKV/RoPE bundles cannot change the FA tile or accumulator
+selected by the FA catalog.
 
 Only candidates with distinct runtime implementations are materialized. In
 particular, this branch has generated tactic registries for dual-FFN and
@@ -51,7 +61,22 @@ linear2. Pre/postConv, QKV/RoPE, FA4, pointwise, policy and initial-conv use
 their linked historical implementations and real config switches; the search
 space does not advertise unparsed AOT IDs or imaginary launch shapes.
 
-## 1. Materialize B4–B32
+## 1. Select batches and materialize the search space
+
+The release entry point first runs an explicit artifact-free stable optimized
+graph for every exact batch B4-B32. It ranks physical `nnEval/s` and selects
+the fastest three shapes. Only those three receive generated artifacts,
+discovery, and the long gate. Each selected batch completes its entire ordered
+decision flow before the next batch begins. Use `--full-batch-scan` to retain
+the exhaustive 29-batch behavior.
+
+```bash
+./run-autotune.sh --device 0
+./run-autotune.sh --device 0 --full-batch-scan
+```
+
+The lower-level commands below use exhaustive SM89 paths as examples for
+debugging the workflow itself:
 
 ```bash
 python3 python/cuda_tactic_workflow.py space \
@@ -109,12 +134,11 @@ metadata hashes, correctness evidence, compile commands, and linked symbols.
 
 ## 3. Complete discovery
 
-Discovery visits every candidate. For each batch it seeds the target
-architecture's declared family catalog from
-the accepted Stage68 config, scans a family's off control and local variants,
-retains that family's whole-graph winner, then uses the accumulated winner
-config as the next family's base. B13 follows exactly the same path as every
-other batch.
+Discovery visits every candidate for one batch before moving to the next
+batch. It starts from the explicit official-equivalent baseline, scans the
+batch's decision groups in order, retains each whole-graph winner, and uses the
+accumulated winner config as the next stage's base. B13 follows exactly the
+same path as every other batch.
 
 Each winner records the incumbent throughput, observed improvement, minimum
 acceptance margin, and whether the stage changed. Resume identity includes the
@@ -153,12 +177,10 @@ original `.bin.gz` hash as the portable plan identity. Results record both
 paths and hashes, so this startup optimization is reproducible and receivers
 continue validating against the distributed source model.
 
-The batch range may be partitioned across the two local SM89 4090 ordinals
-(for example B4-B17 on device 0 and B18-B32 on device 1) by running two
-independent `scan` commands with distinct outputs. The plan command merges the
-batch partitions, verifies the same architecture/GPU class/model/config/stream
-topology, and records every scan ordinal. CUDA ordinals are local evidence and
-are not required to match on the receiving machine.
+CUDA ordinals are local evidence and are not required to match on the
+receiving machine. Each benchmark monitors the selected GPU's per-PID SM
+activity; an external process that consumes SM time invalidates the
+measurement, while a memory-only context is allowed.
 
 ## 4. Long final-joint gate
 
@@ -180,16 +202,17 @@ python3 python/cuda_tactic_workflow.py gate \
 
 ## 5. Accuracy certification and plan distribution
 
-Replay each final per-batch config on the fixed 8192-row corpus, compare it to
-the established FP32 `.krnn` reference with
-`python/katago/train/compare_replay_krnn.py`, then attach the reports:
+Rank the long-gate results by stable physical `nnEval/s`. Replay only the
+fastest config on the fixed 8192-row corpus, compare it to the established
+FP32 `.krnn` reference with `python/katago/train/compare_replay_krnn.py`, then
+attach that one report:
 
 The release SDK automates the complete identity-bound form and should be used
 for qualification:
 
 ```bash
 ./run-autotune.sh --device 0 --phase reference  # once, official CUDA FP32
-./run-autotune.sh --device 0 --phase accuracy   # every final B4-B32 winner
+./run-autotune.sh --device 0 --phase accuracy   # fastest long-gate winner only
 ```
 
 It binds each report to the exact batch, selected overrides, candidate binary,
@@ -207,9 +230,11 @@ python3 python/cuda_tactic_workflow.py certify \
   --output results/portable-sm89/history-long-gate-certified.json
 ```
 
-Supply all requested batches. Certification requires 8192 rows and the
-recorded policy/value/score/ownership FP32 envelope. A distributable plan then
-combines complete discovery coverage, the final long gate and certification:
+Certification requires 8192 rows, aggregate metrics, and the same
+worst-per-request max-absolute/per-head RMSE policy/value/score/ownership FP32
+envelope used by the GTP-shaped CPU verifier. A distributable plan combines the
+selected batch's discovery, long gate, and certificate. The lower-level
+example remains exhaustive only to document that supported mode:
 
 ```bash
 python3 python/cuda_tactic_workflow.py plan \

@@ -13,11 +13,8 @@ They are not universal defaults. The runtime validates the receiver and fails
 at startup on a mismatch. The CUDA device ordinal recorded at scan time is
 provenance only and is not applied on the receiver.
 
-Current assets:
-
-- `sm89/rtx4090d-b12-s2/best-tactic-plan.json`: certified RTX 4090 D, exact
-  B12, two streams per device.
-- `sm120/rtx5080-b19-s2/best-tactic-plan.json`: certified RTX 5080, exact B19,
-  two streams per device, `2763.4413825` physical nnEval/s.
-
-The pre-unification RTX 5080 plan is not production-ready and remains excluded.
+There are temporarily no current assets. The previous SM89 and SM120 plans
+referenced a search component removed by the fixed-full-board backend contract,
+so they are intentionally absent rather than being presented as compatible.
+The RTX 4090 D B12/S2 and RTX 5080 B19/S2 plans will return only after they pass
+the current long whole-graph and immutable full-FP32 gates.

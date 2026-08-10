@@ -27,41 +27,33 @@
 | 正确性 | KataGo 常规 backend 测试 | 不可变的 8192-row 全 FP32 门、输入同一性检查、精确 batch 尾部检查、GTP 形态长测 |
 | 分发 | 常规源码/编译流程 | 源码完备的离线 autotune tar，以及独立的非侵入式预编译 runtime tar |
 
-目标不是为某个 batch 堆专用特例。扫描器在每一个 B4-B32 精确 batch 上都搜索
-同一套完整 tactic family。维护集合是 SM89 与 SM120 所有历史上产生过真实正
-收益且数值有效实现的并集。
+目标不是为某个 batch 堆专用特例。B4-B32 每个精确 batch 都可以物化同一套
+完整实现目录。默认流程先用稳定且不依赖 AOT artifact 的优化图扫描 B4-B32，再只对吞吐最高的
+三个 shape 执行完整 tactic 流程；`--full-batch-scan` 保留默认关闭的 29-batch
+穷举模式。维护集合是 SM89 与 SM120 所有历史上产生过真实正收益且数值有效
+实现的并集。
 
 ## 当前认证状态
 
 | 架构 | 已实现搜索空间 | Production plan | 硬件认证 |
 | --- | --- | --- | --- |
-| SM89 | 20 个 family、62 条正收益历史记录、精确 B4-B32 共 3738 个候选 | 已提交 RTX 4090 D B12/S2 plan | 已完成 GTP 加载、单/双卡和 8192-row 全输出 FP32 replay |
-| SM120 | 23 个 family、64 条正收益历史记录、精确 B4-B32 共 4234 个候选 | 已提交 RTX 5080 B19/S2 plan | 已完成统一 long gate 和 8192-row 全输出 FP32 replay；普通 GTP 路径认证待完成 |
+| SM89 | 19 个实现目录、10 个决策组、60 条正收益历史、全域 3564 个候选 | 正在刷新 RTX 4090 D B12/S2 plan | full-board 后端编译已通过，硬件重认证进行中 |
+| SM120 | 19 个实现目录、10 个决策组、63 条正收益历史、全域 3944 个候选 | 正在刷新 RTX 5080 B19/S2 plan | 保留此前搜索、long gate 和精度证据，等待 full-board plan 刷新 |
 
 此前 RTX 5080 的 B18 `2586.579` physical nnEval/s 来自尚未合并完整历史
-优化集合的旧扫描。它已被统一扫描得到的 B19 plan 替代；新 plan 的稳定 long
-gate 为 `2763.4413825` physical nnEval/s。旧 plan 会被 production loader 拒绝，
-也不会打包。
+优化集合的旧扫描。之后耦合审计后的 B19 图达到 `2838.9148995` physical
+nnEval/s，但对应 plan 早于固定 full-board 合同，因此不会打包。
 
-当前纳入 Git 的 plan 为：
+旧 official-fallback 预扫在这台 RTX 5080 上选择了 B7/B8/B9，因此没有发现
+优化后更强的 B19。现在它已被显式、自包含且无需 AOT artifact 的稳定优化图
+替代，使预扫工况更接近最终图。如果全局 B4-B32 覆盖比 top-three 模式约 88%
+的候选评测量节省更重要，应使用 `--full-batch-scan`。
 
-```text
-final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
-final-migration/plans/sm120/rtx5080-b19-s2/best-tactic-plan.json
-```
-
-SM89 文件 SHA-256 为
-`57aba0d9f5ff009f0103fe792766bd3fe065d156c13396cb99bc40b5488f9edb`。
-整图 long gate 为 `3026.196859` physical nnEval/s。随后通过普通 evaluator
-调度路径验证：单张 RTX 4090 D 上 8192/8192 正确且达到 3035.87 physical
-nnEval/s；两张 RTX 4090 D 上 8192/8192 正确且达到 6072.97 physical
-nnEval/s。这些数字只描述被测主机、频率、模型、batch 和拓扑，不是对所有机器
-的普适性能承诺。
-
-SM120 RTX 5080 文件 SHA-256 为
-`5f90e7fb5c02ac147e4cf535e664dca736f4fcbd9c0afd188ef5a5fd1e7b788b`。
-统一 long gate 在 B19/S2 达到 `2763.4413825` physical nnEval/s；只对该最优
-plan 执行的一次 8192-row 全输出 replay 通过了全部全 FP32 阈值。
+当前暂时没有纳入 Git 的 production plan。旧 SM89/SM120 文件的 schema payload
+仍包含已经删除的 mask 搜索组件，因此已移除，而不是伪装成兼容结果。RTX 4090 D
+B12/S2 与 RTX 5080 B19/S2 只会在当前源码重新通过整图 long gate 和一次
+8192-row 全 FP32 门之后加入。历史性能仅作为被测主机上的参考，不构成新合同的
+认证。
 
 ## Plan 驱动 backend
 
@@ -92,12 +84,20 @@ backend 只有在具体实现实际 launch 成功之后才发出 activation mark
 `python/cuda_tactic_history.py` 保存历史正收益合同。所有支持 batch 上的所有
 记录没有闭合这四条链路时，plan 生成会直接失败。
 
-### 维护的 tactic 类型
+### 实现目录与决策组
 
-两种架构只有在硬件确实不同时才保留不同 family，外部工作流使用同一套实现。
-覆盖内容包括但不限于：
+19 个目录名不是一个 trunk block 中的 19 个算子，也不代表 19 个彼此独立的
+性能维度；它们只是 backend 实现清单。SM89 和 SM120 都实际暴露 10 个有序
+决策组。
+静态闭环门要求所有共享 runtime key 和声明式依赖只能位于同一个决策组内。
+bundle 在组内先测，后续细粒度目录只能显式修改自己的 key；后面的决策组不能
+重写前面决策组的状态。
+在 SM120 上，packed QKV 是输入 layout 选择，与 FA 的 QK/PV accumulation
+精度显式解耦；packed 路径使用已选中的 FA tactic，不会强制修改 tile 或
+accumulation 模式。
 
-- exact-mask preprocess 及下游 mask elision；
+两种架构只有在硬件确实不同时才保留不同实现目录。覆盖内容包括但不限于：
+
 - initial convolution/global 和 pointwise BN/activation；
 - wide QKV/FFN/head projection 及多个 projection bundle；
 - fused QKV + RoPE、packed QKV + RoPE；
@@ -106,6 +106,10 @@ backend 只有在具体实现实际 launch 成功之后才发出 activation mark
 - residual GEMM、linear2、outproj、preconv、postconv；
 - RMSNorm、head BN、postconv BN + SiLU、value terminal；
 - persisting L2，以及只有在真实 cache hit 后才视为激活的权重共享。
+
+优化 CUDA 后端只接受严格的 19x19、FP16、NHWC 推理。完整棋盘是 fail-closed
+的后端合同，不是配置项或搜索维度；不存在 mask tactic、runtime key、candidate
+或 plan apply 映射。
 
 运行时不存在 B13 特权，也没有为旧实验选项名称保留兼容别名。旧 B13-only
 生成物和重复的 SM120 扫描脚本已经删除。
@@ -121,24 +125,23 @@ backend 只有在具体实现实际 launch 成功之后才发出 activation mark
 同一套代码。只有硬件确实要求不同实现时，才保留架构相关的候选生成和 backend
 源码。
 
-默认域为精确 B4-B32，每张卡两条推理 stream。正确顺序是“对一个 batch 完成
-一整套决策流程”，而不是“一个决策横扫全部 batch 后再做下一个决策”。这样，
-某个 shape 上获利的 tactic 会成为该 batch 的正常搜索坐标，而不是隐藏的固定
-batch 专用实现。
+默认选择域为精确 B4-B32，每张卡两条推理 stream。先由稳定的优化 baseline prescan
+测量全部 29 个 shape，选出吞吐最高的三个 batch。随后正确顺序是“对一个入选
+batch 完成一整套决策流程”，而不是“一个决策横扫全部 batch 后再做下一个
+决策”。这样，某个 shape 上获利的 tactic 会成为该 batch 的正常搜索坐标，而
+不是隐藏的固定 batch 专用实现。
 
-对每个 batch，工作流会物化完整 family 空间，从显式的官方等价 baseline
-开始，进行带激活门的 discovery，累积出自包含配置，再测 final joint 整图状态
-并记录结果。29 个 batch 都完成之后，long gate 按稳定整图吞吐排序。只有
-nnEval/s 最高的稳定 plan 会进行一次 8192-row FP32 replay，最终输出单 batch
-的 `best-tactic-plan.json`。
+对每个入选 batch，工作流会物化完整实现目录，从显式的自包含 baseline
+开始，按决策组顺序进行带激活门的 discovery，累积出自包含配置，再测 final
+joint 整图状态。long gate 对三个稳定结果排序；只有 nnEval/s 最高的 plan 会
+进行一次 8192-row FP32 replay，最终输出单 batch 的
+`best-tactic-plan.json`。传入 `--full-batch-scan` 才会对全部 29 个 batch 执行
+相同完整流程；该模式开销约为默认模式的八到九倍，因此默认关闭。
 
 discovery 短测数字不能作为发布性能。只有整图 long gate 和正确性门都通过时，
 plan 才能标记为 production-ready。
 
 ### GPU 干扰策略
-
-分发工程中已经完全移除 `gpu-lock`。它只用于多个开发 session 在同一机器上
-协作，不属于用户运行时需求。
 
 每个 benchmark 子进程在运行期间由 `nvidia-smi pmon` 监控。只占显存但 SM
 占用为零的进程不算干扰；外部 PID 一旦在测量期间产生非零 SM 活动，benchmark
@@ -265,8 +268,16 @@ backend。reference metadata 绑定二进制、模型、输入 corpus、行数�
 - reference 与 candidate 的 targets 和所有输入 section 逐字节一致；
 - 模型和 corpus SHA-256 与当前输入相符；
 - candidate metadata 证明最大 batch 和固定尾部 padding 正确；
+- 除 8192-row 聚合指标外，还必须通过与 GTP 形态 CPU verifier 完全一致的
+  “逐请求最坏 max-absolute + 每个输出 head RMSE”阈值；
 - policy top-1/probability、value、score、ownership 和 weighted loss 均通过
   阈值。
+
+逐请求 value-probability 策略允许 max-absolute `0.06`、max-RMSE `0.05`；
+其余逐请求和聚合阈值保持不变。这会重新接纳历史上最快的 SM120
+TN64/both16 FA 坐标；它已观测到的最坏请求为 max-absolute `0.0559005`、
+max-RMSE `0.0456366`。该坐标仍必须通过完整 8192-row 认证，不享受任何
+tactic 专用豁免。
 
 物理尾 batch 通过重复真实请求补满，但只序列化原始 8192 个逻辑行。这样能让
 exact-batch AOT kernel 在尾部仍保持激活，同时不会掩盖请求错位、重排或计数

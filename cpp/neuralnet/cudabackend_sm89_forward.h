@@ -77,9 +77,9 @@ struct Sm89Scratch {
   SimpleAllocator<void*> allocator;
   void* zeroBuf;
   void* oneBuf;
-  void* fullBoardMaskSumBuf;
+  void* fullBoardAreaBuf;
 
-  Sm89Scratch(bool useFP16, bool useExactMaskElision, int maxBatchSize, int xySize);
+  Sm89Scratch(bool useFP16, int maxBatchSize, int xySize);
   ~Sm89Scratch();
   Sm89Scratch(const Sm89Scratch&) = delete;
   Sm89Scratch& operator=(const Sm89Scratch&) = delete;
@@ -132,8 +132,6 @@ class Sm89Forward {
     int policyP1RowsPerBlock,
     bool useHeadBNHalfToFloat,
     bool useWideHeadProjection,
-    bool useExactMaskDownstreamElision,
-    bool useExactMaskElision,
     bool useFusedValueTerminal,
     const std::string& dualFfnAotTactic,
     const std::string& linear2AotTactic,
@@ -154,7 +152,6 @@ class Sm89Forward {
 
   void apply(
     int batchSize,
-    bool requireExactNNLen,
     void* inputBuf,
     void* inputGlobalBuf,
     void* inputMetaBuf,

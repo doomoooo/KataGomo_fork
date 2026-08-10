@@ -154,14 +154,20 @@ def select_tilelang_requests(
     if missing:
         raise ValueError(f"batches outside materialized space: {missing}")
 
+    # Search coordinates may merge several implementation boundaries. QKV
+    # projection now lives in qkv_rope, while its generated ABI and registry
+    # remain the distinct wide_qkv backend artifact family.
+    search_family = "qkv_rope" if family == "wide_qkv" else family
     result: list[dict] = []
     seen: set[tuple[int, str]] = set()
     for batch in requested_batches:
-        for candidate in batch_spaces[batch].get(family, []):
+        for candidate in batch_spaces[batch].get(search_family, []):
             candidate_id = candidate["id"]
             if allowed_ids and candidate_id not in allowed_ids:
                 continue
             if candidate.get("implementation", "tilelang") != "tilelang":
+                continue
+            if candidate.get("artifact_family", search_family) != family:
                 continue
             key = (batch, candidate_id)
             if key in seen:
@@ -169,6 +175,8 @@ def select_tilelang_requests(
             seen.add(key)
             token = symbol_token(family, batch, candidate_id)
             result.append({
+                "family": search_family,
+                "artifact_family": family,
                 "batch": batch,
                 "candidate_id": candidate_id,
                 "candidate": candidate,
@@ -180,7 +188,8 @@ def select_tilelang_requests(
         known_ids = {
             candidate["id"]
             for batch in requested_batches
-            for candidate in batch_spaces[batch].get(family, [])
+            for candidate in batch_spaces[batch].get(search_family, [])
+            if candidate.get("artifact_family", search_family) == family
         }
         missing_ids = sorted(allowed_ids - known_ids)
         if missing_ids:
