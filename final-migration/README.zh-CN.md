@@ -68,6 +68,10 @@ B14 进入完整搜索；其中 B12 为 `3079.829482` physical nnEval/s。所有
 上加载已提交 plan，两条 lane 都观测到全部 plan tactic 的真实 launch 后 marker，
 固定 B12 dispatcher 与 event-gated 单 slot scheduler 正常启动，并完成基础
 19x19 GTP 命令。
+64 个搜索线程对 10 个局面各跑 800 visits 时，得到 `3075.81 visits/s`、
+`2973.42` logical nnEvals/s、`255.46 nnBatches/s`，平均逻辑 batch 为 `11.64`。
+因此固定 shape 的物理吞吐为 `255.46 * 12 = 3065.52 nnEval/s`，比纯整图 long
+gate 低 1.45%；整个 benchmark 期间 `nvidia-smi pmon` 未发现外部非零 SM PID。
 
 ## Plan 驱动 backend
 

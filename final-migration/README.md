@@ -73,6 +73,11 @@ every prescan sample recorded an empty foreign-SM PID set. A normal GTP startup
 then loaded the checked-in plan on two NN-server lanes, observed every planned
 post-launch activation marker on both lanes, started fixed-B12 dispatch and the
 event-gated single-slot scheduler, and completed basic 19x19 GTP commands.
+A 64-thread search benchmark over ten 800-visit positions measured `3075.81`
+visits/s, `2973.42` logical nnEvals/s, and `255.46` launched batches/s at an
+average logical batch of `11.64`. Its fixed-shape physical rate was therefore
+`3065.52` nnEval/s, 1.45% below the compute-only long gate; `nvidia-smi pmon`
+recorded no foreign PID with nonzero SM activity during the run.
 
 ## Plan-driven backend
 
