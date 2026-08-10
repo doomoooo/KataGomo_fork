@@ -39,7 +39,7 @@ numerically valid SM89 and SM120 work is the maintained search space.
 
 | Architecture | Implemented search space | Production plan | Hardware qualification |
 | --- | --- | --- | --- |
-| SM89 | 19 implementation catalogs in 10 decision groups; 60 positive-history records; 3564 full-domain candidates | RTX 4090 D B12/S2 plan being refreshed | full-board backend build passed; hardware requalification in progress |
+| SM89 | 19 implementation catalogs in 10 decision groups; 60 positive-history records; 3564 full-domain candidates | certified RTX 4090 D B12/S2 plan | long gate and 8192-row full-FP32 gate passed |
 | SM120 | 19 implementation catalogs in 10 decision groups; 63 positive-history records; 3944 full-domain candidates | RTX 5080 B19/S2 plan being refreshed | previous search/gate/accuracy evidence retained; full-board plan refresh pending |
 
 The previous RTX 5080 B18 result (`2586.579` physical nnEval/s) came from an
@@ -53,12 +53,19 @@ artifact-free optimized graph that is much closer to the final operating
 state. Use `--full-batch-scan` when global B4-B32 coverage matters more than
 the roughly 88% reduction in candidate evaluations provided by top-three mode.
 
-There are temporarily no checked-in production plans. The old SM89 and SM120
-files were removed because their schema payload still named the deleted mask
-search component. RTX 4090 D B12/S2 and RTX 5080 B19/S2 will be added back only
-after the current source passes the long whole-graph and one-plan 8192-row
-full-FP32 gates. Historical measurements remain evidence for those tested
-hosts, not certification of the new plan contract.
+The current checked-in production plan is:
+
+```text
+final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
+```
+
+Its SHA-256 is
+`e089cd8ef2ca65eadacb4e5014f39622de00c50bd99df22424612e31ce795a94`.
+The RTX 4090 D B12/S2 long gate measured `3110.690824` physical nnEval/s from
+samples `3110.484420` and `3110.897228`; its single 8192-row all-head replay
+passed every aggregate and per-request full-FP32 threshold. The old SM120 file
+remains excluded until the RTX 5080 is available for the same current-source
+certification.
 
 ## Plan-driven backend
 

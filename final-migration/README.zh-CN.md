@@ -37,7 +37,7 @@
 
 | 架构 | 已实现搜索空间 | Production plan | 硬件认证 |
 | --- | --- | --- | --- |
-| SM89 | 19 个实现目录、10 个决策组、60 条正收益历史、全域 3564 个候选 | 正在刷新 RTX 4090 D B12/S2 plan | full-board 后端编译已通过，硬件重认证进行中 |
+| SM89 | 19 个实现目录、10 个决策组、60 条正收益历史、全域 3564 个候选 | 已认证 RTX 4090 D B12/S2 plan | long gate 与 8192-row 全 FP32 门通过 |
 | SM120 | 19 个实现目录、10 个决策组、63 条正收益历史、全域 3944 个候选 | 正在刷新 RTX 5080 B19/S2 plan | 保留此前搜索、long gate 和精度证据，等待 full-board plan 刷新 |
 
 此前 RTX 5080 的 B18 `2586.579` physical nnEval/s 来自尚未合并完整历史
@@ -49,11 +49,18 @@ nnEval/s，但对应 plan 早于固定 full-board 合同，因此不会打包。
 替代，使预扫工况更接近最终图。如果全局 B4-B32 覆盖比 top-three 模式约 88%
 的候选评测量节省更重要，应使用 `--full-batch-scan`。
 
-当前暂时没有纳入 Git 的 production plan。旧 SM89/SM120 文件的 schema payload
-仍包含已经删除的 mask 搜索组件，因此已移除，而不是伪装成兼容结果。RTX 4090 D
-B12/S2 与 RTX 5080 B19/S2 只会在当前源码重新通过整图 long gate 和一次
-8192-row 全 FP32 门之后加入。历史性能仅作为被测主机上的参考，不构成新合同的
-认证。
+当前纳入 Git 的 production plan 为：
+
+```text
+final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
+```
+
+SHA-256 为
+`e089cd8ef2ca65eadacb4e5014f39622de00c50bd99df22424612e31ce795a94`。
+RTX 4090 D B12/S2 的 long gate 为 `3110.690824` physical nnEval/s，两个样本
+是 `3110.484420` 与 `3110.897228`；只对这一最优 plan 执行的 8192-row 全输出
+replay 通过全部聚合与逐请求全 FP32 阈值。旧 SM120 文件继续排除，等 RTX 5080
+恢复后按当前源码重新认证。
 
 ## Plan 驱动 backend
 

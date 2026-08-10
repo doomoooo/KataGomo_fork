@@ -33,6 +33,7 @@ from cuda_tactic_workflow import (  # noqa: E402
     effective_candidate_map,
     effective_activation_markers,
     make_generation_plan,
+    mark_superseded_refinement_winner,
     materialize_space,
     nvcc_arch_flag,
     official_fallback_overrides,
@@ -514,6 +515,38 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             self.assertNotIn("exact_mask", space["families"])
             self.assertNotIn("ExactMask", repr(space))
             self.assertNotIn("exact-mask", repr(space))
+
+    def test_refinement_retains_superseded_catalog_winner_contract(self):
+        first = [
+            {
+                "family": "postconv_bn", "batch": 12,
+                "candidate_id": "postconv-a", "history_stage_winner": False,
+                "nn_evals_per_sec_median": 100.0,
+            },
+            {
+                "family": "postconv_bn", "batch": 12,
+                "candidate_id": "postconv-b", "history_stage_winner": True,
+                "nn_evals_per_sec_median": 101.0,
+            },
+        ]
+        refined = [dict(first[1])]
+        mark_superseded_refinement_winner(
+            first, refined,
+            family="postconv_bn", batch=12,
+            candidate_id="postconv-b", superseding_family="wide_head",
+            min_improvement_fraction=0.001,
+        )
+        canonical = canonical_refinement_rows(first, refined)
+        winners = [row for row in canonical if row["history_stage_winner"]]
+        self.assertEqual([row["candidate_id"] for row in winners], ["postconv-b"])
+        self.assertEqual(winners[0]["history_superseded_by"], "wide_head")
+        self.assertEqual(
+            winners[0]["history_incumbent_candidate_id"], "postconv-b"
+        )
+        self.assertFalse(winners[0]["history_accepted_change"])
+        self.assertEqual(
+            winners[0]["history_improvement_fraction_vs_incumbent"], 0.0
+        )
 
     def test_only_long_stable_values_are_final_metrics(self):
         stable = summarize_samples([100.0, 101.0], iterations=1000, warmup=50)

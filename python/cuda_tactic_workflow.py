@@ -3364,6 +3364,57 @@ def canonical_refinement_rows(
     return result
 
 
+def mark_superseded_refinement_winner(
+    first_pass_rows: Sequence[dict[str, object]],
+    refinement_rows: Sequence[dict[str, object]],
+    *,
+    family: str,
+    batch: int,
+    candidate_id: str,
+    superseding_family: str,
+    min_improvement_fraction: float,
+) -> None:
+    """Retain one catalog coordinate when another family owns its runtime keys."""
+    marked = False
+    for row in (*first_pass_rows, *refinement_rows):
+        if row.get("family") != family or int(row.get("batch", -1)) != batch:
+            continue
+        is_winner = str(row.get("candidate_id")) == candidate_id
+        row["history_stage_winner"] = is_winner
+        row["history_final_joint"] = False
+        if is_winner:
+            row["history_superseded_by"] = superseding_family
+            incumbent_id = row.get("history_incumbent_candidate_id")
+            recorded_gain = row.get(
+                "history_improvement_fraction_vs_incumbent"
+            )
+            if not isinstance(incumbent_id, str) or not isinstance(
+                recorded_gain, (int, float)
+            ):
+                metric = row.get("nn_evals_per_sec_median")
+                if not isinstance(metric, (int, float)):
+                    raise ValueError(
+                        "superseded catalog winner has no measured throughput: "
+                        f"{family}/B{batch}/{candidate_id}"
+                    )
+                row["history_incumbent_candidate_id"] = candidate_id
+                row["history_incumbent_nn_evals_per_sec"] = float(metric)
+                row["history_selection_nn_evals_per_sec"] = float(metric)
+                row["history_accepted_change"] = False
+                row["history_min_improvement_fraction"] = (
+                    min_improvement_fraction
+                )
+                row["history_improvement_fraction_vs_incumbent"] = 0.0
+            marked = True
+        else:
+            row.pop("history_superseded_by", None)
+    if not marked:
+        raise ValueError(
+            "refinement cannot retain the superseded catalog winner: "
+            f"{family}/B{batch}/{candidate_id}"
+        )
+
+
 def require_stable_metric(row: dict[str, object]) -> float:
     value = stable_metric(row)
     if value is None:
@@ -5279,11 +5330,35 @@ def run_refine(args: argparse.Namespace) -> None:
             for family_index, family in enumerate(families):
                 expected = candidate_map(space, family, batch)
                 incumbent_id = str(selected[family]["id"])
-                current_effective, _ = effective_candidate_map(selected)
+                current_effective, superseded_by = effective_candidate_map(
+                    selected
+                )
                 if family not in current_effective:
+                    superseding_family = superseded_by.get(family)
+                    if superseding_family is None:
+                        raise ValueError(
+                            "refinement dropped a family without an explicit "
+                            f"superseding owner: {family}/B{batch}"
+                        )
+                    # A plan still records exactly one coordinate for every
+                    # implementation catalog. Keep the selected coordinate as
+                    # the catalog winner, while the joint ownership resolver
+                    # records that it is inactive in this graph. The row keeps
+                    # its original measurement rather than fabricating a
+                    # redundant timing for an implementation that cannot run.
+                    mark_superseded_refinement_winner(
+                        base_rows, refinement_rows,
+                        family=family, batch=batch,
+                        candidate_id=incumbent_id,
+                        superseding_family=superseding_family,
+                        min_improvement_fraction=(
+                            args.min_improvement_fraction
+                        ),
+                    )
                     print(
                         f"refine {family} B{batch}: skipped because the "
-                        "current joint boundary explicitly supersedes it",
+                        "current joint boundary explicitly supersedes it "
+                        f"via {superseding_family}",
                         flush=True,
                     )
                     continue
