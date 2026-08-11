@@ -5,40 +5,112 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=python-runtime.lock.sh
+source "${SCRIPT_DIR}/python-runtime.lock.sh"
 
-system_python="${KATAGO_SYSTEM_PYTHON:-/usr/bin/python3}"
-[[ -x "${system_python}" ]] || die "system Python is missing: ${system_python}"
-mkdir -p -- "${KATAGO_ENV_ROOT}/state"
+runtime_only=0
+case "${1:-}" in
+  "") ;;
+  --runtime-only) runtime_only=1 ;;
+  *) die "usage: install-python.sh [--runtime-only]" ;;
+esac
+
+for command_name in curl readlink sha256sum tar; do
+  require_command "${command_name}"
+done
+mkdir -p -- "${KATAGO_ENV_ROOT}/state" "${KATAGO_ENV_ROOT}/downloads"
 assert_safe_managed_path "${KATAGO_FINAL_VENV}"
+python_root="${KATAGO_ENV_ROOT}/python"
+assert_safe_managed_path "${python_root}"
 
-if [[ ! -x "${KATAGO_FINAL_VENV}/bin/python" ]]; then
-  log "creating Python environment: ${KATAGO_FINAL_VENV}"
-  "${system_python}" -m venv "${KATAGO_FINAL_VENV}"
+python_archive="${KATAGO_PYTHON_ARCHIVE:-}"
+if [[ -z "${python_archive}" ]]; then
+  for candidate in \
+    "${KATAGO_LOCAL_ARCHIVE}/python/${KATAGO_PYTHON_RUNTIME_ARCHIVE}" \
+    "${KATAGO_LOCAL_ARCHIVE}/${KATAGO_PYTHON_RUNTIME_ARCHIVE}" \
+    "${KATAGO_ENV_ROOT}/downloads/${KATAGO_PYTHON_RUNTIME_ARCHIVE}"; do
+    if [[ -r "${candidate}" ]]; then
+      python_archive="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${python_archive}" ]]; then
+  python_archive="${KATAGO_ENV_ROOT}/downloads/${KATAGO_PYTHON_RUNTIME_ARCHIVE}"
+  github_fallback_warning "the pinned Python ${KATAGO_PYTHON_RUNTIME_VERSION} runtime"
+  curl --fail --location --retry 3 \
+    --output "${python_archive}.partial" "${KATAGO_PYTHON_RUNTIME_URL}"
+  mv -- "${python_archive}.partial" "${python_archive}"
+fi
+python_archive="$(readlink -e -- "${python_archive}")"
+[[ -r "${python_archive}" ]] || die "pinned Python archive is missing"
+actual_python_sha="$(sha256sum "${python_archive}" | awk '{print $1}')"
+[[ "${actual_python_sha}" == "${KATAGO_PYTHON_RUNTIME_SHA256}" ]] \
+  || die "pinned Python archive SHA-256 mismatch: ${actual_python_sha}"
+
+runtime_marker="${KATAGO_ENV_ROOT}/state/python-runtime.sha256"
+if [[ ! -x "${python_root}/bin/python3" ]] || \
+   [[ "$(cat "${runtime_marker}" 2>/dev/null || true)" != "${KATAGO_PYTHON_RUNTIME_SHA256}" ]]; then
+  if [[ -e "${python_root}" ]]; then
+    log "replacing an unverified Python runtime below the managed environment"
+    find "${python_root}" -mindepth 1 -delete
+    rmdir -- "${python_root}"
+  fi
+  log "extracting pinned Python ${KATAGO_PYTHON_RUNTIME_VERSION} into ${KATAGO_ENV_ROOT}"
+  tar --extract --gzip --file "${python_archive}" --directory "${KATAGO_ENV_ROOT}"
+  [[ -x "${python_root}/bin/python3" ]] \
+    || die "pinned Python archive did not produce python/bin/python3"
+  printf '%s\n' "${KATAGO_PYTHON_RUNTIME_SHA256}" > "${runtime_marker}"
+fi
+actual_python_version="$("${python_root}/bin/python3" -c 'import platform; print(platform.python_version())')"
+[[ "${actual_python_version}" == "${KATAGO_PYTHON_RUNTIME_VERSION}" ]] \
+  || die "Python runtime version ${actual_python_version} != ${KATAGO_PYTHON_RUNTIME_VERSION}"
+
+venv_marker="${KATAGO_ENV_ROOT}/state/venv-python-runtime.sha256"
+if [[ ! -x "${KATAGO_FINAL_VENV}/bin/python" ]] || \
+   [[ "$(cat "${venv_marker}" 2>/dev/null || true)" != "${KATAGO_PYTHON_RUNTIME_SHA256}" ]]; then
+  if [[ -e "${KATAGO_FINAL_VENV}" ]]; then
+    log "replacing a partial or system-Python virtual environment"
+    find "${KATAGO_FINAL_VENV}" -mindepth 1 -delete
+    rmdir -- "${KATAGO_FINAL_VENV}"
+  fi
+  log "creating Python ${KATAGO_PYTHON_RUNTIME_VERSION} environment: ${KATAGO_FINAL_VENV}"
+  "${python_root}/bin/python3" -m venv --copies "${KATAGO_FINAL_VENV}"
+  printf '%s\n' "${KATAGO_PYTHON_RUNTIME_SHA256}" > "${venv_marker}"
 fi
 activate_venv
+if (( runtime_only == 1 )); then
+  python --version
+  python -m ensurepip --version
+  log "pinned Python runtime and virtual environment are ready"
+  exit 0
+fi
 
-requirements="${SCRIPT_DIR}/python-bootstrap-requirements.txt"
+build_requirements="${MIGRATION_ROOT}/autotune/python-build-requirements.txt"
+binary_requirements="${MIGRATION_ROOT}/autotune/python-binary-requirements.txt"
 wheelhouse="${KATAGO_LOCAL_ARCHIVE}/wheels"
+python_packages_ready=0
 
 if [[ -d "${wheelhouse}" ]]; then
-  log "seeding Python bootstrap tools and packages from the local wheel archive"
-  python -m pip install --no-index --find-links "${wheelhouse}" \
-    --upgrade pip setuptools wheel || warn "local wheel archive did not contain every bootstrap tool"
-  python -m pip install --no-index --find-links "${wheelhouse}" \
-    --upgrade --upgrade-strategy eager --requirement "${requirements}" \
-    || warn "local wheel archive did not contain the complete Python stack"
-fi
-
-log "resolving current Python bootstrap releases from domestic mirror: ${KATAGO_PYPI_MIRROR}"
-if ! python -m pip install \
-  --index-url "${KATAGO_PYPI_MIRROR}" \
-  --upgrade --upgrade-strategy eager \
-  pip setuptools wheel \
-  --requirement "${requirements}"; then
-  if [[ "${KATAGO_ALLOW_STALE_BINARY:-0}" != "1" ]]; then
-    die "could not resolve current binary packages from the domestic mirror; configure a proxy, or set KATAGO_ALLOW_STALE_BINARY=1 explicitly after populating archive/wheels"
+  log "installing the fixed Python dependency set from the local wheel archive"
+  if python -m pip install --no-index --find-links "${wheelhouse}" \
+    --upgrade --no-deps --requirement "${build_requirements}" \
+    --requirement "${binary_requirements}"; then
+    python_packages_ready=1
+  else
+    warn "local wheel archive did not contain the complete fixed Python stack"
   fi
-  warn "using locally cached binary packages because KATAGO_ALLOW_STALE_BINARY=1"
 fi
 
-log "current Python bootstrap environment complete; source components are installed next"
+if (( python_packages_ready == 0 )); then
+  log "resolving the fixed Python dependency set from domestic mirror: ${KATAGO_PYPI_MIRROR}"
+  if ! python -m pip install \
+    --index-url "${KATAGO_PYPI_MIRROR}" \
+    --upgrade --no-deps \
+    --requirement "${build_requirements}" \
+    --requirement "${binary_requirements}"; then
+    die "could not resolve the fixed Python packages from the domestic mirror; populate archive/wheels or configure a proxy"
+  fi
+fi
+
+log "pinned Python environment complete; source components are installed next"

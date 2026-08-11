@@ -4,6 +4,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
+# shellcheck source=../environment/python-runtime.lock.sh
+source "${SCRIPT_DIR}/../environment/python-runtime.lock.sh"
 ENV_ROOT="${KATAGO_ENV_ROOT:-${REPO_ROOT}/.final-migration-env}"
 SOURCE_ROOT="${AUTOTUNE_SOURCE_ROOT:-${ENV_ROOT}/third_party}"
 OUTPUT_ROOT="${AUTOTUNE_OUTPUT_ROOT:-${ENV_ROOT}/autotune-distributions}"
@@ -18,9 +20,7 @@ CORPUS_MANIFEST="${AUTOTUNE_CORPUS_MANIFEST:-}"
 CORPUS_PYTHON="${AUTOTUNE_CORPUS_PYTHON:-${ENV_ROOT}/venv/bin/python}"
 CORPUS_OUTPUT_ROOT="${AUTOTUNE_CORPUS_OUTPUT_ROOT:-/workspace/trainingdata/accuracy}"
 TRAINING_DATA_CACHE="${AUTOTUNE_TRAINING_DATA_CACHE:-/workspace/trainingdata}"
-PYTHON_ARCHIVE="${AUTOTUNE_PYTHON_ARCHIVE:-${ENV_ROOT}/downloads/cpython-3.12.13+20260807-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz}"
-PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.12.13%2B20260807-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
-PYTHON_SHA256='506191be3ee7bd190a8834dcdc1b3bc70aab50608deccc711935aa007239cabd'
+PYTHON_ARCHIVE="${AUTOTUNE_PYTHON_ARCHIVE:-${ENV_ROOT}/downloads/${KATAGO_PYTHON_RUNTIME_ARCHIVE}}"
 PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 DEFAULT_SEED_WHEELS="${ENV_ROOT}/distributions/20260807T205459Z/wheels:${ENV_ROOT}/autotune-wheel-seed"
 SEED_WHEELS="${AUTOTUNE_SEED_WHEELS:-${DEFAULT_SEED_WHEELS}}"
@@ -66,10 +66,11 @@ mkdir -p -- "${OUTPUT_ROOT}" "$(dirname -- "${PYTHON_ARCHIVE}")"
 
 if [[ ! -r "${PYTHON_ARCHIVE}" ]]; then
   log "downloading the pinned Python source-independent runtime for release construction"
-  curl --fail --location --retry 3 --output "${PYTHON_ARCHIVE}.partial" "${PYTHON_URL}"
+  curl --fail --location --retry 3 \
+    --output "${PYTHON_ARCHIVE}.partial" "${KATAGO_PYTHON_RUNTIME_URL}"
   mv -- "${PYTHON_ARCHIVE}.partial" "${PYTHON_ARCHIVE}"
 fi
-[[ "$(sha256sum "${PYTHON_ARCHIVE}" | awk '{print $1}')" == "${PYTHON_SHA256}" ]] \
+[[ "$(sha256sum "${PYTHON_ARCHIVE}" | awk '{print $1}')" == "${KATAGO_PYTHON_RUNTIME_SHA256}" ]] \
   || die "Python archive checksum mismatch"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

@@ -34,13 +34,16 @@ sed -n -E 's/^(PRETTY_NAME|VERSION_ID)=/\0/p' /etc/os-release
 uname -a
 
 printf '\n[commands]\n'
-for command_name in gcc g++ cmake ninja python3 git nvcc nvidia-smi nsys ncu; do
+for command_name in gcc g++ cmake ninja git nvcc nvidia-smi nsys ncu; do
   check_command "${command_name}"
 done
 gcc --version 2>/dev/null | head -n 1 || true
 cmake --version 2>/dev/null | head -n 1 || true
 ninja --version 2>/dev/null || true
-python3 --version 2>/dev/null || true
+"${KATAGO_FINAL_VENV}/bin/python" --version 2>/dev/null || {
+  printf 'FAIL pinned Python environment missing: %s\n' "${KATAGO_FINAL_VENV}"
+  failures=$((failures + 1))
+}
 nvcc --version 2>/dev/null | tail -n 1 || true
 nsys --version 2>/dev/null | head -n 1 || true
 ncu --version 2>/dev/null | tail -n 1 || true
@@ -63,7 +66,7 @@ dpkg-query -W -f='${binary:Package}\t${Version}\n' 2>/dev/null \
   | grep -E '^(cuda-toolkit|cuda-compiler|libcublas|libcudnn|nsight|zlib1g-dev)' \
   | sort || true
 required_packages=(
-  build-essential cmake ninja-build git python3-dev python3-venv zlib1g-dev
+  build-essential cmake ninja-build git zlib1g-dev
   libzip-dev libcudnn9-dev-cuda-13
 )
 for package_name in "${required_packages[@]}"; do

@@ -140,8 +140,8 @@ Usage: ./setup.sh [COMMAND]
 
 With no command, configure the source-development environment without changing
 system packages, then prepare the local autotune runtime. The host must already
-provide the base compiler tools, CUDA, cuDNN, Python 3, and zlib development
-files. Managed dependencies are written below .final-migration-env.
+provide the base compiler tools, CUDA, cuDNN, and zlib development files.
+Python is pinned and installed below .final-migration-env.
 
 Commands:
 
@@ -159,9 +159,7 @@ EOF
   }
 
   install_source_environment() {
-    "${SCRIPT_DIR}/final-migration/environment/acquire-third-party.sh"
-    "${SCRIPT_DIR}/final-migration/environment/install-python.sh"
-    "${SCRIPT_DIR}/final-migration/environment/build-third-party.sh"
+    "${ENV_SETUP}" install
   }
 
   source_command="${1:-all}"

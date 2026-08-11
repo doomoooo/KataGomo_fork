@@ -3,7 +3,7 @@
 Use `setup.sh` as the public entry point.
 
 ```text
-setup.sh install   system + Python + latest locally built source dependencies
+setup.sh install   pinned private Python + latest locally built dependencies
 setup.sh audit     version/library/path audit (no installation)
 setup.sh verify    compile/import smokes for third-party dependencies
 setup.sh build     build the KataGo CUDA backend
@@ -23,18 +23,11 @@ Configuration variables:
 - `KATAGO_FINAL_VENV`: isolated migration venv override. Ambient
   `KATAGO_VENV` is deliberately ignored so the setup cannot modify an active
   optimization session's environment.
-- `KATAGO_SYSTEM_PYTHON`: interpreter used only to create the isolated venv;
-  defaults to `/usr/bin/python3` rather than an ambient activated environment.
+- `KATAGO_PYTHON_ARCHIVE`: optional local override for the locked
+  python-build-standalone archive. The archive's fixed SHA-256 is always
+  checked before extraction.
 - `KATAGO_THIRD_PARTY_ROOT`: override managed source location.
 - `KATAGO_INCLUDE_RESEARCH=1`: also acquire reference-only repositories.
-- `KATAGO_ALLOW_STALE_BINARY=1`: explicitly accept a fully local binary seed
-  when the mirror cannot be reached; normal development requires a latest
-  version check.
-- `KATAGO_INSTALL_DRIVER=0`: forbid driver installation on a fresh host.
-- `KATAGO_CUDA_TOOLKIT_PACKAGE`, `KATAGO_CUDNN_PACKAGE`,
-  `KATAGO_NSIGHT_SYSTEMS_PACKAGE`, `KATAGO_NSIGHT_COMPUTE_PACKAGE`, and
-  `KATAGO_DRIVER_PACKAGE`: explicit compatibility overrides. Defaults resolve
-  current packages from the NVIDIA repository.
 - `KATAGO_BUILD_JOBS`: explicit parallel compile override. By default the
   scripts take the lower of `nproc` and a memory-aware limit: 75% of current
   `MemAvailable`/cgroup headroom divided by 2 GiB per job. This leaves room for
@@ -76,16 +69,16 @@ TVM-FFI's independent HEAD can compile successfully while breaking TileLang's
 reflection registry at import time. The compatibility pin must be revalidated
 when either top-level project's metadata constraint changes.
 
-On a fresh machine the bootstrap reads `/etc/os-release` and uses the matching
-NVIDIA Ubuntu repository (for example `ubuntu2204` or `ubuntu2404`); it does not
-hard-code one Ubuntu release. CUDA/cuDNN/profiler meta packages resolve their
-current repository versions. An already operational driver is deliberately
-left untouched. On a shared optimization host, use explicit package overrides
-instead of changing its compiler or driver underneath active sessions.
+The public setup never invokes APT, `sudo`, or a driver installer. A source
+checkout requires existing compiler, CUDA, cuDNN, and zlib development files.
+It obtains the locked Python 3.12.13 standalone archive from the local archive
+first and otherwise from its recorded upstream URL, then creates the venv with
+that interpreter. The source-complete release tar carries the same Python
+archive and all CUDA/cuDNN/source payloads, so its setup is fully offline.
 
-The distributable path is separate from development bootstrap. It never uses
-APT: it bundles the compiled executable, a private ELF loader and user-space
-runtime libraries in a plain tar. `setup.sh extract ARCHIVE PREFIX` accepts only
+The distributable path is separate from source development setup. It bundles
+the compiled executable, a private ELF loader and user-space runtime libraries
+in a plain tar. `setup.sh extract ARCHIVE PREFIX` accepts only
 an empty, non-system prefix and all verification runs in place. Python wheels
 are archival/optional and require the recorded Python ABI; KataGo itself has no
 Python runtime dependency.

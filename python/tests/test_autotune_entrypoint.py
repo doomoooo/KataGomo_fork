@@ -41,6 +41,29 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn("--refresh-latest", setup.read_text())
         self.assertNotIn("bootstrap-ubuntu.sh", setup.read_text())
         self.assertNotIn("sudo", setup.read_text())
+        installer = (
+            repo / "final-migration" / "environment" / "install-python.sh"
+        ).read_text()
+        environment_setup = (
+            repo / "final-migration" / "environment" / "setup.sh"
+        ).read_text()
+        audit = (
+            repo / "final-migration" / "environment" /
+            "audit-environment.sh"
+        ).read_text()
+        runtime_lock = (
+            repo / "final-migration" / "environment" /
+            "python-runtime.lock.sh"
+        ).read_text()
+        self.assertNotIn("/usr/bin/python", installer)
+        self.assertNotIn("KATAGO_SYSTEM_PYTHON", installer)
+        self.assertIn("python-runtime.lock.sh", installer)
+        self.assertIn('"${python_root}/bin/python3" -m venv --copies', installer)
+        self.assertIn("python -m ensurepip --version", installer)
+        self.assertNotIn("bootstrap-ubuntu.sh", environment_setup)
+        self.assertNotIn("python3-venv", audit)
+        self.assertIn('KATAGO_PYTHON_RUNTIME_VERSION="3.12.13"', runtime_lock)
+        self.assertIn("KATAGO_PYTHON_RUNTIME_SHA256", runtime_lock)
 
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()

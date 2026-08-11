@@ -33,7 +33,8 @@ scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
 直接 clone 源码仓库时，仓库根目录也提供同名入口。此时 `./setup.sh` 会在
 `.final-migration-env` 下编译当前依赖源码，并使用宿主机已有的 CUDA、cuDNN、
-编译器、Python 3 和 zlib 开发文件。它不会调用 `sudo` 或修改系统软件包。
+编译器和 zlib 开发文件。它不会调用 `sudo` 或修改系统软件包，Python 3.12.13
+固定安装在 `.final-migration-env` 中。
 随后准备 autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
 `KATAGO_MODEL`，缺失时
 才从 KataGo 官方 GitHub release 下载固定模型；语料从当前 KataGo archive
