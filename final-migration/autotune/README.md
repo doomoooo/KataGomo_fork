@@ -19,7 +19,14 @@ After extracting the release in a writable persistent directory:
 ```bash
 ./setup.sh
 ./run-autotune.sh --device 0
+./run.sh
 ```
+
+`run.sh` selects the certified plan for the requested CUDA Runtime device,
+verifies the plan/model/measured-binary identity, and starts `katago gtp` with
+the exact batch, two inference lanes, batch-aware dispatch, asynchronous event
+pipeline, and the default search-thread budget. It does not reuse scan-host
+paths from the plan.
 
 The host baseline is Linux x86-64 with glibc 2.28 or newer, an NVIDIA driver
 compatible with CUDA 13.2, and the small OS bootstrap set checked by `setup.sh`

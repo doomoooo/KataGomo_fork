@@ -39,6 +39,7 @@ cp -- "${SCRIPT_DIR}/python-bootstrap-requirements.txt" "${metadata_dir}/python-
 cp -- "${source_build}"/wheels/*.whl "${wheelhouse}/"
 cp -- "${katago_binary}" "${bundle}/libexec/katago"
 cp -- "${SCRIPT_DIR}/runtime-wrapper.sh" "${bundle}/bin/katago"
+cp -- "${REPO_ROOT}/run.sh" "${bundle}/run.sh"
 cp -- "${SCRIPT_DIR}/verify-prebuilt.sh" "${bundle}/verify.sh"
 cp -- "${SCRIPT_DIR}/deploy-prebuilt.sh" "${bundle}/installer/deploy-prebuilt.sh"
 cp -- "${SCRIPT_DIR}/install-tar.sh" "${bundle}/installer/install-tar.sh"
@@ -48,6 +49,7 @@ cp -- "${REPO_ROOT}/final-migration/README.md" "${bundle}/FORK-README.md"
 cp -- "${REPO_ROOT}/final-migration/README.zh-CN.md" "${bundle}/FORK-README.zh-CN.md"
 cp -a -- "${REPO_ROOT}/final-migration/plans" "${bundle}/plans"
 chmod 0755 "${bundle}/bin/katago" "${bundle}/verify.sh" \
+  "${bundle}/run.sh" \
   "${bundle}/installer/deploy-prebuilt.sh" "${bundle}/installer/install-tar.sh"
 
 copy_latest_record() {

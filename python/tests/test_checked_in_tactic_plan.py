@@ -11,7 +11,7 @@ EXPECTED_PLANS = {
         "path": pathlib.Path(
             "final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json"
         ),
-        "file_sha256": "e089cd8ef2ca65eadacb4e5014f39622de00c50bd99df22424612e31ce795a94",
+        "file_sha256": "29559e4ea40d9d117dbf54f82173b03d5833d8f3ebf55999e42dd7d66dd14912",
         "architecture": "sm89",
         "compute_capability": [8, 9],
         "batch": 12,
@@ -21,7 +21,7 @@ EXPECTED_PLANS = {
         "path": pathlib.Path(
             "final-migration/plans/sm120/rtx5080-b16-s2/best-tactic-plan.json"
         ),
-        "file_sha256": "db3d0777b69e4d646c28154b125768eee1c6049c21577c020f824d5c181f4c16",
+        "file_sha256": "a5f93fbf012baf6170f3d9a65eb44ebf67051b4e77a6fec1c74c5a60fe2385e3",
         "architecture": "sm120",
         "compute_capability": [12, 0],
         "batch": 16,
@@ -58,6 +58,20 @@ class CheckedInTacticPlanTests(unittest.TestCase):
                 )
 
                 plan = json.loads(raw)
+                absolute_paths: list[str] = []
+
+                def collect_absolute_paths(value, path=("$",)) -> None:
+                    if isinstance(value, dict):
+                        for key, item in value.items():
+                            collect_absolute_paths(item, (*path, str(key)))
+                    elif isinstance(value, list):
+                        for index, item in enumerate(value):
+                            collect_absolute_paths(item, (*path, str(index)))
+                    elif isinstance(value, str) and value.startswith("/"):
+                        absolute_paths.append(".".join(path))
+
+                collect_absolute_paths(plan)
+                self.assertEqual(absolute_paths, [])
                 self.assertEqual(plan["schema"], 1)
                 self.assertEqual(plan["kind"], "cuda-tactic-plan")
                 self.assertEqual(plan["status"], "complete_long_stable")

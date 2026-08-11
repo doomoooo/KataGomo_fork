@@ -666,6 +666,10 @@ def workflow_accuracy(
         "--batches", str(best_batch),
         "--output", str(out / "best-tactic-plan.json"),
     ], cwd=repo, env=env)
+    best_plan = out / "best-tactic-plan.json"
+    (out / "SHA256SUMS").write_text(
+        f"{sha256(best_plan)}  best-tactic-plan.json\n"
+    )
 
 
 def main() -> int:

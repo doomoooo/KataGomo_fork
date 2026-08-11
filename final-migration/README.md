@@ -186,34 +186,29 @@ idle state cannot authorize an underfilled launch on a busy GPU.
 
 ## Running GTP
 
-Use the absolute path of a compatible checked-in plan. For a single GPU with
-two streams:
+After setup and autotune, start GTP on CUDA Runtime device 0 with:
 
-```cfg
-cudaTacticPlanFile = /path/to/final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
-cudaTacticPlanBatch = 12
-
-numNNServerThreadsPerModel = 2
-cudaDeviceToUseThread0 = 0
-cudaDeviceToUseThread1 = 0
-
-cudaAsyncInferPipeline = true
-cudaEventPipelineUseGraph = false
+```bash
+./run.sh
 ```
 
-For two GPUs:
+The launcher detects the receiver, selects a compatible certified plan, checks
+the model, plan file, and measured binary hashes, and supplies exact batch,
+two-lane device mapping, batch-aware dispatch, the asynchronous event pipeline,
+and a search-thread budget. It prefers the measured binary hash; a rebuilt
+binary is accepted automatically only when a retained result proves the same
+target, batch, and complete apply mapping. Backend activation remains
+fail-closed. Select another CUDA Runtime ordinal or override an input when
+needed:
 
-```cfg
-numNNServerThreadsPerModel = 4
-cudaDeviceToUseThread0 = 0
-cudaDeviceToUseThread1 = 0
-cudaDeviceToUseThread2 = 1
-cudaDeviceToUseThread3 = 1
+```bash
+./run.sh --device 1
+./run.sh --model /data/model.bin.gz --config /data/gtp.cfg
 ```
 
-The loader supplies and validates the exact batch, full-board shape,
-FP16/NHWC, maximum-batch-only warmup, batch-aware dispatch, and every tactic
-override. Conflicting user configuration is rejected.
+Use `./run.sh --help` for explicit plan/binary overrides and GTP argument
+forwarding. The loader still validates exact batch, full-board shape,
+FP16/NHWC, maximum-batch-only warmup, and every tactic override.
 
 A starting search-thread budget is:
 

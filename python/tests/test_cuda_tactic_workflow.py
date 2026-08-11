@@ -22,6 +22,7 @@ from cuda_tactic_workflow import (  # noqa: E402
     SM89_RUNTIME_CONFIG_KEYS,
     SM120_RUNTIME_CONFIG_KEYS,
     _compile_metadata,
+    absolute_paths_in_json,
     build_plan,
     build_parser,
     canonical_architecture,
@@ -789,6 +790,12 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             plan = build_plan(result_paths, space_path, SM89_FAMILIES, [1, 13])
             self.assertTrue(plan["ready_for_scan_bypass"])
             self.assertTrue(plan["production_ready"])
+            self.assertEqual(absolute_paths_in_json(plan), [])
+            self.assertNotIn("provenance_snapshots", plan["reproducibility"])
+            self.assertNotIn("path", plan["source_results"][0])
+            self.assertNotIn(
+                "command", plan["families"]["fa4"]["batches"]["13"]
+            )
             self.assertEqual(
                 plan["target"]["cuda_device_capabilities_at_scan"][0]
                     ["multiProcessorCount"],

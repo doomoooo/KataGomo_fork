@@ -160,32 +160,27 @@ GPU 空闲只允许它自己的不足量逻辑请求组启动。另一张卡的 
 
 ## 运行 GTP
 
-使用与目标兼容的已提交 plan 绝对路径。单卡双 stream：
+完成 setup 和 autotune 后，在 CUDA Runtime device 0 上启动 GTP：
 
-```cfg
-cudaTacticPlanFile = /path/to/final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json
-cudaTacticPlanBatch = 12
-
-numNNServerThreadsPerModel = 2
-cudaDeviceToUseThread0 = 0
-cudaDeviceToUseThread1 = 0
-
-cudaAsyncInferPipeline = true
-cudaEventPipelineUseGraph = false
+```bash
+./run.sh
 ```
 
-双卡：
+launcher 会检测接收设备、选择兼容的已认证 plan，校验模型、plan 文件和被测
+binary 的 hash，并自动设置精确 batch、双 lane 设备映射、batch-aware dispatch、
+异步 event pipeline 和搜索线程预算。它优先使用被测 binary hash；只有保留的
+result 能证明 target、batch 和完整 apply 映射相同，才会自动接受重编译 binary，
+backend activation 仍然 fail-closed。需要时可以选择其他 CUDA Runtime ordinal
+或显式覆盖输入：
 
-```cfg
-numNNServerThreadsPerModel = 4
-cudaDeviceToUseThread0 = 0
-cudaDeviceToUseThread1 = 0
-cudaDeviceToUseThread2 = 1
-cudaDeviceToUseThread3 = 1
+```bash
+./run.sh --device 1
+./run.sh --model /data/model.bin.gz --config /data/gtp.cfg
 ```
 
-loader 提供并校验精确 batch、full-board shape、FP16/NHWC、只 warmup 最大
-batch、batch-aware dispatch 和全部 tactic override。冲突的用户配置会被拒绝。
+`./run.sh --help` 列出显式 plan/binary 覆盖和 GTP 参数透传方法。loader 仍然
+校验精确 batch、full-board shape、FP16/NHWC、只 warmup 最大 batch 和全部
+tactic override。
 
 搜索线程数量可从以下公式开始：
 

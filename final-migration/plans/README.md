@@ -13,6 +13,11 @@ They are not universal defaults. The runtime validates the receiver and fails
 at startup on a mismatch. The CUDA device ordinal recorded at scan time is
 provenance only and is not applied on the receiver.
 
+Production plans contain no scan-host absolute paths. Full commands and
+environment snapshots stay in content-addressed scan records; plans retain
+only portable identifiers, hashes, measurement/correctness summaries, and the
+runtime apply mapping.
+
 Current assets:
 
 - `sm89/rtx4090d-b12-s2/best-tactic-plan.json`: certified RTX 4090 D, exact

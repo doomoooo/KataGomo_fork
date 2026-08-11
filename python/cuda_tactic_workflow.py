@@ -3646,13 +3646,127 @@ def _space_identity(space: dict[str, object]) -> dict[str, object]:
 
 def _result_file_metadata(path: pathlib.Path, payload: dict[str, object]) -> dict[str, object]:
     return {
-        "path": str(path.resolve()),
         "name": path.name,
         "sha256": sha256_file(path),
         "family": payload.get("family"),
         "rows": len(payload.get("rows", [])) if isinstance(payload.get("rows"), list) else 0,
         "finished_utc": payload.get("finished_utc"),
     }
+
+
+def _portable_correctness_evidence(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    # The report content hashes make the evidence addressable. Its producer
+    # path is scan-host metadata and must never become a receiver dependency.
+    return {
+        key: item for key, item in value.items()
+        if key != "comparison"
+    }
+
+
+def absolute_paths_in_json(value: object, path: str = "$") -> list[str]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.extend(absolute_paths_in_json(item, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(absolute_paths_in_json(item, f"{path}[{index}]"))
+    elif isinstance(value, str) and pathlib.PurePosixPath(value).is_absolute():
+        found.append(path)
+    return found
+
+
+def portable_plan_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Remove scan-host state and derive a location-independent plan ID."""
+    plan = json.loads(canonical_json(payload))
+    families = plan.get("families", {})
+    if isinstance(families, dict):
+        for family_entry in families.values():
+            if not isinstance(family_entry, dict):
+                continue
+            family_entry.pop("space_path_at_scan", None)
+            family_batches = family_entry.get("batches", {})
+            if not isinstance(family_batches, dict):
+                continue
+            for batch_entry in family_batches.values():
+                if not isinstance(batch_entry, dict):
+                    continue
+                batch_entry.pop("command", None)
+                batch_entry.pop("source_result_path_at_scan", None)
+                batch_entry["correctness"] = _portable_correctness_evidence(
+                    batch_entry.get("correctness")
+                )
+
+    final_joint = plan.get("final_joint", {})
+    if isinstance(final_joint, dict):
+        for batch_entry in final_joint.values():
+            if not isinstance(batch_entry, dict):
+                continue
+            batch_entry.pop("command", None)
+            batch_entry["correctness"] = _portable_correctness_evidence(
+                batch_entry.get("correctness")
+            )
+
+    source_results = plan.get("source_results", [])
+    if isinstance(source_results, list):
+        for result in source_results:
+            if isinstance(result, dict):
+                result.pop("path", None)
+
+    plan["reproducibility"] = {
+        "notes": [
+            "Full commands and environment snapshots remain in the content-addressed scan results, not in this runtime plan.",
+            "The receiving device must match architecture/GPU class and stream topology; producer device ordinal may change.",
+        ],
+    }
+
+    batches = [int(item) for item in plan.get("batches", [])]
+    family_identity: dict[str, object] = {}
+    if isinstance(families, dict):
+        for family, family_entry in families.items():
+            if not isinstance(family_entry, dict):
+                continue
+            family_batches = family_entry.get("batches", {})
+            family_identity[str(family)] = {
+                "space_sha256": family_entry.get("space_sha256"),
+                "selected": {
+                    batch: (
+                        family_batches.get(str(batch), {}).get("candidate_id")
+                        if isinstance(family_batches, dict) and
+                        isinstance(family_batches.get(str(batch)), dict)
+                        else None
+                    )
+                    for batch in batches
+                },
+            }
+    closure = plan.get("positive_history_closure", {})
+    plan_identity = {
+        "target": plan.get("target"),
+        "positive_history_contract_sha256": (
+            closure.get("contract_sha256")
+            if isinstance(closure, dict) else None
+        ),
+        "batches": batches,
+        "families": family_identity,
+        "final_joint": final_joint,
+    }
+    plan_hash = sha256_bytes(canonical_json(plan_identity).encode("utf-8"))
+    target = plan.get("target", {})
+    if not isinstance(target, dict):
+        raise ValueError("plan target is not an object")
+    plan["plan_sha256"] = plan_hash
+    plan["plan_id"] = (
+        f"{target.get('architecture')}-{target.get('gpu_class')}-{plan_hash[:16]}"
+    )
+    absolute_paths = absolute_paths_in_json(plan)
+    if absolute_paths:
+        raise ValueError(
+            "portable plan contains absolute paths: " +
+            ", ".join(absolute_paths[:8])
+        )
+    return plan
 
 
 def _row_key(family: str, row: dict[str, object]) -> tuple[str, int, str]:
@@ -3700,7 +3814,6 @@ def build_plan(
     expected_streams = int(space.get("streams", -1))
     rows_by_key: dict[tuple[str, int, str], dict[str, object]] = {}
     result_metadata: list[dict[str, object]] = []
-    provenance: list[dict[str, object]] = []
     model_hashes: set[str] = set()
     config_hashes: set[str] = set()
     target_devices: set[int] = set()
@@ -3728,8 +3841,6 @@ def build_plan(
                 model_hashes.add(str(identity["model_sha256"]))
             if identity.get("config_sha256"):
                 config_hashes.add(str(identity["config_sha256"]))
-        if isinstance(payload.get("provenance"), dict):
-            provenance.append(payload["provenance"])
         payload_family = payload.get("family")
         # A multi-family scan records an empty top-level family.  Treat that
         # the same as null so its per-row family labels are still consumed.
@@ -3857,15 +3968,14 @@ def build_plan(
                 "measurement_relative_spread": row.get("measurement_relative_spread"),
                 "history_base_overrides": row.get("history_base_overrides"),
                 "history_accumulated_overrides": row.get("history_accumulated_overrides"),
-                "correctness": row.get("correctness"),
+                "correctness": _portable_correctness_evidence(
+                    row.get("correctness")
+                ),
                 "binary_sha256": row.get("binary_sha256"),
-                "command": row.get("command"),
                 "source_result": pathlib.Path(str(row["_source_result"])).name,
-                "source_result_path_at_scan": row["_source_result"],
             }
         selected_families[family] = {
             "space_sha256": sha256_file(space_path),
-            "space_path_at_scan": str(space_path.resolve()),
             "batches": family_batches,
         }
         coverage[family] = family_coverage
@@ -3916,8 +4026,9 @@ def build_plan(
             "candidate_id": row.get("candidate_id"),
             "accumulated_overrides": row.get("history_accumulated_overrides"),
             "binary_sha256": row.get("binary_sha256"),
-            "correctness": row.get("correctness"),
-            "command": row.get("command"),
+            "correctness": _portable_correctness_evidence(
+                row.get("correctness")
+            ),
             "source_result": pathlib.Path(str(row["_source_result"])).name,
         }
     if len(model_hashes) > 1 or len(config_hashes) > 1:
@@ -3998,7 +4109,7 @@ def build_plan(
         entry["correctness"].get("status") == "passed"
         for entry in final_joint.values()
     )
-    return {
+    return portable_plan_payload({
         "schema": SCHEMA,
         "kind": PLAN_KIND,
         "plan_id": f"{architecture}-{gpu_class}-{plan_hash[:16]}",
@@ -4025,12 +4136,9 @@ def build_plan(
         "identity_missing": identity_missing,
         "source_results": result_metadata,
         "reproducibility": {
-            "provenance_snapshots": provenance,
             "notes": [
-                "Environment and tool versions are evidence and reproducibility metadata, not strict equality gates.",
-                "Discovery may be partitioned across identical GPU-class devices; every local ordinal is recorded.",
-                "The receiving device must match architecture/GPU class and stream topology; device ordinal may change.",
-                "Run correctness replay before production use unless every selected row carries correctness.status=passed.",
+                "Full commands and environment snapshots remain in the content-addressed scan results, not in this runtime plan.",
+                "The receiving device must match architecture/GPU class and stream topology; producer device ordinal may change.",
             ],
         },
         "apply": {
@@ -4043,7 +4151,7 @@ def build_plan(
                 for batch in requested_batches
             },
         },
-    }
+    })
 
 
 def render_plan_overrides(
