@@ -17,6 +17,12 @@ by the production path. These changes are not part of upstream KataGo.
 Extract the source-complete tar in a persistent writable directory, then use
 the certified plan already carried for the selected GPU:
 
+- NVIDIA GeForce RTX 4090 D: B12, two streams
+- NVIDIA GeForce RTX 5080: B16, two streams
+
+The CUDA product name is the plan registry key. Other GPU models must first
+run autotune to produce their own plan.
+
 ```bash
 ./setup.sh
 ./build-for-plan.sh --device 0
@@ -24,10 +30,10 @@ the certified plan already carried for the selected GPU:
 ```
 
 `setup.sh` installs only below the extracted directory. `build-for-plan.sh`
-finds the one bundled plan whose exact GPU product and capability fingerprint
-matches CUDA Runtime device 0, builds only that plan's selected artifacts, and
-does not run autotune. `run.sh` verifies the resulting manifest and starts
-KataGo GTP with the certified batch, streams, scheduler, and CUDA pipeline.
+looks up CUDA Runtime device 0 by product name, validates that plan, builds
+only its selected artifacts, and does not run autotune. `run.sh` verifies the
+resulting manifest and starts KataGo GTP with the certified batch, streams,
+scheduler, and CUDA pipeline.
 
 To search and certify a new plan instead:
 
@@ -57,16 +63,17 @@ To search and certify a new plan instead:
 This is the only performance summary in the README. All rows use the same
 70M-parameter model, exact 19x19, FP16, two inference streams, and physical
 `launched_batches * batch / wall_time`. The first two rows are accepted
-historical RTX 4090 baselines; the other rows are the current per-GPU hardware
-certificates. Because the GPU model and host differ, the table is a reference,
-not a normalized speedup claim.
+historical RTX 4090 baselines. The RTX 5080 official row is a fresh B4-B32 scan;
+the plan rows are current hardware certificates. Because the GPU model and host
+differ, the table is a reference, not a normalized speedup claim.
 
 | Backend | GPU | Batch | Physical nnEval/s | Evidence |
 | --- | --- | ---: | ---: | --- |
-| Official CUDA baseline | RTX 4090 | 13 | 1876.270 | Historical accepted baseline |
-| TensorRT baseline | RTX 4090 | 13 | 2542.940 | Historical accepted baseline |
-| Checked-in CUDA plan | RTX 4090 D | 12 | 3110.690824 | [plan certificate](plans/sm89/rtx4090d-b12-s2/README.md) |
-| Checked-in CUDA plan | RTX 5080 | 16 | 2836.211933 | [plan certificate](plans/sm120/rtx5080-b16-s2/README.md) |
+| Official CUDA baseline | RTX 4090 | 13 | 1876.3 | Historical accepted baseline |
+| TensorRT baseline | RTX 4090 | 13 | 2542.9 | Historical accepted baseline |
+| Checked-in CUDA plan | RTX 4090 D | 12 | 3110.7 | [plan certificate](plans/sm89/rtx4090d-b12-s2/README.md) |
+| Official CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 scan](records/rtx5080-official-cuda-baseline-20260811.md) |
+| Checked-in CUDA plan | RTX 5080 | 16 | 2836.2 | [plan certificate](plans/sm120/rtx5080-b16-s2/README.md) |
 
 TensorRT is shown only as a historical comparison. It is not included in the
 environment, build, runtime, or release artifacts.
@@ -222,11 +229,10 @@ autotune, use:
 ./run.sh
 ```
 
-`build-for-plan.sh` validates the receiver against the plan, including the
-exact GPU product name, compute capability, SM count, global memory, L2,
-memory-bus width, execution limits, and copy/concurrency capabilities. It then
-restricts generation to the plan's one batch, selected tactics, and recursive
-artifact dependencies before compiling KataGo.
+`build-for-plan.sh` uses the CUDA product name as the unique registry key, then
+validates the selected plan's receiver contract. It restricts generation to
+the plan's one batch, selected tactics, and recursive artifact dependencies
+before compiling KataGo.
 It does not run batch prescan, candidate benchmarks, refinement, the long gate,
 or accuracy replay. The resulting binary, artifact bundle, and restricted
 space are content-hashed in `plan-build.json`; `run.sh` verifies that manifest

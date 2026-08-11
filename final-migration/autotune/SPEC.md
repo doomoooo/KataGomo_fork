@@ -39,10 +39,9 @@ main TileLang source revision cannot silently rewrite an accepted candidate.
 ## 2. Architecture selection and scan
 
 Device selection is by CUDA ordinal after `CUDA_VISIBLE_DEVICES` remapping.
-The CUDA Runtime supplies the product name, compute capability and resource
-properties. The product name, global-memory capacity, SM count, L2 and memory
-bus, execution limits, async-engine count and concurrent-kernel capability must
-match the plan exactly. Only the historical CUDA ordinal is provenance.
+The CUDA Runtime product name is the plan registry's unique lookup key. After
+lookup, the receiver's recorded capability and resource contract must match
+the selected plan exactly. Only the historical CUDA ordinal is provenance.
 
 Supported mappings:
 

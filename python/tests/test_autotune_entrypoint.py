@@ -16,6 +16,14 @@ assert SPEC is not None and SPEC.loader is not None
 AUTOTUNE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(AUTOTUNE)
 
+BUILD_FOR_PLAN_PATH = AUTOTUNE_PATH.parent / "build_for_plan.py"
+BUILD_FOR_PLAN_SPEC = importlib.util.spec_from_file_location(
+    "final_migration_build_for_plan", BUILD_FOR_PLAN_PATH,
+)
+assert BUILD_FOR_PLAN_SPEC is not None and BUILD_FOR_PLAN_SPEC.loader is not None
+BUILD_FOR_PLAN = importlib.util.module_from_spec(BUILD_FOR_PLAN_SPEC)
+BUILD_FOR_PLAN_SPEC.loader.exec_module(BUILD_FOR_PLAN)
+
 
 class AutotuneEntrypointTests(unittest.TestCase):
     def test_both_architectures_use_one_external_workflow(self) -> None:
@@ -52,9 +60,10 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('"${bundle}/README.md"', package)
         self.assertIn('"${bundle}/README.zh-CN.md"', package)
         self.assertIn('"${bundle}/RUNTIME.md"', package)
+        self.assertIn('"${bundle}/records/"', package)
+        self.assertIn("find payload patches metadata plans records", package)
         self.assertIn('"${REPO_ROOT}/build-for-plan.sh"', package)
         self.assertIn('"${SCRIPT_DIR}/build_for_plan.py"', package)
-        self.assertIn("find payload patches metadata plans", package)
 
     def test_build_only_path_uses_prepare_without_benchmark_phases(self) -> None:
         helper = (AUTOTUNE_PATH.parent / "build_for_plan.py").read_text()
@@ -63,6 +72,33 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn('"discovery"', helper)
         self.assertNotIn('"gate"', helper)
         self.assertNotIn('"accuracy"', helper)
+
+    def test_plan_registry_uses_cuda_product_as_unique_key(self) -> None:
+        def plan(name: str) -> dict[str, object]:
+            return {
+                "target": {
+                    "cuda_device_capabilities_at_scan": [{"name": name}],
+                },
+            }
+
+        selected = BUILD_FOR_PLAN.select_product_plan(
+            [(pathlib.Path("5080.json"), plan("NVIDIA GeForce RTX 5080"))],
+            "NVIDIA GeForce RTX 5080",
+        )
+        self.assertEqual(selected[0], pathlib.Path("5080.json"))
+        with self.assertRaisesRegex(RuntimeError, "no bundled plan"):
+            BUILD_FOR_PLAN.select_product_plan(
+                [(pathlib.Path("5080.json"), plan("NVIDIA GeForce RTX 5080"))],
+                "NVIDIA GeForce RTX 5090 D",
+            )
+        with self.assertRaisesRegex(RuntimeError, "multiple plan entries"):
+            BUILD_FOR_PLAN.select_product_plan(
+                [
+                    (pathlib.Path("a.json"), plan("NVIDIA GeForce RTX 5080")),
+                    (pathlib.Path("b.json"), plan("NVIDIA GeForce RTX 5080")),
+                ],
+                "NVIDIA GeForce RTX 5080",
+            )
 
     def test_parse_batch_set(self) -> None:
         self.assertEqual(AUTOTUNE.parse_batch_set("4-6,8,6"), [4, 5, 6, 8])

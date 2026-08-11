@@ -129,11 +129,11 @@ config="$(readlink -m -- "${config}")"
 workflow="${repo}/python/cuda_tactic_workflow.py"
 declare -a plan_roots=()
 for candidate in \
-  "${prefix:+${prefix}/results}" \
   "${SCRIPT_DIR}/final-migration/plans" \
   "${SCRIPT_DIR}/plans" \
   "${prefix:+${prefix}/plans}" \
-  "${prefix:+${prefix}/repo/final-migration/plans}"; do
+  "${prefix:+${prefix}/repo/final-migration/plans}" \
+  "${prefix:+${prefix}/results}"; do
   [[ -n "${candidate}" && -d "${candidate}" ]] && plan_roots+=("${candidate}")
 done
 
@@ -142,12 +142,21 @@ validate_plan() {
     --plan "$1" --model "${model}" --device "${device}" >/dev/null 2>&1
 }
 
+device_product="$(PYTHONPATH="${repo}/python" "${python}" -c '
+import sys
+from portable_cuda_device import query_cuda_device
+name = query_cuda_device(int(sys.argv[1])).get("name")
+if not isinstance(name, str) or not name:
+    raise SystemExit("CUDA Runtime did not return a product name")
+print(name)
+' "${device}")" || die "cannot query CUDA product name for device ${device}"
+
 if [[ -n "${plan}" ]]; then
   plan="$(readlink -m -- "${plan}")"
   [[ -r "${plan}" ]] || die "plan not found: ${plan}"
   validate_plan "${plan}" || die "plan is incompatible with device ${device} or model ${model}"
 else
-  declare -a matching_plans=()
+  declare -a product_plans=()
   declare -A seen_plans=()
   declare -A seen_plan_hashes=()
   for root in "${plan_roots[@]}"; do
@@ -159,40 +168,29 @@ else
       candidate_plan_sha="$(sha256sum "${resolved}" | awk '{print $1}')"
       [[ -z "${seen_plan_hashes[${candidate_plan_sha}]:-}" ]] || continue
       seen_plan_hashes["${candidate_plan_sha}"]=1
-      if validate_plan "${resolved}"; then
-        matching_plans+=("${resolved}")
-      fi
-    done < <(find "${root}" -type f -name best-tactic-plan.json -print | sort)
-  done
-  (( ${#matching_plans[@]} > 0 )) \
-    || die "no certified plan matches CUDA device ${device} and the bundled model"
-  if (( ${#matching_plans[@]} == 1 )); then
-    plan="${matching_plans[0]}"
-  else
-    # A freshly generated plan lives beside its measured binary. Prefer that
-    # self-contained pair over a registry plan that needs a packaged binary.
-    best_metric=""
-    for candidate in "${matching_plans[@]}"; do
-      candidate_binary="$(dirname -- "${candidate}")/build/katago"
-      [[ -x "${candidate_binary}" ]] || continue
-      mapfile -t candidate_fields < <("${python}" -c '
+      candidate_product="$("${python}" -c '
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
-b = str(int(p["batches"][0]))
-print(p["final_joint"][b]["binary_sha256"])
-print(float(p["final_joint"][b]["stable_long_nn_evals_per_sec"]))
-' "${candidate}")
-      candidate_hash="${candidate_fields[0]:-}"
-      candidate_metric="${candidate_fields[1]:-}"
-      if [[ "$(sha256sum "${candidate_binary}" | awk '{print $1}')" == "${candidate_hash}" ]] && \
-         { [[ -z "${best_metric}" ]] || awk -v a="${candidate_metric}" -v b="${best_metric}" 'BEGIN { exit !(a > b) }'; }; then
-        plan="${candidate}"
-        best_metric="${candidate_metric}"
+devices = p.get("target", {}).get("cuda_device_capabilities_at_scan", [])
+if not devices or not isinstance(devices[0], dict) or not devices[0].get("name"):
+    raise SystemExit(1)
+print(devices[0]["name"])
+' "${resolved}" 2>/dev/null || true)"
+      if [[ "${candidate_product}" == "${device_product}" ]]; then
+        product_plans+=("${resolved}")
       fi
-    done
-    [[ -n "${plan}" ]] \
-      || die "multiple plans match device ${device}; select one with --plan"
-  fi
+    done < <(find "${root}" -type f -name best-tactic-plan.json -print | sort)
+    # Each directory before results is a complete registry copy. Do not mix a
+    # registered product with stale plans retained in lower-priority outputs.
+    (( ${#product_plans[@]} == 0 )) || break
+  done
+  (( ${#product_plans[@]} > 0 )) \
+    || die "no certified plan is registered for CUDA product ${device_product}"
+  (( ${#product_plans[@]} == 1 )) \
+    || die "multiple plans are registered for CUDA product ${device_product}; select one with --plan"
+  plan="${product_plans[0]}"
+  validate_plan "${plan}" \
+    || die "the plan registered for ${device_product} is incompatible with the device or model"
 fi
 
 checksum_file="$(dirname -- "${plan}")/SHA256SUMS"

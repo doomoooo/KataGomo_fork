@@ -23,9 +23,9 @@ After extracting the release in a writable persistent directory:
 ```
 
 This is the build-only path for the certified plan carried by the tar.
-`build-for-plan.sh` verifies the model and the receiver's exact GPU product and
-capability fingerprint, generates only the selected plan's single-batch tactics
-and recursive artifact dependencies, and compiles KataGo. It performs no
+`build-for-plan.sh` looks up the plan by CUDA product name, validates its
+receiver and model contract, generates only the selected plan's single-batch
+tactics and recursive artifact dependencies, and compiles KataGo. It performs no
 prescan, candidate benchmark, refinement, long gate, or accuracy replay. The
 content-hashed `plan-build.json` binds the rebuilt binary and generated
 artifacts to the certified plan.

@@ -35,6 +35,35 @@ def verify_plan_checksum(path: pathlib.Path) -> None:
     )
 
 
+def plan_product_name(plan: dict[str, Any]) -> str:
+    target = plan.get("target")
+    if not isinstance(target, dict):
+        raise ValueError("plan has no target")
+    devices = target.get("cuda_device_capabilities_at_scan")
+    if not isinstance(devices, list) or not devices or not isinstance(devices[0], dict):
+        raise ValueError("plan has no producer CUDA device")
+    name = devices[0].get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("plan has no producer CUDA product name")
+    return name
+
+
+def select_product_plan(
+    plans: list[tuple[pathlib.Path, dict[str, Any]]], product_name: str,
+) -> tuple[pathlib.Path, dict[str, Any]]:
+    matches = [item for item in plans if plan_product_name(item[1]) == product_name]
+    if not matches:
+        available = sorted({plan_product_name(plan) for _, plan in plans})
+        suffix = f"; bundled products: {', '.join(available)}" if available else ""
+        raise RuntimeError(f"no bundled plan for CUDA product {product_name!r}{suffix}")
+    if len(matches) != 1:
+        paths = ", ".join(str(path) for path, _ in matches)
+        raise RuntimeError(
+            f"CUDA product {product_name!r} has multiple plan entries: {paths}"
+        )
+    return matches[0]
+
+
 def select_plan(
     *, explicit: pathlib.Path | None, roots: list[pathlib.Path],
     model: pathlib.Path, device_properties: dict[str, object],
@@ -48,35 +77,51 @@ def select_plan(
         for root in roots:
             if root.is_dir():
                 paths.extend(sorted(root.glob("**/best-tactic-plan.json")))
-    matches: dict[str, tuple[pathlib.Path, dict[str, Any]]] = {}
+    loaded: list[tuple[pathlib.Path, dict[str, Any]]] = []
     failures: list[str] = []
+    seen_paths: set[pathlib.Path] = set()
+    seen_plan_hashes: set[str] = set()
     for path in paths:
+        path = path.resolve()
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
         if not path.is_file():
             failures.append(f"missing plan: {path}")
             continue
         try:
             verify_plan_checksum(path)
+            plan_file_sha = sha256(path)
+            if plan_file_sha in seen_plan_hashes:
+                continue
+            seen_plan_hashes.add(plan_file_sha)
             plan = load_plan(path)
-            result = validate_plan(
-                plan, model=model, device_properties=device_properties,
-            )
-            if not result["production_ready"]:
-                raise ValueError("plan is not production-ready")
+            plan_product_name(plan)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             failures.append(f"{path}: {exc}")
             continue
-        matches.setdefault(sha256(path), (path, plan))
-    if len(matches) != 1:
-        detail = "\n".join(failures[-8:])
-        if not matches:
-            raise RuntimeError(
-                "no certified bundled plan matches this device and model" +
-                (f"\n{detail}" if detail else "")
-            )
-        raise RuntimeError(
-            "multiple distinct plans match; select one with --plan PATH"
+        loaded.append((path, plan))
+    try:
+        if explicit is not None:
+            if len(loaded) != 1:
+                raise RuntimeError("explicit plan could not be loaded")
+            selected = loaded[0]
+        else:
+            product_name = device_properties.get("name")
+            if not isinstance(product_name, str) or not product_name:
+                raise RuntimeError("CUDA Runtime did not return a product name")
+            selected = select_product_plan(loaded, product_name)
+        result = validate_plan(
+            selected[1], model=model, device_properties=device_properties,
         )
-    return next(iter(matches.values()))
+        if not result["production_ready"]:
+            raise ValueError("plan is not production-ready")
+        return selected
+    except (ValueError, RuntimeError) as exc:
+        detail = "\n".join(failures[-8:])
+        raise RuntimeError(
+            str(exc) + (f"\n{detail}" if detail else "")
+        ) from exc
 
 
 def valid_existing_build(

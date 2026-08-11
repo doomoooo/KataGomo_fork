@@ -37,12 +37,14 @@ fi
   exit 1
 }
 
-declare -a plan_roots=("${SCRIPT_DIR}/plans" "${repo}/final-migration/plans")
 declare -a command=(
   "${prefix}/venv/bin/python" "${helper}"
   --prefix "${prefix}" --repo "${repo}" --autotune "${autotune}"
 )
-for root in "${plan_roots[@]}"; do
-  [[ -d "${root}" ]] && command+=(--plans-root "${root}")
+for root in "${SCRIPT_DIR}/plans" "${repo}/final-migration/plans"; do
+  if [[ -d "${root}" ]]; then
+    command+=(--plans-root "${root}")
+    break
+  fi
 done
 exec "${command[@]}" "$@"

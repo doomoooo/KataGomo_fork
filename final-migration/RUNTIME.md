@@ -1,12 +1,11 @@
 # Plan-driven CUDA runtime
 
 The runtime consumes only `best-tactic-plan.json` files emitted by the unified
-autotuner. Loading is fail-closed: the plan must be production-ready, have a
+autotuner. The CUDA product name is the registry lookup key. Loading is
+fail-closed: the plan must be production-ready, have a
 complete positive-history closure and full correctness certificate, match the
-model SHA-256 and exact receiver GPU fingerprint, and contain the selected
-exact batch. The fingerprint binds product name, compute capability, global
-memory, SM/L2/memory-bus topology, execution limits, and copy/concurrency
-capabilities. Old development plans and implicit tactic fallback are rejected.
+model SHA-256 and receiver device contract, and contain the selected exact
+batch. Old development plans and implicit tactic fallback are rejected.
 
 ## Single GPU
 
