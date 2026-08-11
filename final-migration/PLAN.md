@@ -22,8 +22,8 @@ Deliverables:
 - latest-source local builds for optimizer components, with local bundle
   seeding and explicit GitHub/proxy behavior;
 - a hash-checked, non-invasive tar distribution for future target machines;
-- compile smokes for CUDA, cuBLAS, cuDNN frontend, CUTLASS/CuTe, Triton,
-  TileLang, and FlashAttention Python/CuTe imports;
+- compile smokes for CUDA, cuBLAS, cuDNN frontend, CUTLASS/CuTe, TileLang, and
+  FlashAttention Python/CuTe imports;
 - a clean KataGo CUDA-backend build;
 - machine-readable and human-readable audit records.
 

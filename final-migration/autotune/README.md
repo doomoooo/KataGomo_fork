@@ -56,18 +56,19 @@ supports both validated Ubuntu 22.04 and
 24.04 hosts instead of encoding one Ubuntu release.
 
 `setup.sh` writes only below the extracted directory unless `--prefix` is
-given.  It builds TVM-FFI, Triton, TileLang, Quack and FlashAttention from the
-carried source into the locked Python 3.12 environment.  PyTorch and NVIDIA
-CUTLASS DSL are explicit upstream-binary exceptions; their exact wheels are
-carried because neither project exposes a practical equivalent source-only
-Python payload for this workflow.  CUDA and cuDNN are NVIDIA binary
-toolchains, not Python source dependencies.
+given. It builds TVM-FFI, TileLang, Quack and FlashAttention from the carried
+source into the locked Python 3.12 environment. PyTorch and NVIDIA CUTLASS DSL
+are explicit upstream-binary exceptions; their exact wheels are carried
+because neither project exposes a practical equivalent source-only Python
+payload for this workflow. PyTorch's exact Triton wheel dependency is carried
+as a binary package only; this workflow does not generate or benchmark Triton
+kernels. CUDA and cuDNN are NVIDIA binary toolchains, not Python source
+dependencies.
 
 Build parallelism defaults to the lower of `nproc`, 8, and a memory-aware limit
 (75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler
-process). This avoids fixed `-j4`/`-j8` values while protecting hosts where
-Triton translation units make `-j$(nproc)` exceed RAM. `--jobs N` remains an
-explicit override.
+process). This avoids fixed `-j4`/`-j8` values while protecting memory-limited
+hosts. `--jobs N` remains an explicit override.
 
 `run-autotune.sh` queries the selected device through the CUDA Runtime.  CC
 8.9 dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow.

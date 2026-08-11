@@ -21,10 +21,11 @@ Common locked environment:
   patches applied before its wheel is built;
 - CUTLASS submodule `71275920` for SM89 FlashAttention and the independently
   pinned latest CUTLASS source for CuTe generation;
-- exact revisions in `source-lock.tsv` for Triton, TileLang, Quack, TVM-FFI
-  and cuDNN frontend;
+- exact revisions in `source-lock.tsv` for TileLang, Quack, TVM-FFI and cuDNN
+  frontend;
 - pinned wheels for build tools, PyTorch, CUTLASS DSL and small runtime
-  dependencies.
+  dependencies, including PyTorch's Triton dependency. Triton is not a source
+  component or a KataGo kernel generator;
 
 The package manifest binds every carried payload by SHA-256.  Source builds
 produce a second manifest containing source archive, patch, wheel and installed

@@ -31,7 +31,7 @@ Configuration variables:
 - `KATAGO_BUILD_JOBS`: explicit parallel compile override. By default the
   scripts take the lower of `nproc` and a memory-aware limit: 75% of current
   `MemAvailable`/cgroup headroom divided by 2 GiB per job. This leaves room for
-  memory-heavy Triton C++ translation units without hard-coding `-j4`/`-j8`.
+  native code generators without hard-coding `-j4`/`-j8`.
 - `KATAGO_SMOKE_ARCHS`: space-separated CUDA smoke architectures; default
   detected architectures, falling back to `89 120`.
 - `KATAGO_KEEP_SOURCE_BUILD_TREES=1`: retain ignored compiler intermediates;
@@ -68,6 +68,11 @@ tag satisfying both projects (`v0.1.12` for this source snapshot). Following
 TVM-FFI's independent HEAD can compile successfully while breaking TileLang's
 reflection registry at import time. The compatibility pin must be revalidated
 when either top-level project's metadata constraint changes.
+
+Triton is not a KataGo code generator in this workflow and is not cloned or
+built from source. The exact binary version required by PyTorch is carried as
+a pinned transitive wheel; no Triton kernel is generated, benchmarked, or
+linked into the CUDA backend.
 
 The public setup never invokes APT, `sudo`, or a driver installer. A source
 checkout requires existing compiler, CUDA, cuDNN, and zlib development files.

@@ -46,7 +46,6 @@ manifest resolved:
 | Source | Resolved commit | Description |
 | --- | --- | --- |
 | CUTLASS | `dcf215af68a2d08d305076c152a06f201728cd53` | `dcf215af` |
-| Triton | `5bcfc513ddbbc64f2688dfb15a4d824c56a9649a` | `5bcfc513d` |
 | Quack | `050387bde3d3f03a26c87279bff2df3173640127` | `v0.6.3` |
 | FlashAttention | `69e1bcbe77c359c84b3a4589e92a7c076e33a202` | `69e1bcb` |
 | TileLang | `12dbf3e9d30d84b5c27d7b8b672c268457f7eb27` | `12dbf3e9` |
@@ -70,10 +69,9 @@ metadata requirements are satisfied.
 PyTorch 2.13.0/CUDA 13.0 and other Python bootstrap wheels are binary inputs.
 CUTLASS headers come from current source. CUTLASS CuTe DSL 4.7's compiled MLIR
 libraries are not source-published in the CUTLASS repository, so the official
-CUDA-13 DSL wheel is an explicit binary exception. Triton's source build also
-uses the exact prebuilt LLVM toolchain and SHA-256 declared by that Triton
-commit. Neither exception substitutes a prebuilt optimizer implementation for
-the locally built source wheel.
+CUDA-13 DSL wheel is an explicit binary exception. PyTorch's pinned Triton
+dependency is also carried as a binary wheel, but no Triton source, LLVM
+toolchain, or KataGo Triton kernel is part of the workflow.
 
 ## Explicit exclusions
 

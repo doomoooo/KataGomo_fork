@@ -22,9 +22,7 @@ export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export PATH="${CUDA_HOME}/bin:${PATH}"
 export LD_LIBRARY_PATH="${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export XDG_CACHE_HOME="${KATAGO_ENV_ROOT}/cache"
-export TRITON_HOME="${KATAGO_ENV_ROOT}/cache/triton-home"
-export TRITON_CACHE_DIR="${KATAGO_ENV_ROOT}/cache/triton-runtime"
-mkdir -p -- "${XDG_CACHE_HOME}" "${TRITON_HOME}" "${TRITON_CACHE_DIR}"
+mkdir -p -- "${XDG_CACHE_HOME}"
 
 if [[ -n "${KATAGO_SMOKE_ARCHS:-}" ]]; then
   read -r -a smoke_archs <<< "${KATAGO_SMOKE_ARCHS}"
@@ -83,9 +81,6 @@ print("flash_attn.cute", flash_attn.cute.__file__)
 PY
 
 for arch in "${smoke_archs[@]}"; do
-  log "compiling Triton no-run smoke for sm_${arch}"
-  python "${SCRIPT_DIR}/smoke/triton_compile.py" --arch "${arch}"
-
   log "compiling TileLang no-run smoke for sm_${arch}"
   python "${SCRIPT_DIR}/smoke/tilelang_compile.py" --arch "${arch}"
 done

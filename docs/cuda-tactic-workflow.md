@@ -275,7 +275,7 @@ Scan and generation provenance captures:
 - the CUDA Runtime query captured before scanning and the independent
   `benchmarknn` CUDA property record, including the actual SM count;
 - Python, Torch CUDA/cuDNN, TileLang and `pip freeze`;
-- relevant CUDA, CUTLASS, TileLang, Triton and compiler environment variables.
+- relevant CUDA, CUTLASS, TileLang and compiler environment variables.
 
 Versions are reproducibility evidence, not strict equality gates. The receiver
 may use compatible newer libraries while retaining enough information to

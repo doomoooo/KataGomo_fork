@@ -40,9 +40,7 @@ export CMAKE_BUILD_PARALLEL_LEVEL="${KATAGO_BUILD_JOBS}"
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.9;12.0}"
 export FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS:-89;120}"
 export XDG_CACHE_HOME="${KATAGO_ENV_ROOT}/cache"
-export TRITON_HOME="${KATAGO_ENV_ROOT}/cache/triton-home"
-export TRITON_CACHE_DIR="${KATAGO_ENV_ROOT}/cache/triton-runtime"
-mkdir -p -- "${XDG_CACHE_HOME}" "${TRITON_HOME}" "${TRITON_CACHE_DIR}"
+mkdir -p -- "${XDG_CACHE_HOME}"
 
 manifest_field() {
   local component="$1" field="$2"

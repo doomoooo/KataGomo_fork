@@ -848,8 +848,7 @@ def main() -> int:
         "PATH": f"{prefix / 'venv/bin'}:{prefix / 'cuda/bin'}:{env.get('PATH', '')}",
         "LD_LIBRARY_PATH": f"{prefix / 'cudnn/lib'}:{prefix / 'cuda/lib64'}:{prefix / 'native/lib'}:{env.get('LD_LIBRARY_PATH', '')}",
         "CMAKE_PREFIX_PATH": f"{prefix / 'native'}:{env.get('CMAKE_PREFIX_PATH', '')}",
-        "XDG_CACHE_HOME": str(prefix / "cache"), "TRITON_HOME": str(prefix / "cache/triton"),
-        "TRITON_CACHE_DIR": str(prefix / "cache/triton-runtime"),
+        "XDG_CACHE_HOME": str(prefix / "cache"),
         "CMAKE_BUILD_PARALLEL_LEVEL": str(args.jobs), "MAX_JOBS": str(args.jobs),
     })
     paths = {"prefix": prefix, "repo": repo, "python": python, "model": model,

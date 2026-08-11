@@ -23,6 +23,7 @@ BINARY_BASE = {
     "pyyaml",
     "torch",
     "torch-c-dlpack-ext",
+    "triton",
 }
 
 SOURCE_DISTRIBUTIONS = {
@@ -31,7 +32,6 @@ SOURCE_DISTRIBUTIONS = {
     "nvidia-cutlass-dsl",
     "quack-kernels",
     "tilelang",
-    "triton",
 }
 
 SOURCE_IMPORTS = (
@@ -39,7 +39,6 @@ SOURCE_IMPORTS = (
     "flash_attn.cute",
     "quack",
     "tilelang",
-    "triton",
     "tvm_ffi",
 )
 
@@ -47,7 +46,6 @@ SOURCE_IMPORTS = (
 ALLOWED_SOURCE_CONFLICTS = {
     ("flash-attn-4", "nvidia-cutlass-dsl"),
     ("quack-kernels", "nvidia-cutlass-dsl"),
-    ("torch", "triton"),
 }
 
 

@@ -228,7 +228,7 @@ default_build_jobs() {
   fi
   if [[ "${available_bytes}" =~ ^[0-9]+$ ]]; then
     # Keep 25% of currently available memory in reserve and allow 2 GiB for
-    # each heavy C++/CUDA compiler process. Triton exceeds 1 GiB per cc1plus.
+    # each heavy C++/CUDA compiler process.
     memory_jobs=$((available_bytes * 3 / 4 / (2 * 1024 * 1024 * 1024)))
     (( memory_jobs < 1 )) && memory_jobs=1
     (( memory_jobs < cpu_jobs )) && cpu_jobs="${memory_jobs}"
@@ -279,7 +279,6 @@ extract_once "${SCRIPT_DIR}/payload/python.tar.gz" "${PREFIX}/state/python.extra
 extract_once "${SCRIPT_DIR}/payload/cuda-13.2.tar.gz" "${PREFIX}/state/cuda.extracted"
 extract_once "${SCRIPT_DIR}/payload/cudnn-9.25-cuda13.tar.gz" "${PREFIX}/state/cudnn.extracted"
 extract_once "${SCRIPT_DIR}/payload/sources.tar.gz" "${PREFIX}/state/sources.extracted"
-extract_once "${SCRIPT_DIR}/payload/toolchains.tar.gz" "${PREFIX}/state/toolchains.extracted"
 extract_once "${SCRIPT_DIR}/payload/repo.tar.gz" "${PREFIX}/state/repo.extracted"
 extract_once "${SCRIPT_DIR}/payload/assets.tar.gz" "${PREFIX}/state/assets.extracted"
 
@@ -306,10 +305,8 @@ export CMAKE_PREFIX_PATH="${PREFIX}/native:${CMAKE_PREFIX_PATH:-}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${JOBS}"
 export MAX_JOBS="${JOBS}"
 export XDG_CACHE_HOME="${PREFIX}/cache"
-export TRITON_HOME="${PREFIX}/cache/triton"
-export TRITON_CACHE_DIR="${PREFIX}/cache/triton-runtime"
 export AUTOTUNE_PREFIX="${PREFIX}"
-mkdir -p -- "${XDG_CACHE_HOME}" "${TRITON_HOME}" "${TRITON_CACHE_DIR}"
+mkdir -p -- "${XDG_CACHE_HOME}"
 
 "${CUDA_HOME}/bin/nvcc" --version | tail -n 1
 [[ -r "${CUDNN_ROOT}/include/cudnn_version.h" ]] || die "cuDNN headers missing"
@@ -395,12 +392,6 @@ build_source_wheel() {
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_APACHE_TVM_FFI=0.1.12
 build_source_wheel apache_tvm_ffi "${PREFIX}/sources/apache-tvm-ffi" apache-tvm-ffi
 
-export TRITON_OFFLINE_BUILD=1
-export LLVM_SYSPATH="${PREFIX}/toolchains/triton-llvm"
-export JSON_SYSPATH="${PREFIX}/toolchains/triton-json"
-export TRITON_BUILD_PROTON=OFF
-build_source_wheel triton "${PREFIX}/sources/triton" triton
-
 export CUDA_VERSION=13.2
 export USE_CUDA=1
 build_source_wheel tilelang "${PREFIX}/sources/TileLang" tilelang
@@ -448,8 +439,6 @@ printf '%s\n' \
   "export LD_LIBRARY_PATH='${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib':\"\${LD_LIBRARY_PATH:-}\"" \
   "export CMAKE_PREFIX_PATH='${PREFIX}/native':\"\${CMAKE_PREFIX_PATH:-}\"" \
   "export XDG_CACHE_HOME='${PREFIX}/cache'" \
-  "export TRITON_HOME='${PREFIX}/cache/triton'" \
-  "export TRITON_CACHE_DIR='${PREFIX}/cache/triton-runtime'" \
   > "${PREFIX}/activate"
 chmod 0644 "${PREFIX}/activate"
 printf '%s\n' "${PREFIX}" > "${SCRIPT_DIR}/runtime-prefix.txt"

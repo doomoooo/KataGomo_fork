@@ -3654,7 +3654,7 @@ def _module_version(name: str) -> str | None:
 
 def _relevant_environment() -> dict[str, str]:
     prefixes = (
-        "CUDA", "CUDNN", "CUTLASS", "TILELANG", "TRITON", "TORCH",
+        "CUDA", "CUDNN", "CUTLASS", "TILELANG", "TORCH",
         "NVIDIA", "CMAKE", "CC", "CXX", "OMP", "CUDA_VISIBLE_DEVICES",
     )
     result: dict[str, str] = {}
@@ -3752,7 +3752,7 @@ def collect_provenance(
         "machine": platform.machine(),
         "packages": {
             name: version for name in (
-                "numpy", "torch", "cupy", "triton", "tilelang", "cutlass",
+                "numpy", "torch", "cupy", "tilelang", "cutlass",
             ) if (version := _module_version(name)) is not None
         },
     }

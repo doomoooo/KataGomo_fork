@@ -4,6 +4,11 @@ Validated on 2026-08-07 in the isolated final-migration workspace. No GPU
 kernel was launched by these checks; the active optimization worktrees were not
 modified.
 
+This section records the superseded first environment build. It built Triton
+because that package was present in the captured historical Python environment;
+the maintained setup no longer treats it as a source component. No accepted
+KataGo tactic was generated with Triton.
+
 ## Source builds
 
 The source-capable Python components produced the following distributable

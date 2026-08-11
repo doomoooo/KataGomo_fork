@@ -42,6 +42,7 @@ pyyaml==6.0.3
 sympy==1.14.0
 torch==2.13.0
 torch-c-dlpack-ext==0.1.5
+triton==3.7.1
 tqdm==4.70.0
 typing-extensions==4.16.0
 z3-solver==4.15.4.0

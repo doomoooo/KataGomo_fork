@@ -11,8 +11,6 @@ SOURCE_ROOT="${AUTOTUNE_SOURCE_ROOT:-${ENV_ROOT}/third_party}"
 OUTPUT_ROOT="${AUTOTUNE_OUTPUT_ROOT:-${ENV_ROOT}/autotune-distributions}"
 CUDA_ROOT="${AUTOTUNE_CUDA_ROOT:-${ENV_ROOT}/toolchains/cuda-13.2}"
 CUDNN_ROOT="${AUTOTUNE_CUDNN_ROOT:-${ENV_ROOT}/toolchains/cudnn-9.25-cuda13}"
-LLVM_ROOT="${AUTOTUNE_TRITON_LLVM_ROOT:-${ENV_ROOT}/toolchains/triton-llvm}"
-JSON_ROOT="${AUTOTUNE_TRITON_JSON_ROOT:-${ENV_ROOT}/toolchains/triton-json}"
 FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-/workspace/third_party/flash-attention/csrc/cutlass}"
 MODEL="${AUTOTUNE_MODEL:-/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz}"
 CORPUS="${AUTOTUNE_CORPUS:-}"
@@ -58,7 +56,7 @@ fi
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
   || die "package only from a clean committed final-migration tree"
-for path in "${CUDA_ROOT}" "${CUDNN_ROOT}" "${LLVM_ROOT}" "${JSON_ROOT}" \
+for path in "${CUDA_ROOT}" "${CUDNN_ROOT}" \
             "${FLASH_CUTLASS_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
   [[ -e "${path}" ]] || die "required payload input missing: ${path}"
 done
@@ -132,7 +130,7 @@ copy_source() {
   printf '%s\n' "${actual}" > "${target}/.katago-source-revision"
 }
 
-for name in cutlass flash-attention triton quack TileLang apache-tvm-ffi cudnn-frontend zlib; do
+for name in cutlass flash-attention quack TileLang apache-tvm-ffi cudnn-frontend zlib; do
   copy_source "${name}"
 done
 
@@ -174,15 +172,6 @@ log "packing cuDNN 9.25 CUDA 13"
 tar --create --gzip --file "${bundle}/payload/cudnn-9.25-cuda13.tar.gz" \
   --directory "${CUDNN_ROOT}" \
   --transform='flags=r;s#^\.$#cudnn#;s#^\./#cudnn/#' .
-
-toolchain_stage="${stage}/toolchain-stage/toolchains"
-mkdir -p -- "${toolchain_stage}/triton-llvm" "${toolchain_stage}/triton-json"
-tar --create --file - --directory "${LLVM_ROOT}" . \
-  | tar --extract --file - --directory "${toolchain_stage}/triton-llvm"
-tar --create --file - --directory "${JSON_ROOT}" . \
-  | tar --extract --file - --directory "${toolchain_stage}/triton-json"
-tar --create --gzip --file "${bundle}/payload/toolchains.tar.gz" \
-  --directory "${stage}/toolchain-stage" toolchains
 
 asset_stage="${stage}/asset-stage/assets"
 mkdir -p -- "${asset_stage}"

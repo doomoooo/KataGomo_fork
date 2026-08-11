@@ -70,6 +70,31 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('KATAGO_PYTHON_RUNTIME_VERSION="3.12.13"', runtime_lock)
         self.assertIn("KATAGO_PYTHON_RUNTIME_SHA256", runtime_lock)
 
+    def test_triton_is_binary_only_and_never_source_built(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        setup = (repo / "setup.sh").read_text()
+        package = (AUTOTUNE_PATH.parent / "package-autotune.sh").read_text()
+        source_lock = (AUTOTUNE_PATH.parent / "source-lock.tsv").read_text()
+        source_catalog = (
+            repo / "final-migration/environment/third-party.lock.tsv"
+        ).read_text()
+        binary_requirements = (
+            AUTOTUNE_PATH.parent / "python-binary-requirements.txt"
+        ).read_text()
+
+        self.assertIn("triton==3.7.1", binary_requirements)
+        self.assertNotIn("\ntriton\t", "\n" + source_lock)
+        self.assertNotIn("\ntriton\t", "\n" + source_catalog)
+        self.assertNotIn("build_source_wheel triton", setup)
+        self.assertNotIn("sources/triton", setup)
+        self.assertNotIn("toolchains.tar.gz", setup)
+        self.assertNotIn("triton-llvm", package)
+        self.assertNotIn("triton-json", package)
+        self.assertNotIn("toolchains.tar.gz", package)
+        self.assertNotIn(
+            "cutlass flash-attention triton quack", package,
+        )
+
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()
         self.assertIn("def workflow_discovery(", source)
