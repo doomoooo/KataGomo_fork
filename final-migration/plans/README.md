@@ -2,15 +2,18 @@
 
 This directory contains compact production plans that are useful as runtime
 and regression assets. The registry keeps exactly one current production plan
-per normalized GPU model (`target.gpu_class`). Replacing a model's plan updates
-that one entry; superseded plans remain available through Git history rather
-than as parallel runtime choices. A plan is admitted only when it is
+per exact producer GPU fingerprint. `target.gpu_class` selects an implementation
+space; the recorded CUDA product name and numeric capabilities identify the
+qualified SKU. Replacing a model's plan updates that one entry; superseded
+plans remain available through Git history rather than as parallel runtime
+choices. A plan is admitted only when it is
 `production_ready=true`, has complete positive-history closure, passed its
 long whole-graph gate, and passed an immutable full-FP32 correctness gate.
 
 Plans are hardware-, model-, precision-, board-, batch-, and stream-specific.
 They are not universal defaults. The runtime validates the receiver and fails
-at startup on a mismatch. The CUDA device ordinal recorded at scan time is
+at startup on a product-name, global-memory, SM/L2/memory-bus, execution-limit,
+or other capability mismatch. The CUDA device ordinal recorded at scan time is
 provenance only and is not applied on the receiver.
 
 Production plans contain no scan-host absolute paths. Full commands and

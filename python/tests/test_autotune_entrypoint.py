@@ -51,6 +51,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('"${bundle}/plans/"', package)
         self.assertIn('"${bundle}/README.md"', package)
         self.assertIn('"${bundle}/README.zh-CN.md"', package)
+        self.assertIn('"${bundle}/RUNTIME.md"', package)
         self.assertIn('"${REPO_ROOT}/build-for-plan.sh"', package)
         self.assertIn('"${SCRIPT_DIR}/build_for_plan.py"', package)
         self.assertIn("find payload patches metadata plans", package)

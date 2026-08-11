@@ -49,6 +49,7 @@ def query_cuda_device(device: int) -> dict[str, Any]:
         f"cudaGetDeviceProperties({device})",
     )
     attributes = {
+        "maxThreadsPerBlock": "cudaDevAttrMaxThreadsPerBlock",
         "multiProcessorCount": "cudaDevAttrMultiProcessorCount",
         "sharedMemoryPerMultiprocessor":
             "cudaDevAttrMaxSharedMemoryPerMultiprocessor",
@@ -62,6 +63,9 @@ def query_cuda_device(device: int) -> dict[str, Any]:
         "clockRateKHz": "cudaDevAttrClockRate",
         "memoryClockRateKHz": "cudaDevAttrMemoryClockRate",
         "memoryBusWidth": "cudaDevAttrGlobalMemoryBusWidth",
+        "warpSize": "cudaDevAttrWarpSize",
+        "asyncEngineCount": "cudaDevAttrAsyncEngineCount",
+        "concurrentKernels": "cudaDevAttrConcurrentKernels",
     }
     values = {
         key: value
@@ -69,6 +73,7 @@ def query_cuda_device(device: int) -> dict[str, Any]:
         if (value := _optional_attribute(attribute, device)) is not None
     }
     direct = {
+        "maxThreadsPerBlock": "maxThreadsPerBlock",
         "multiProcessorCount": "multiProcessorCount",
         "sharedMemoryPerMultiprocessor": "sharedMemPerMultiprocessor",
         "regsPerMultiprocessor": "regsPerMultiprocessor",
@@ -79,6 +84,9 @@ def query_cuda_device(device: int) -> dict[str, Any]:
         "persistingL2CacheMaxSize": "persistingL2CacheMaxSize",
         "accessPolicyMaxWindowSize": "accessPolicyMaxWindowSize",
         "memoryBusWidth": "memoryBusWidth",
+        "warpSize": "warpSize",
+        "asyncEngineCount": "asyncEngineCount",
+        "concurrentKernels": "concurrentKernels",
     }
     for key, property_name in direct.items():
         if key not in values and hasattr(properties, property_name):

@@ -349,6 +349,86 @@ def cuda_compute_capability(properties: dict[str, object]) -> list[int] | None:
     return None
 
 
+CUDA_PLAN_DEVICE_IDENTITY_FIELDS = (
+    "name",
+    "computeCapabilityMajor",
+    "computeCapabilityMinor",
+    "multiProcessorCount",
+    "totalGlobalMem",
+    "maxThreadsPerBlock",
+    "maxThreadsPerMultiProcessor",
+    "regsPerMultiprocessor",
+    "sharedMemPerBlockOptin",
+    "sharedMemPerMultiprocessor",
+    "l2CacheSize",
+    "memoryBusWidth",
+    "asyncEngineCount",
+    "concurrentKernels",
+)
+
+
+def cuda_plan_device_identity(properties: dict[str, object]) -> dict[str, object]:
+    """Normalize CUDA query and recorded-plan device fields to one contract."""
+    attributes = properties.get("attributes", {})
+    if not isinstance(attributes, dict):
+        attributes = {}
+
+    def value(*names: str) -> object:
+        for name in names:
+            if name in properties:
+                return properties[name]
+            if name in attributes:
+                return attributes[name]
+        return None
+
+    compute_capability = cuda_compute_capability(properties)
+    identity: dict[str, object] = {
+        "name": value("name"),
+        "computeCapabilityMajor": (
+            compute_capability[0] if compute_capability is not None else None
+        ),
+        "computeCapabilityMinor": (
+            compute_capability[1] if compute_capability is not None else None
+        ),
+        "multiProcessorCount": value("multiProcessorCount"),
+        "totalGlobalMem": value("totalGlobalMem"),
+        "maxThreadsPerBlock": value("maxThreadsPerBlock"),
+        "maxThreadsPerMultiProcessor": value(
+            "maxThreadsPerMultiProcessor", "maxThreadsPerMultiprocessor",
+        ),
+        "regsPerMultiprocessor": value("regsPerMultiprocessor"),
+        "sharedMemPerBlockOptin": value(
+            "sharedMemPerBlockOptin", "maxSharedMemoryPerBlockOptin",
+        ),
+        "sharedMemPerMultiprocessor": value(
+            "sharedMemPerMultiprocessor", "sharedMemoryPerMultiprocessor",
+        ),
+        "l2CacheSize": value("l2CacheSize"),
+        "memoryBusWidth": value("memoryBusWidth"),
+        "asyncEngineCount": value("asyncEngineCount"),
+        "concurrentKernels": value("concurrentKernels"),
+    }
+    missing = [
+        field for field in CUDA_PLAN_DEVICE_IDENTITY_FIELDS
+        if identity.get(field) is None
+    ]
+    if missing:
+        raise ValueError(
+            "CUDA device identity is incomplete: " + ", ".join(missing)
+        )
+    if not isinstance(identity["name"], str) or not identity["name"]:
+        raise ValueError("CUDA device identity has an invalid GPU name")
+    for field in CUDA_PLAN_DEVICE_IDENTITY_FIELDS:
+        if field == "name":
+            continue
+        raw = identity[field]
+        if field == "concurrentKernels":
+            identity[field] = bool(raw)
+        elif isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise ValueError(f"CUDA device identity has invalid {field}: {raw!r}")
+    return identity
+
+
 def nvcc_arch_flag(compute_capability: object) -> str:
     if (
         not isinstance(compute_capability, list)
@@ -4339,35 +4419,23 @@ def validate_plan(
     if target.get("compute_capability") != ARCHITECTURES[plan_arch]["compute_capability"]:
         raise ValueError("plan compute capability is inconsistent with its architecture")
     if device_properties is not None:
-        actual_compute_capability = cuda_compute_capability(device_properties)
-        if actual_compute_capability != target.get("compute_capability"):
-            raise ValueError(
-                "CUDA-reported receiver capability does not match the plan: "
-                f"{actual_compute_capability} != {target.get('compute_capability')}"
-            )
         producer_devices = target.get("cuda_device_capabilities_at_scan", [])
         producer = (
             producer_devices[0]
             if isinstance(producer_devices, list) and producer_devices else None
         )
-        actual_sm_count = device_properties.get("multiProcessorCount")
-        if not isinstance(actual_sm_count, int):
-            attributes = device_properties.get("attributes", {})
-            actual_sm_count = (
-                attributes.get("multiProcessorCount")
-                if isinstance(attributes, dict) else None
-            )
-        if (
-            not isinstance(producer, dict) or
-            not isinstance(producer.get("multiProcessorCount"), int) or
-            not isinstance(actual_sm_count, int)
-        ):
-            raise ValueError("plan/device SM-count identity is unavailable")
-        if producer["multiProcessorCount"] != actual_sm_count:
-            raise ValueError(
-                "CUDA-reported receiver SM count does not match the plan: "
-                f"{actual_sm_count} != {producer['multiProcessorCount']}"
-            )
+        if not isinstance(producer, dict):
+            raise ValueError("plan producer device identity is unavailable")
+        producer_identity = cuda_plan_device_identity(producer)
+        receiver_identity = cuda_plan_device_identity(device_properties)
+        for field in CUDA_PLAN_DEVICE_IDENTITY_FIELDS:
+            expected = producer_identity[field]
+            actual = receiver_identity[field]
+            if actual != expected:
+                raise ValueError(
+                    f"CUDA receiver {field} does not match the plan: "
+                    f"{actual!r} != {expected!r}"
+                )
     if target.get("fixed_board") != [19, 19]:
         raise ValueError("CUDA tactic plans currently require 19x19")
     if not plan.get("ready_for_scan_bypass", False):

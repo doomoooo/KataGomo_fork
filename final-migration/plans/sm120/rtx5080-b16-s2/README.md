@@ -23,5 +23,6 @@ selected post-launch marker on both lanes, enabled fixed-B16 batch dispatch,
 started the event-gated single-slot scheduler, and completed a 19x19 `genmove`.
 
 The recorded CUDA ordinal is provenance only. A receiver may use another
-ordinal, but the loader still requires SM120, the exact model/board/batch,
-FP16/NHWC, and two streams, and fails closed on any incompatible tactic.
+ordinal, but the loader still requires the exact RTX 5080 product and CUDA
+capability fingerprint, model/board/batch, FP16/NHWC, and two streams, and
+fails closed on any mismatch.

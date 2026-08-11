@@ -35,6 +35,12 @@ bool requiredBool(const json& obj, const string& key, const string& context) {
   return obj[key].get<bool>();
 }
 
+uint64_t requiredUint64(const json& obj, const string& key, const string& context) {
+  if(!obj.is_object() || !obj.contains(key) || !obj[key].is_number_unsigned())
+    throw StringError("CUDA tactic plan " + context + " requires unsigned integer " + key);
+  return obj[key].get<uint64_t>();
+}
+
 void requireConfigBool(ConfigParser& cfg, const string& key, bool required) {
   if(cfg.contains(key) && cfg.getBool(key) != required)
     throw StringError(
@@ -56,6 +62,7 @@ DeviceRequirements parseDeviceRequirements(const json& target) {
     throw StringError("CUDA tactic plan has no producer device capabilities");
   const json& device = target["cuda_device_capabilities_at_scan"][0];
   DeviceRequirements result;
+  result.name = requiredString(device,"name","device target");
   result.computeCapabilityMajor = requiredInt(device,"computeCapabilityMajor","device target");
   result.computeCapabilityMinor = requiredInt(device,"computeCapabilityMinor","device target");
   result.multiProcessorCount = requiredInt(device,"multiProcessorCount","device target");
@@ -68,6 +75,7 @@ DeviceRequirements parseDeviceRequirements(const json& target) {
   result.memoryBusWidth = requiredInt(device,"memoryBusWidth","device target");
   result.asyncEngineCount = requiredInt(device,"asyncEngineCount","device target");
   result.concurrentKernels = requiredBool(device,"concurrentKernels","device target");
+  result.totalGlobalMem = requiredUint64(device,"totalGlobalMem","device target");
   return result;
 }
 
@@ -142,6 +150,25 @@ void requireSameInt(const string& label, int expected, int actual, int deviceIdx
       "CUDA tactic plan device " + Global::intToString(deviceIdx) + " " + label +
       " mismatch: expected " + Global::intToString(expected) +
       ", got " + Global::intToString(actual)
+    );
+  }
+}
+
+void requireSameUint64(const string& label, uint64_t expected, uint64_t actual, int deviceIdx) {
+  if(actual != expected) {
+    throw StringError(
+      "CUDA tactic plan device " + Global::intToString(deviceIdx) + " " + label +
+      " mismatch: expected " + Global::uint64ToString(expected) +
+      ", got " + Global::uint64ToString(actual)
+    );
+  }
+}
+
+void requireSameString(const string& label, const string& expected, const string& actual, int deviceIdx) {
+  if(actual != expected) {
+    throw StringError(
+      "CUDA tactic plan device " + Global::intToString(deviceIdx) + " " + label +
+      " mismatch: expected " + expected + ", got " + actual
     );
   }
 }
@@ -285,6 +312,7 @@ void validateDevices(const Plan& plan, const vector<int>& gpuIdxByServerThread) 
     }
     cudaDeviceProp prop;
     CUDA_ERR("CUDA tactic plan",cudaGetDeviceProperties(&prop,deviceIdx));
+    requireSameString("GPU name",plan.device.name,string(prop.name),deviceIdx);
     requireSameInt("compute capability major",plan.device.computeCapabilityMajor,prop.major,deviceIdx);
     requireSameInt("compute capability minor",plan.device.computeCapabilityMinor,prop.minor,deviceIdx);
     requireSameInt("SM count",plan.device.multiProcessorCount,prop.multiProcessorCount,deviceIdx);
@@ -297,6 +325,7 @@ void validateDevices(const Plan& plan, const vector<int>& gpuIdxByServerThread) 
     requireSameInt("memory bus width",plan.device.memoryBusWidth,prop.memoryBusWidth,deviceIdx);
     requireSameInt("async engine count",plan.device.asyncEngineCount,prop.asyncEngineCount,deviceIdx);
     requireSameInt("concurrent kernels",plan.device.concurrentKernels ? 1 : 0,prop.concurrentKernels ? 1 : 0,deviceIdx);
+    requireSameUint64("global memory",plan.device.totalGlobalMem,(uint64_t)prop.totalGlobalMem,deviceIdx);
   }
 #endif
 }

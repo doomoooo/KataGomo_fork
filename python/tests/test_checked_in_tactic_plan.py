@@ -9,12 +9,14 @@ from python.cuda_tactic_workflow import validate_plan
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MODEL_SHA256 = "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
 EXPECTED_PLANS = {
-    "rtx4090": {
+    "rtx4090d": {
         "path": pathlib.Path(
             "final-migration/plans/sm89/rtx4090d-b12-s2/best-tactic-plan.json"
         ),
         "file_sha256": "29559e4ea40d9d117dbf54f82173b03d5833d8f3ebf55999e42dd7d66dd14912",
         "architecture": "sm89",
+        "gpu_class": "rtx4090",
+        "device_name": "NVIDIA GeForce RTX 4090 D",
         "compute_capability": [8, 9],
         "batch": 12,
         "records": 60,
@@ -25,11 +27,39 @@ EXPECTED_PLANS = {
         ),
         "file_sha256": "a5f93fbf012baf6170f3d9a65eb44ebf67051b4e77a6fec1c74c5a60fe2385e3",
         "architecture": "sm120",
+        "gpu_class": "rtx5080",
+        "device_name": "NVIDIA GeForce RTX 5080",
         "compute_capability": [12, 0],
         "batch": 16,
         "records": 63,
     },
 }
+
+
+def receiver_properties(producer: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": producer["name"],
+        "compute_capability": [
+            producer["computeCapabilityMajor"],
+            producer["computeCapabilityMinor"],
+        ],
+        "multiProcessorCount": producer["multiProcessorCount"],
+        "totalGlobalMem": producer["totalGlobalMem"],
+        "attributes": {
+            "maxThreadsPerBlock": producer["maxThreadsPerBlock"],
+            "maxThreadsPerMultiprocessor":
+                producer["maxThreadsPerMultiProcessor"],
+            "regsPerMultiprocessor": producer["regsPerMultiprocessor"],
+            "maxSharedMemoryPerBlockOptin":
+                producer["sharedMemPerBlockOptin"],
+            "sharedMemoryPerMultiprocessor":
+                producer["sharedMemPerMultiprocessor"],
+            "l2CacheSize": producer["l2CacheSize"],
+            "memoryBusWidth": producer["memoryBusWidth"],
+            "asyncEngineCount": producer["asyncEngineCount"],
+            "concurrentKernels": int(producer["concurrentKernels"]),
+        },
+    }
 
 
 class CheckedInTacticPlanTests(unittest.TestCase):
@@ -39,15 +69,20 @@ class CheckedInTacticPlanTests(unittest.TestCase):
             "best-tactic-plan.json"
         )):
             plan = json.loads(path.read_text())
-            gpu_class = plan["target"]["gpu_class"]
+            device_name = plan["target"]["cuda_device_capabilities_at_scan"][0][
+                "name"
+            ]
             self.assertNotIn(
-                gpu_class, discovered,
-                f"multiple current production plans for {gpu_class}",
+                device_name, discovered,
+                f"multiple current production plans for {device_name}",
             )
-            discovered[gpu_class] = path.relative_to(REPO)
+            discovered[device_name] = path.relative_to(REPO)
         self.assertEqual(
             discovered,
-            {key: value["path"] for key, value in EXPECTED_PLANS.items()},
+            {
+                value["device_name"]: value["path"]
+                for value in EXPECTED_PLANS.values()
+            },
         )
 
     def test_current_plans_are_certified_immutable_files(self) -> None:
@@ -82,7 +117,7 @@ class CheckedInTacticPlanTests(unittest.TestCase):
                 self.assertEqual(plan["batches"], [expected["batch"]])
 
                 target = plan["target"]
-                self.assertEqual(target["gpu_class"], gpu_class)
+                self.assertEqual(target["gpu_class"], expected["gpu_class"])
                 self.assertEqual(target["architecture"], expected["architecture"])
                 self.assertEqual(
                     target["compute_capability"], expected["compute_capability"]
@@ -112,16 +147,30 @@ class CheckedInTacticPlanTests(unittest.TestCase):
                 self.assertEqual(checksum, expected["file_sha256"])
 
                 producer = target["cuda_device_capabilities_at_scan"][0]
-                validate_plan(plan, device_properties={
-                    "compute_capability": expected["compute_capability"],
-                    "multiProcessorCount": producer["multiProcessorCount"],
-                })
-                with self.assertRaisesRegex(ValueError, "SM count"):
-                    validate_plan(plan, device_properties={
-                        "compute_capability": expected["compute_capability"],
-                        "multiProcessorCount":
-                            producer["multiProcessorCount"] + 1,
-                    })
+                self.assertEqual(producer["name"], expected["device_name"])
+                receiver = receiver_properties(producer)
+                validate_plan(plan, device_properties=receiver)
+
+                wrong_name = dict(receiver, name=receiver["name"] + " Other")
+                with self.assertRaisesRegex(ValueError, "receiver name"):
+                    validate_plan(plan, device_properties=wrong_name)
+
+                wrong_sm = dict(
+                    receiver,
+                    multiProcessorCount=producer["multiProcessorCount"] + 1,
+                )
+                with self.assertRaisesRegex(ValueError, "multiProcessorCount"):
+                    validate_plan(plan, device_properties=wrong_sm)
+
+                wrong_attributes = dict(receiver["attributes"])
+                wrong_attributes["l2CacheSize"] += 1
+                with self.assertRaisesRegex(ValueError, "l2CacheSize"):
+                    validate_plan(
+                        plan,
+                        device_properties=dict(
+                            receiver, attributes=wrong_attributes,
+                        ),
+                    )
 
 
 if __name__ == "__main__":

@@ -25,5 +25,6 @@ average logical batch of `11.64`. The corresponding fixed-B12 physical rate is
 nonzero SM time during the benchmark.
 
 The recorded CUDA ordinal is provenance only. A receiver may use another
-ordinal, but the loader still requires SM89, the exact model/board/batch,
-FP16/NHWC, and two streams, and fails closed on any incompatible tactic.
+ordinal, but the loader still requires the exact RTX 4090 D product and CUDA
+capability fingerprint, model/board/batch, FP16/NHWC, and two streams, and
+fails closed on any mismatch.

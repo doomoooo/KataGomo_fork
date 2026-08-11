@@ -1,6 +1,7 @@
 #ifndef NEURALNET_CUDATACTICPLAN_H_
 #define NEURALNET_CUDATACTICPLAN_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -12,6 +13,7 @@
 namespace CudaTacticPlan {
 
 struct DeviceRequirements {
+  std::string name;
   int computeCapabilityMajor;
   int computeCapabilityMinor;
   int multiProcessorCount;
@@ -24,6 +26,7 @@ struct DeviceRequirements {
   int memoryBusWidth;
   int asyncEngineCount;
   bool concurrentKernels;
+  uint64_t totalGlobalMem;
 };
 
 struct Plan {

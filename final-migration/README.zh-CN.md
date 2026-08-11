@@ -10,6 +10,29 @@
 本项目只优化 CUDA backend。production 路径不需要也不使用 TensorRT。本分支
 的改动不属于上游官方 KataGo。
 
+## Quick Start
+
+将源码完备 tar 解压到可写的持久化目录后，直接使用包内附带的认证 plan：
+
+```bash
+./setup.sh
+./build-for-plan.sh --device 0
+./run.sh --device 0
+```
+
+`setup.sh` 只写入解压目录。`build-for-plan.sh` 根据 CUDA Runtime device 0 的
+精确显卡型号和能力指纹选择唯一匹配的附带 plan，只编译该 plan 选中的 artifact，
+不会执行 autotune。`run.sh` 校验构建 manifest 后，以认证的 batch、stream、
+scheduler 和 CUDA pipeline 启动 KataGo GTP。
+
+如果需要重新搜索并认证当前显卡的 plan：
+
+```bash
+./setup.sh
+./run-autotune.sh --device 0
+./run.sh --device 0
+```
+
 ## 本分支增加的方法
 
 | 方面 | 方法 |
@@ -30,14 +53,15 @@
 这是 README 中唯一的性能汇总。所有结果使用相同的 70M 参数模型、严格 19x19、
 FP16、双推理 stream，并按
 `物理 launch batch 数 * batch / wall time` 计算。前两行是已接受的历史 RTX
-4090 baseline；plan 行是当前 RTX 4090 D 硬件证书。GPU 型号和宿主机不同，
-因此这里只作参考，不声称是归一化 speedup。
+4090 baseline；其余行是当前各显卡的硬件证书。GPU 型号和宿主机不同，因此
+这里只作参考，不声称是归一化 speedup。
 
 | Backend | GPU | Batch | Physical nnEval/s | 证据 |
 | --- | --- | ---: | ---: | --- |
-| 官方 CUDA baseline | RTX 4090 | 13 | 1876.270 | [baseline 记录](../docs/baseline-2026-08-05.md) |
-| TensorRT baseline | RTX 4090 | 13 | 2542.940 | [baseline 记录](../docs/baseline-2026-08-05.md) |
-| 当前最优已提交 CUDA plan | RTX 4090 D | 12 | 3110.690824 | [plan 证书](plans/sm89/rtx4090d-b12-s2/README.md) |
+| 官方 CUDA baseline | RTX 4090 | 13 | 1876.270 | 已接受历史基线 |
+| TensorRT baseline | RTX 4090 | 13 | 2542.940 | 已接受历史基线 |
+| 已提交 CUDA plan | RTX 4090 D | 12 | 3110.690824 | [plan 证书](plans/sm89/rtx4090d-b12-s2/README.md) |
+| 已提交 CUDA plan | RTX 5080 | 16 | 2836.211933 | [plan 证书](plans/sm120/rtx5080-b16-s2/README.md) |
 
 TensorRT 仅作为历史对比，不进入本工程的环境、编译、运行时或 release 包。
 
@@ -169,8 +193,9 @@ GPU 空闲只允许它自己的不足量逻辑请求组启动。另一张卡的 
 ./run.sh
 ```
 
-`build-for-plan.sh` 会校验接收设备与 plan 的 compute capability 和 SM 数量，
-把生成范围裁剪到 plan 的单个 batch、已选 tactic 及递归 artifact dependency，
+`build-for-plan.sh` 会校验接收设备与 plan 的精确显卡名称、compute capability、
+SM 数量、显存容量、L2、显存总线宽度、执行资源和 copy/concurrency 能力，再把
+生成范围裁剪到 plan 的单个 batch、已选 tactic 及递归 artifact dependency，
 然后编译 KataGo。它不会执行 batch prescan、候选 benchmark、refinement、long
 gate 或精度 replay。生成的 binary、artifact bundle 和裁剪空间会写入带 hash 的
 `plan-build.json`；`run.sh` 校验该 manifest 后才接受本地编译 binary。

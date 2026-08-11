@@ -251,9 +251,10 @@ python3 python/cuda_tactic_workflow.py apply \
 
 `ready_for_scan_bypass=true` means every history point was discovered and
 every final joint config passed the long gate. `production_ready=true`
-additionally requires the 8192-row certification. Receivers validate the
-architecture, GPU class, board, streams, model/config identity and candidate
-parameters, then apply per-batch overrides without scanning.
+additionally requires the 8192-row certification. Receivers validate the exact
+GPU product/capability fingerprint, architecture, board, streams, model/config
+identity and candidate parameters, then apply per-batch overrides without
+scanning.
 
 ## Reproducibility record
 
@@ -280,8 +281,9 @@ Versions are reproducibility evidence, not strict equality gates. The receiver
 may use compatible newer libraries while retaining enough information to
 reconstruct the producer environment exactly when needed.
 
-Runtime kernel policy does not inspect product names. FA4 receives the CUDA
-Runtime-reported SM count, persisting-L2 uses CUDA attributes/limits, and AOT
-launchers are dispatched by SM89 architecture, exact batch, stream topology
-and tactic ID. The distributed plan records the numeric producer capabilities
-as compatibility evidence; a receiver need not have the same marketing model.
+The plan selector and production loader both require the producer's exact CUDA
+product name, global-memory capacity, SM/L2/memory-bus topology, execution
+limits, async-engine count and concurrent-kernel capability. FA4 still receives
+the runtime-reported SM count, persisting-L2 uses CUDA attributes/limits, and
+AOT launchers are dispatched by architecture, exact batch, stream topology and
+tactic ID. A different CUDA ordinal is allowed; a different GPU SKU is not.

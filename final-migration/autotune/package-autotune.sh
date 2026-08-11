@@ -100,6 +100,7 @@ cp -- "${SCRIPT_DIR}/README.md" "${SCRIPT_DIR}/SPEC.md" "${SCRIPT_DIR}/source-lo
   "${bundle}/metadata/"
 cp -- "${REPO_ROOT}/final-migration/README.md" "${bundle}/README.md"
 cp -- "${REPO_ROOT}/final-migration/README.zh-CN.md" "${bundle}/README.zh-CN.md"
+cp -- "${REPO_ROOT}/final-migration/RUNTIME.md" "${bundle}/RUNTIME.md"
 cp -a -- "${REPO_ROOT}/final-migration/plans/." "${bundle}/plans/"
 cp -- "${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch" \
   "${SCRIPT_DIR}/patches/flash-attention-sm120-both16.patch" "${bundle}/patches/"
@@ -234,7 +235,7 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
   cd -- "${bundle}"
   find payload patches metadata plans -type f ! -path payload/SHA256SUMS -print0 \
     | sort -z | xargs -0 sha256sum > payload/SHA256SUMS
-  sha256sum README.md README.zh-CN.md >> payload/SHA256SUMS
+  sha256sum README.md README.zh-CN.md RUNTIME.md >> payload/SHA256SUMS
 )
 
 tarball="${OUTPUT_ROOT}/${bundle_name}.tar"
