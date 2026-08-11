@@ -8,6 +8,8 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
   ENV_SETUP="${SCRIPT_DIR}/final-migration/environment/setup.sh"
   # shellcheck source=final-migration/environment/lib/common.sh
   source "${SCRIPT_DIR}/final-migration/environment/lib/common.sh"
+  # shellcheck source=final-migration/autotune/corpus.lock.sh
+  source "${SCRIPT_DIR}/final-migration/autotune/corpus.lock.sh"
 
   prepare_source_runtime() {
     local model_name model_sha256 model_url runtime_root assets downloads
@@ -23,7 +25,7 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     assets="${runtime_root}/assets"
     downloads="${runtime_root}/downloads"
 
-    for command_name in cp curl gcc ldconfig readlink sha256sum; do
+    for command_name in cp curl gcc ldconfig readlink sha256sum unlink; do
       require_command "${command_name}"
     done
     [[ -x "${KATAGO_FINAL_VENV}/bin/python" ]] \
@@ -49,14 +51,20 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     cudnn_library="${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"
     [[ -r "${cudnn_library}" ]] || die "PyPI libcudnn.so is missing"
     system_library="$(dirname -- "${cudnn_library}")"
-    for source_name in TileLang cutlass flash-attention; do
-      [[ -d "${KATAGO_THIRD_PARTY_ROOT}/${source_name}" ]] \
-        || die "third-party source missing: ${source_name}; run ./setup.sh install first"
-    done
+    [[ -d "${KATAGO_THIRD_PARTY_ROOT}/cutlass" ]] \
+      || die "CUTLASS source missing; run ./setup.sh install first"
+    [[ -d "${KATAGO_FLASH_ATTN_ROOT}" ]] \
+      || die "patched FlashAttention source missing; run ./setup.sh install first"
 
     link_source_runtime_path "${SCRIPT_DIR}" "${runtime_root}/repo"
     link_source_runtime_path "${cuda_root}" "${runtime_root}/cuda"
-    link_source_runtime_path "${KATAGO_THIRD_PARTY_ROOT}" "${runtime_root}/sources"
+    if [[ -L "${runtime_root}/sources" ]]; then
+      unlink "${runtime_root}/sources"
+    fi
+    mkdir -p -- "${runtime_root}/sources"
+    link_source_runtime_path "${KATAGO_THIRD_PARTY_ROOT}/cutlass" "${runtime_root}/sources/cutlass"
+    link_source_runtime_path "${KATAGO_FLASH_ATTN_ROOT}" "${runtime_root}/sources/flash-attention"
+    link_source_runtime_path "${KATAGO_TILELANG_ROOT}" "${runtime_root}/sources/TileLang"
     mkdir -p -- "${runtime_root}/cudnn" "${runtime_root}/native"
     link_source_runtime_path "${cudnn_include}" "${runtime_root}/cudnn/include"
     link_source_runtime_path "${system_library}" "${runtime_root}/cudnn/lib"
@@ -109,12 +117,12 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
         manifest="${existing_corpus[1]}"
       fi
     fi
-    corpus_args=()
+    corpus_args=(--archive-sha256 "${AUTOTUNE_CORPUS_ARCHIVE_SHA256}")
     if [[ -n "${corpus}" ]]; then
       corpus_args+=(--corpus "${corpus}" --manifest "${manifest}")
     else
       corpus_args+=(
-        --refresh-latest
+        --archive-url "${AUTOTUNE_CORPUS_ARCHIVE_URL}"
         --archive-cache-dir "${KATAGO_LOCAL_ARCHIVE}/trainingdata"
         --archive-cache-dir "${downloads}/trainingdata"
       )
@@ -124,6 +132,13 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
       --repo "${SCRIPT_DIR}" --python "${KATAGO_FINAL_VENV}/bin/python" \
       --output-dir "${assets}" --work-dir "${runtime_root}/accuracy-corpus" \
       --result-json "${corpus_state}" "${corpus_args[@]}"
+    mapfile -t corpus_identity < <("${KATAGO_FINAL_VENV}/bin/python" -c \
+      'import json,sys; d=json.load(open(sys.argv[1])); print(d["corpus"]); print(d["source_archive"])' \
+      "${corpus_state}")
+    [[ "$(sha256sum "${corpus_identity[0]}" | awk '{print $1}')" == "${AUTOTUNE_CORPUS_SHA256}" ]] \
+      || die "accuracy corpus differs from the maintained correctness gate"
+    [[ "${corpus_identity[1]}" == "${AUTOTUNE_CORPUS_ARCHIVE}" ]] \
+      || die "accuracy corpus came from an unmaintained training archive"
 
     golden="${KATAGO_FP32_GOLDEN:-${runtime_root}/release-assets/replay-fixed-fp32-full19.krnn}"
     golden_metadata="${KATAGO_FP32_GOLDEN_METADATA:-${runtime_root}/release-assets/replay-fixed-fp32-full19.json}"
@@ -321,7 +336,7 @@ mapfile -t corpus_manifests < <(find "${PREFIX}/assets" -maxdepth 1 -type f \
   -name '*-19x19-8192-seed*-full19.manifest.json' -print | sort)
 (( ${#corpus_files[@]} == 1 && ${#corpus_manifests[@]} == 1 )) \
   || die "the release must carry exactly one 8192-row corpus and manifest"
-log "validating the frozen latest-at-release training-data corpus"
+log "validating the maintained frozen correctness corpus"
 "${python_bin}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
   --repo "${PREFIX}/repo" --python "${python_bin}" \
   --output-dir "${PREFIX}/assets" --work-dir "${PREFIX}/training-data" \
@@ -380,16 +395,16 @@ build_source_wheel() {
   : > "${marker}"
 }
 
-export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_APACHE_TVM_FFI=0.1.12
-build_source_wheel apache_tvm_ffi "${PREFIX}/sources/apache-tvm-ffi" apache-tvm-ffi
-
 export CUDA_VERSION=13.0
 export USE_CUDA=1
-build_source_wheel tilelang "${PREFIX}/sources/TileLang" tilelang
-build_source_wheel quack_kernels "${PREFIX}/sources/quack" quack-kernels
-
-export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FLASH_ATTN_4=0.0.1.dev1+g69e1bcbe7
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FLASH_ATTN_4=0.0.1.dev1+katago
 build_source_wheel flash_attn_4 "${PREFIX}/sources/flash-attention/flash_attn/cute" flash-attn-4
+
+tilelang_root="$("${python_bin}" -c \
+  'import importlib.util,pathlib; s=importlib.util.find_spec("tilelang"); print(pathlib.Path(next(iter(s.submodule_search_locations))).resolve())')"
+[[ -r "${tilelang_root}/src/tl_templates/cuda/debug.h" ]] \
+  || die "published TileLang wheel is missing generated-source headers"
+ln -sfn -- "${tilelang_root}" "${PREFIX}/sources/TileLang"
 
 log "verifying imports and recording exact installed environment"
 "${python_bin}" - <<'PY'

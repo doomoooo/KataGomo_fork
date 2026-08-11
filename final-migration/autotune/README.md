@@ -4,11 +4,12 @@ This directory defines the source-based, non-invasive autotune distribution.
 It is separate from `environment/package-distribution.sh`, which packages an
 already-built inference runtime.
 
-The release artifact is one uncompressed outer `.tar`.  Release construction
-resolves the newest dated archive listed by the official KataGo public
-training-data index, records its URL and SHA-256, and deterministically samples
-exactly 8192 full 19x19 rows with seed 20260803. It carries that corpus and its
-complete source/row manifest. It also carries a pinned
+The release artifact is one uncompressed outer `.tar`. Release construction
+uses the maintained training archive and corpus identities in `corpus.lock.sh`.
+The current gate contains exactly 8192 deterministically sampled full 19x19
+rows with seed 20260803. The corpus changes only when maintainers intentionally
+regenerate the FP32 reference and certified plans together. The tar carries the
+corpus and its complete source/row manifest. It also carries a pinned
 Python runtime, fixed CUDA 13.0.3 and cuDNN 9.20 PyPI wheels, the complete
 KataGo source tree, materialized third-party source trees, build-prerequisite
 payloads, the model, and integrity manifests. The CUDA compiler and C++ backend
@@ -52,17 +53,16 @@ compatible with CUDA 13.0, and the small OS bootstrap set checked by `setup.sh`
 bootstrap is carried in the tar; setup performs no APT transaction, Git clone,
 or network access. Setup validates the carried corpus before building. The
 same `prepare_accuracy_corpus.py` path can reconstruct a missing pair from the
-frozen official archive, while release construction uses `--refresh-latest` so
-"latest" is resolved once and then made reproducible. This deliberately
+locked official archive and rejects a different archive or corpus hash. It
+never changes the correctness gate merely because newer training data exists.
+This deliberately
 supports both validated Ubuntu 22.04 and
 24.04 hosts instead of encoding one Ubuntu release.
 
 `setup.sh` writes only below the extracted directory unless `--prefix` is
-given. It builds TVM-FFI, TileLang, Quack and FlashAttention from the carried
-source into the locked Python 3.12 environment. PyTorch and NVIDIA CUTLASS DSL
-are explicit upstream-binary exceptions; their exact wheels are carried
-because neither project exposes a practical equivalent source-only Python
-payload for this workflow. PyTorch's exact Triton wheel dependency is carried
+given. It installs the carried published TVM-FFI, TileLang, Quack and CUTLASS
+DSL wheels, then builds only the locally patched FlashAttention package from
+carried source. PyTorch's Triton wheel dependency is carried
 as a binary package only; this workflow does not generate or benchmark Triton
 kernels. CUDA, nvcc and cuDNN are fixed NVIDIA PyPI packages shared by Python
 code generation and the C++ backend.
@@ -113,9 +113,9 @@ backend's output as its own expected result. If the tar has no reference,
 `all` leaves `production_ready=false` and prints that accuracy was skipped.
 
 The accepted historical SM120 tanh-half2 FFN is preserved as hash-addressed
-B1-B32 device sources. The current/latest TileLang source build is used for new
-optimization candidates, while historical materialization verifies and wraps
-the frozen source instead of asking a newer compiler to reproduce old bytes.
+B1-B32 device sources. New candidates use the compatible published TileLang
+version; historical materialization verifies and wraps the frozen source
+instead of asking a newer compiler to reproduce old bytes.
 
 Each benchmark subprocess records SM occupancy with `nvidia-smi pmon` while it
 runs. A process that only holds device memory but has zero SM activity is not

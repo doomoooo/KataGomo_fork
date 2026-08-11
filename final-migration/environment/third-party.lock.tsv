@@ -1,15 +1,10 @@
 # name	tier	url	ref	builder	distribution	submodules
-# HEAD resolves the remote default-branch tip at setup time. Resolved commits
-# and compiled wheel hashes are recorded and shipped with distribution output.
-cutlass	core	https://github.com/NVIDIA/cutlass.git	HEAD	cutlass-dsl	nvidia-cutlass-dsl	none
-quack	core	https://github.com/Dao-AILab/quack.git	HEAD	python:.	quack-kernels	none
-flash-attention	core	https://github.com/Dao-AILab/flash-attention.git	HEAD	python:flash_attn/cute	flash-attn-4	none
-TileLang	core	https://github.com/tile-ai/TileLang.git	HEAD	python:.	tilelang	recursive
-# Highest stable TVM-FFI source satisfying both current TileLang (<0.1.13)
-# and FlashAttention (>=0.1.12). Revalidate this intersection when either
-# top-level HEAD changes its metadata constraint.
-apache-tvm-ffi	core	https://github.com/apache/tvm-ffi.git	v0.1.12	python:.	apache-tvm-ffi	recursive
-cudnn-frontend	core	https://github.com/NVIDIA/cudnn-frontend.git	HEAD	header	-	none
+# Only sources that production code actually patches or includes are cloned.
+# Resolved revisions are recorded as provenance, not used as compatibility
+# keys. TileLang, TVM-FFI, Quack and CUTLASS DSL use published wheels; the
+# cuDNN frontend headers are already vendored under cpp/external.
+cutlass	core	https://github.com/NVIDIA/cutlass.git	HEAD	header	-	none
+flash-attention	core	https://github.com/Dao-AILab/flash-attention.git	HEAD	python:flash_attn/cute	flash-attn-4	csrc/cutlass
 QFlash	research	https://github.com/EfficientCompLab/qflash.git	HEAD	python:.	qflash	none
 SageAttention	research	https://github.com/thu-ml/SageAttention.git	HEAD	python:.	sageattention	recursive
 luminal	research	https://github.com/luminal-ai/luminal.git	HEAD	rust	luminal-python	recursive

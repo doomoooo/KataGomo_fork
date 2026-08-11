@@ -12,23 +12,26 @@ from packaging.utils import canonicalize_name
 
 
 BINARY_BASE = {
+    "apache-tvm-ffi",
     "cuda-python",
     "einops",
     "numpy",
+    "nvidia-cutlass-dsl",
+    "nvidia-cutlass-dsl-libs-cu13",
+    "nvidia-cuda-nvdisasm",
     "packaging",
     "psutil",
+    "protobuf",
     "pyyaml",
+    "quack-kernels",
+    "tilelang",
     "torch",
     "torch-c-dlpack-ext",
     "triton",
 }
 
 SOURCE_DISTRIBUTIONS = {
-    "apache-tvm-ffi",
     "flash-attn-4",
-    "nvidia-cutlass-dsl",
-    "quack-kernels",
-    "tilelang",
 }
 
 SOURCE_IMPORTS = (

@@ -57,7 +57,7 @@ done
 
 log "compiling cuDNN frontend header smoke"
 g++ -std=c++17 \
-  -I"${KATAGO_THIRD_PARTY_ROOT}/cudnn-frontend/include" \
+  -I"${REPO_ROOT}/cpp/external/cudnn-frontend/include" \
   -I"${CUDA_HOME}/include" \
   -I"${KATAGO_CUDNN_ROOT}/include" \
   "${SCRIPT_DIR}/smoke/cudnn_frontend.cpp" \

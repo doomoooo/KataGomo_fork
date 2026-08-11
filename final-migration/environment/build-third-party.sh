@@ -49,12 +49,46 @@ manifest_field() {
 
 cleanup_component_build() {
   local name="$1" source_path="$2"
-  if [[ "${KATAGO_KEEP_SOURCE_BUILD_TREES:-0}" != "1" && -d "${source_path}/build" ]] && \
-     git -C "${source_path}" check-ignore -q build; then
+  if [[ "${KATAGO_KEEP_SOURCE_BUILD_TREES:-0}" != "1" && -d "${source_path}/build" ]]; then
+    assert_safe_managed_path "${source_path}/build"
     log "discarding reproducible intermediate build tree for ${name}"
     find "${source_path}/build" -mindepth 1 -delete
     rmdir "${source_path}/build"
   fi
+}
+
+prepare_patched_flash_source() {
+  local upstream="${KATAGO_THIRD_PARTY_ROOT}/flash-attention"
+  local target="${KATAGO_ENV_ROOT}/patched-sources/flash-attention"
+  local marker="${target}/.katago-patch-inputs"
+  local upstream_revision cutlass_revision expected
+  local sm89_patch="${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch"
+  local sm120_patch="${MIGRATION_ROOT}/autotune/patches/flash-attention-sm120-both16.patch"
+  upstream_revision="$(git -C "${upstream}" rev-parse HEAD)"
+  cutlass_revision="$(git -C "${upstream}/csrc/cutlass" rev-parse HEAD)"
+  expected="${upstream_revision} ${cutlass_revision} $(sha256sum "${sm89_patch}" | awk '{print $1}') $(sha256sum "${sm120_patch}" | awk '{print $1}')"
+  if [[ -r "${marker}" && "$(cat "${marker}")" == "${expected}" ]]; then
+    printf '%s\n' "${target}"
+    return
+  fi
+  assert_safe_managed_path "${target}"
+  if [[ -e "${target}" ]]; then
+    find "${target}" -mindepth 1 -delete
+    rmdir -- "${target}"
+  fi
+  mkdir -p -- "${target}"
+  tar --create --file - --directory "${upstream}" \
+    --exclude=.git --exclude=build --exclude=dist --exclude='*.egg-info' . \
+    | tar --extract --file - --directory "${target}"
+  (
+    cd /tmp
+    git apply --unsafe-paths --directory="${target}" "${sm89_patch}"
+    git apply --unsafe-paths --directory="${target}" "${sm120_patch}"
+  )
+  printf '%s\n' "${upstream_revision}" > "${target}/.katago-source-revision"
+  printf '%s\n' "${cutlass_revision}" > "${target}/csrc/cutlass/.katago-source-revision"
+  printf '%s\n' "${expected}" > "${marker}"
+  printf '%s\n' "${target}"
 }
 
 build_python_source_component() {
@@ -75,6 +109,9 @@ build_python_source_component() {
   fi
   temp_wheels="$(mktemp -d "${build_dir}/${name}.wheels.XXXXXX")"
   log "building ${name} from ${commit}"
+  if [[ "${name}" == "flash-attention" ]]; then
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FLASH_ATTN_4=0.0.1.dev1+katago
+  fi
   python -m pip wheel --no-deps --wheel-dir "${temp_wheels}" "${source_path}"
   wheel="$(find "${temp_wheels}" -maxdepth 1 -type f -name '*.whl' -print -quit)"
   [[ -n "${wheel}" ]] || die "${name} did not produce a wheel"
@@ -92,29 +129,13 @@ build_python_source_component() {
 
 build_python_component() {
   local name="$1" source_subdir="$2" commit="$3" builder="$4" distribution="$5"
+  local source_root="${KATAGO_THIRD_PARTY_ROOT}/${name}"
+  if [[ "${name}" == "flash-attention" ]]; then
+    source_root="$(prepare_patched_flash_source)"
+  fi
   build_python_source_component \
-    "${name}" "${KATAGO_THIRD_PARTY_ROOT}/${name}/${source_subdir}" \
+    "${name}" "${source_root}/${source_subdir}" \
     "${commit}" "${builder}" "${distribution}"
-}
-
-install_cutlass_dsl() {
-  local name="$1" commit="$2" builder="$3" distribution="$4"
-  local requirements="${KATAGO_THIRD_PARTY_ROOT}/${name}/python/CuTeDSL/requirements-cu13.txt"
-  local version
-  [[ -r "${requirements}" ]] || die "CUTLASS CUDA 13 requirements missing: ${requirements}"
-  log "CUTLASS DSL compiled libraries are not published as source; installing the official CUDA 13 wheel matching source ${commit}"
-  if [[ -d "${KATAGO_LOCAL_ARCHIVE}/wheels" ]] && \
-     python -m pip install --no-index --find-links "${KATAGO_LOCAL_ARCHIVE}/wheels" -r "${requirements}"; then
-    log "installed CUTLASS DSL binary payload from local wheel archive"
-  else
-    python -m pip install --index-url "${KATAGO_PYPI_MIRROR}" -r "${requirements}"
-  fi
-  if [[ -n "$(manifest_field "${name}" 1)" ]]; then
-    return
-  fi
-  version="$(python -c 'import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))' "${distribution}")"
-  printf '%s\t%s\t%s\t%s\t%s\t-\tupstream-binary\n' \
-    "${name}" "${distribution}" "${version}" "${commit}" "${builder}" >> "${manifest}"
 }
 
 while IFS=$'\t' read -r name tier url requested_ref builder distribution submodules; do
@@ -130,9 +151,6 @@ while IFS=$'\t' read -r name tier url requested_ref builder distribution submodu
   case "${builder}" in
     python:*)
       build_python_component "${name}" "${builder#python:}" "${commit}" "${builder}" "${distribution}"
-      ;;
-    cutlass-dsl)
-      install_cutlass_dsl "${name}" "${commit}" "${builder}" "${distribution}"
       ;;
     header)
       if [[ -z "$(manifest_field "${name}" 1)" ]]; then
@@ -150,16 +168,6 @@ while IFS=$'\t' read -r name tier url requested_ref builder distribution submodu
 done < "${SCRIPT_DIR}/third-party.lock.tsv"
 
 cp -- "${KATAGO_ENV_ROOT}/state/source-manifest.tsv" "${build_dir}/SOURCE-MANIFEST.tsv"
-runtime_requirements="${build_dir}/runtime-requirements.txt"
-python "${SCRIPT_DIR}/source-runtime-requirements.py" "${manifest}" > "${runtime_requirements}"
-if [[ -s "${runtime_requirements}" ]]; then
-  log "installing non-source runtime dependencies declared by locally built wheels"
-  python -m pip install \
-    --index-url "${KATAGO_PYPI_MIRROR}" \
-    --no-deps \
-    --constraint "${SCRIPT_DIR}/python-bootstrap-requirements.txt" \
-    --requirement "${runtime_requirements}"
-fi
 printf '%s\n' "${build_dir}" > "${KATAGO_ENV_ROOT}/state/latest-source-build"
 python "${SCRIPT_DIR}/check-python-environment.py"
 log "source builds complete; distributable wheels=${wheel_dir}"

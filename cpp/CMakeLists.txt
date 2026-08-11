@@ -50,7 +50,7 @@ set(USE_TCMALLOC 0 CACHE BOOL "Use TCMalloc")
 set(NO_GIT_REVISION 0 CACHE BOOL "Disable embedding the git revision into the compiled exe")
 set(USE_AVX2 0 CACHE BOOL "Compile with AVX2")
 set(USE_BIGGER_BOARDS_EXPENSIVE 0 CACHE BOOL "Allow boards up to size 50. Compiling with this will use more memory and slow down KataGo, even when playing on boards of size 19.")
-set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Pinned Dao-AILab/flash-attention checkout for the optional SM89 AOT kernel")
+set(SM89_FLASH_ATTN_ROOT "" CACHE PATH "Patched compatible Dao-AILab/flash-attention source for the optional SM89 AOT kernel")
 set(SM89_TACTIC_TILELANG_ROOT "" CACHE PATH "TileLang package root for generated SM89 tactic sources")
 set(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 dual-FFN fat registry")
 set(SM89_SEARCH_DUAL_FFN_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 dual-FFN sources")
@@ -58,9 +58,9 @@ set(SM89_SEARCH_LINEAR2_FAT_REGISTRY "" CACHE FILEPATH "Generated SM89 linear2 f
 set(SM89_SEARCH_LINEAR2_FAT_SOURCES "" CACHE STRING "Semicolon-separated generated SM89 linear2 sources")
 set(SM89_CUDA_ARCHITECTURES "" CACHE STRING "Optional CUDA architecture list for an SM89-only search build")
 set(KATAGO_TILELANG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/TileLang"
-  CACHE PATH "Pinned TileLang source root used by generated CUDA sources")
+  CACHE PATH "Compatible TileLang package root used by generated CUDA sources")
 set(KATAGO_CUTLASS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/cutlass"
-  CACHE PATH "Pinned CUTLASS source root used by generated CUDA sources")
+  CACHE PATH "Compatible CUTLASS source root used by generated CUDA sources")
 
 set(USE_CACHE_TENSORRT_PLAN 0 CACHE BOOL "Use TENSORRT plan cache. May use a lot of disk space. Only applies when USE_BACKEND is TENSORRT.")
 mark_as_advanced(USE_CACHE_TENSORRT_PLAN)
@@ -218,46 +218,7 @@ if(USE_BACKEND STREQUAL "CUDA")
        NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/include/cutlass/cutlass.h" OR
        NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/examples/45_dual_gemm/device/dual_gemm.h" OR
        NOT EXISTS "${SM89_FLASH_ATTN_ROOT}/LICENSE")
-      message(FATAL_ERROR "SM89_FLASH_ATTN_ROOT does not contain the pinned flash-attention hopper and CUTLASS sources")
-    endif()
-    set(KATAGO_FLASH_ATTN_COMMIT
-      "69e1bcbe77c359c84b3a4589e92a7c076e33a202"
-      CACHE STRING "Pinned unified FlashAttention source revision")
-    set(KATAGO_FLASH_CUTLASS_COMMIT
-      "7127592069c2fe01b041e174ba4345ef9b279671"
-      CACHE STRING "Pinned FlashAttention CUTLASS submodule revision")
-    if(EXISTS "${SM89_FLASH_ATTN_ROOT}/.katago-source-revision")
-      file(READ "${SM89_FLASH_ATTN_ROOT}/.katago-source-revision" KATAGO_FLASH_GIT_HEAD)
-      string(STRIP "${KATAGO_FLASH_GIT_HEAD}" KATAGO_FLASH_GIT_HEAD)
-      set(KATAGO_FLASH_GIT_RESULT 0)
-    else()
-      execute_process(
-        COMMAND git -C "${SM89_FLASH_ATTN_ROOT}" rev-parse HEAD
-        RESULT_VARIABLE KATAGO_FLASH_GIT_RESULT
-        OUTPUT_VARIABLE KATAGO_FLASH_GIT_HEAD
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
-    endif()
-    if(EXISTS "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/.katago-source-revision")
-      file(READ
-        "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass/.katago-source-revision"
-        KATAGO_FLASH_CUTLASS_GIT_HEAD)
-      string(STRIP "${KATAGO_FLASH_CUTLASS_GIT_HEAD}" KATAGO_FLASH_CUTLASS_GIT_HEAD)
-      set(KATAGO_FLASH_CUTLASS_GIT_RESULT 0)
-    else()
-      execute_process(
-        COMMAND git -C "${SM89_FLASH_ATTN_ROOT}/csrc/cutlass" rev-parse HEAD
-        RESULT_VARIABLE KATAGO_FLASH_CUTLASS_GIT_RESULT
-        OUTPUT_VARIABLE KATAGO_FLASH_CUTLASS_GIT_HEAD
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
-    endif()
-    if(NOT KATAGO_FLASH_GIT_RESULT EQUAL 0 OR
-       NOT KATAGO_FLASH_GIT_HEAD STREQUAL KATAGO_FLASH_ATTN_COMMIT OR
-       NOT KATAGO_FLASH_CUTLASS_GIT_RESULT EQUAL 0 OR
-       NOT KATAGO_FLASH_CUTLASS_GIT_HEAD STREQUAL KATAGO_FLASH_CUTLASS_COMMIT)
-      message(FATAL_ERROR
-        "SM89 FlashAttention requires upstream ${KATAGO_FLASH_ATTN_COMMIT} with CUTLASS ${KATAGO_FLASH_CUTLASS_COMMIT}")
+      message(FATAL_ERROR "SM89_FLASH_ATTN_ROOT does not contain compatible flash-attention hopper and CUTLASS sources")
     endif()
     file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/tile_size.h" KATAGO_FLASH_TILE_SIZE_SOURCE)
     file(READ "${SM89_FLASH_ATTN_ROOT}/hopper/flash_fwd_launch_template.h" KATAGO_FLASH_FWD_LAUNCH_SOURCE)

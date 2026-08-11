@@ -6,10 +6,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 # shellcheck source=../environment/python-runtime.lock.sh
 source "${SCRIPT_DIR}/../environment/python-runtime.lock.sh"
+# shellcheck source=corpus.lock.sh
+source "${SCRIPT_DIR}/corpus.lock.sh"
 ENV_ROOT="${KATAGO_ENV_ROOT:-${REPO_ROOT}/.final-migration-env}"
 SOURCE_ROOT="${AUTOTUNE_SOURCE_ROOT:-${ENV_ROOT}/third_party}"
 OUTPUT_ROOT="${AUTOTUNE_OUTPUT_ROOT:-${ENV_ROOT}/autotune-distributions}"
-FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-/workspace/third_party/flash-attention/csrc/cutlass}"
+FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-${SOURCE_ROOT}/flash-attention/csrc/cutlass}"
+ZLIB_ROOT="${AUTOTUNE_ZLIB_ROOT:-${SOURCE_ROOT}/zlib}"
 MODEL="${AUTOTUNE_MODEL:-/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz}"
 CORPUS="${AUTOTUNE_CORPUS:-}"
 CORPUS_MANIFEST="${AUTOTUNE_CORPUS_MANIFEST:-}"
@@ -27,34 +30,60 @@ die() { printf '[autotune-package] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command missing: $1"; }
 for command_name in curl find git gzip python3 sha256sum tar; do need "${command_name}"; done
 
-if [[ -z "${CORPUS}" || -z "${CORPUS_MANIFEST}" ]]; then
-  [[ -z "${CORPUS}" && -z "${CORPUS_MANIFEST}" ]] \
-    || die "AUTOTUNE_CORPUS and AUTOTUNE_CORPUS_MANIFEST must be set together"
+[[ -z "${CORPUS}" && -z "${CORPUS_MANIFEST}" ]] || \
+  [[ -n "${CORPUS}" && -n "${CORPUS_MANIFEST}" ]] \
+  || die "AUTOTUNE_CORPUS and AUTOTUNE_CORPUS_MANIFEST must be set together"
+if [[ -z "${CORPUS}" ]]; then
+  for corpus_state in \
+    "${ENV_ROOT}/state/accuracy-corpus.json" \
+    "${ENV_ROOT}/accuracy-corpus/current.json"; do
+    [[ -r "${corpus_state}" ]] || continue
+    mapfile -t frozen_pair < <("${CORPUS_PYTHON}" -c \
+      'import json,sys; d=json.load(open(sys.argv[1])); print(d["corpus"]); print(d["manifest"])' \
+      "${corpus_state}")
+    if [[ -r "${frozen_pair[0]}" && -r "${frozen_pair[1]}" ]]; then
+      CORPUS="${frozen_pair[0]}"
+      CORPUS_MANIFEST="${frozen_pair[1]}"
+      break
+    fi
+  done
+fi
+if [[ -z "${CORPUS}" ]]; then
   [[ -x "${CORPUS_PYTHON}" ]] || CORPUS_PYTHON="$(command -v python3)"
   "${CORPUS_PYTHON}" -c 'import numpy' \
     || die "accuracy-corpus Python lacks NumPy; run the environment setup first"
-  log "resolving the latest public KataGo training archive and the fixed 8192-row corpus"
+  log "reconstructing the frozen 8192-row correctness corpus"
   "${CORPUS_PYTHON}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
     --repo "${REPO_ROOT}" --python "${CORPUS_PYTHON}" \
     --output-dir "${CORPUS_OUTPUT_ROOT}" \
     --work-dir "${ENV_ROOT}/accuracy-corpus" \
     --archive-cache-dir "${TRAINING_DATA_CACHE}" \
-    --refresh-latest --result-json "${CORPUS_RESULT}"
+    --archive-url "${AUTOTUNE_CORPUS_ARCHIVE_URL}" \
+    --archive-sha256 "${AUTOTUNE_CORPUS_ARCHIVE_SHA256}" \
+    --result-json "${CORPUS_RESULT}"
   CORPUS="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["corpus"])' "${CORPUS_RESULT}")"
   CORPUS_MANIFEST="$("${CORPUS_PYTHON}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest"])' "${CORPUS_RESULT}")"
 else
-  log "validating the supplied frozen 8192-row corpus and source identity"
+  log "validating the frozen 8192-row corpus and source identity"
   "${CORPUS_PYTHON}" "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
     --repo "${REPO_ROOT}" --python "${CORPUS_PYTHON}" \
     --output-dir "${CORPUS_OUTPUT_ROOT}" \
     --work-dir "${ENV_ROOT}/accuracy-corpus" \
     --corpus "${CORPUS}" --manifest "${CORPUS_MANIFEST}" \
+    --archive-sha256 "${AUTOTUNE_CORPUS_ARCHIVE_SHA256}" \
     --result-json "${CORPUS_RESULT}"
 fi
+[[ "$(sha256sum "${CORPUS}" | awk '{print $1}')" == "${AUTOTUNE_CORPUS_SHA256}" ]] \
+  || die "corpus differs from the maintained correctness gate"
+locked_source_archive="$("${CORPUS_PYTHON}" -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["source_archive"])' \
+  "${CORPUS_MANIFEST}")"
+[[ "${locked_source_archive}" == "${AUTOTUNE_CORPUS_ARCHIVE}" ]] \
+  || die "corpus came from an unmaintained training archive: ${locked_source_archive}"
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
   || die "package only from a clean committed final-migration tree"
-for path in "${FLASH_CUTLASS_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
+for path in "${FLASH_CUTLASS_ROOT}" "${ZLIB_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
   [[ -e "${path}" ]] || die "required payload input missing: ${path}"
 done
 mkdir -p -- "${OUTPUT_ROOT}" "$(dirname -- "${PYTHON_ARCHIVE}")"
@@ -93,6 +122,7 @@ cp -- "${REPO_ROOT}/setup.sh" "${REPO_ROOT}/run-autotune.sh" \
   "${REPO_ROOT}/python/build_parallelism.py" "${bundle}/"
 cp -- "${REPO_ROOT}/run.sh" "${bundle}/run.sh"
 cp -- "${SCRIPT_DIR}/README.md" "${SCRIPT_DIR}/SPEC.md" "${SCRIPT_DIR}/source-lock.tsv" \
+  "${SCRIPT_DIR}/corpus.lock.sh" \
   "${bundle}/metadata/"
 cp -- "${REPO_ROOT}/final-migration/README.md" "${bundle}/README.md"
 cp -- "${REPO_ROOT}/final-migration/README.zh-CN.md" "${bundle}/README.zh-CN.md"
@@ -109,37 +139,35 @@ chmod 0755 "${bundle}/setup.sh" "${bundle}/run-autotune.sh" \
   "${bundle}/detect_gpu.py" \
   "${bundle}/prepare_accuracy_corpus.py"
 
-revision_for() {
-  awk -F '\t' -v name="$1" '$1 == name {print $2; exit}' "${SCRIPT_DIR}/source-lock.tsv"
-}
-
 copy_source() {
-  local name="$1" source="${SOURCE_ROOT}/$1" expected actual target
-  expected="$(revision_for "${name}")"
-  [[ -n "${expected}" ]] || die "no lock entry for ${name}"
+  local name="$1" source="$2" actual target
+  grep -q "^${name}"$'\t' "${SCRIPT_DIR}/source-lock.tsv" \
+    || die "no compatibility entry for ${name}"
   actual="$(git -C "${source}" rev-parse HEAD)"
-  [[ "${actual}" == "${expected}" ]] || die "${name} revision ${actual} != ${expected}"
   [[ -z "$(git -C "${source}" status --porcelain)" ]] || die "dirty source tree: ${source}"
   target="${source_stage}/${name}"
   mkdir -p -- "${target}"
   tar --create --file - --directory "${source}" --exclude=.git --exclude=build \
       --exclude=dist --exclude='*.egg-info' . | tar --extract --file - --directory "${target}"
   printf '%s\n' "${actual}" > "${target}/.katago-source-revision"
+  printf '%s\t%s\n' "${name}" "${actual}" >> "${bundle}/metadata/resolved-sources.tsv"
 }
 
-for name in cutlass flash-attention quack TileLang apache-tvm-ffi cudnn-frontend zlib; do
-  copy_source "${name}"
-done
+printf 'name\tresolved_revision\n' > "${bundle}/metadata/resolved-sources.tsv"
+copy_source cutlass "${SOURCE_ROOT}/cutlass"
+copy_source flash-attention "${SOURCE_ROOT}/flash-attention"
+copy_source zlib "${ZLIB_ROOT}"
 
-flash_cutlass_expected="$(revision_for flash-cutlass)"
 flash_cutlass_actual="$(git -C "${FLASH_CUTLASS_ROOT}" rev-parse HEAD)"
-[[ "${flash_cutlass_actual}" == "${flash_cutlass_expected}" ]] \
-  || die "FlashAttention CUTLASS revision mismatch"
+[[ -z "$(git -C "${FLASH_CUTLASS_ROOT}" status --porcelain)" ]] \
+  || die "dirty FlashAttention CUTLASS source"
 flash_cutlass_target="${source_stage}/flash-attention/csrc/cutlass"
 find "${flash_cutlass_target}" -mindepth 1 -delete 2>/dev/null || true
 tar --create --file - --directory "${FLASH_CUTLASS_ROOT}" --exclude=.git . \
   | tar --extract --file - --directory "${flash_cutlass_target}"
 printf '%s\n' "${flash_cutlass_actual}" > "${flash_cutlass_target}/.katago-source-revision"
+printf '%s\t%s\n' flash-cutlass "${flash_cutlass_actual}" \
+  >> "${bundle}/metadata/resolved-sources.tsv"
 
 log "applying the two recorded FlashAttention patches to the carried source"
 (

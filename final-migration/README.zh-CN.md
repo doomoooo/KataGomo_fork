@@ -32,9 +32,11 @@ autotune。`run.sh` 校验构建 manifest 后，以认证的 batch、stream、
 scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
 直接 clone 源码仓库时，仓库根目录也提供同名入口。此时 `./setup.sh` 会在
-`.final-migration-env` 下编译当前依赖源码，并在其中固定安装 CUDA 13.0.3、
+`.final-migration-env` 下安装 CUDA 13.0.3、
 cuDNN 9.20 和 Python 3.12.13。CUDA、nvcc、cuDNN、PyTorch 统一来自同一个固定
-版本的 PyPI 环境，不再下载或维护第二套 CUDA 工具链。宿主机只需提供 NVIDIA
+版本的 PyPI 环境，不再下载或维护第二套 CUDA 工具链。TileLang、TVM-FFI 和
+Quack 直接使用发布 wheel；只获取 CUTLASS 和带本地 patch 的 FlashAttention
+源码，默认复用干净缓存，仅在 `KATAGO_REFRESH_SOURCES=1` 时刷新。宿主机只需提供 NVIDIA
 驱动、基础编译器和 zlib 开发文件；脚本不会调用 `sudo` 或修改系统软件包。
 随后准备 autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
 `KATAGO_MODEL`，缺失时从 KataGo v1.17.1 官方 GitHub release 下载，并保存到
@@ -280,12 +282,13 @@ scheduler 或 backend。
 工程生成两类非侵入式产物：
 
 1. 源码完备 autotune SDK：包含 KataGo 源码、固定 CPython、CUDA 编译工具链、
-   cuDNN、优化器/第三方库源码、锁定 wheels、模型、corpus、plans、patches、
+   cuDNN、两个必要源码树、锁定 wheels、模型、corpus、plans、patches、
    licenses 和 SHA-256 manifests。目标机无需 GitHub clone 或自行寻找依赖。
 2. 预编译 runtime tar：包含 CUDA backend、所需用户态 runtime 库、plans、
    installer、licenses 和 hash。接收端只需要兼容的 NVIDIA 驱动。
 
-关键优化依赖从 tar 携带源码编译；PyPI 小依赖固定精确版本与 hash。setup 检测
+已发布优化依赖从 tar 携带 wheel 安装；只有带 patch 的 FA4 从携带源码编译。
+release 固定 wheel 版本与 hash，源码 commit 只作为来源记录而非兼容性门。setup 检测
 受支持 Ubuntu 版本，不写死 Ubuntu 24.04。编译并行度根据内存保守计算。
 
 开发环境：

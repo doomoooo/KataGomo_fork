@@ -1,7 +1,7 @@
-# Binary/bootstrap packages only. Development setup asks the configured mirror
-# for current releases and captures the complete resolved environment in the
-# compiled distribution. Source-capable optimizer components are cloned and
-# locally built by build-third-party.sh.
+# Binary/bootstrap packages only. Development setup installs published wheels
+# whenever upstream ships them; only the locally patched FA4 package is built
+# from source by build-third-party.sh.
+apache-tvm-ffi
 cuda-python
 einops
 numpy
@@ -9,5 +9,7 @@ packaging
 psutil
 pytest
 PyYAML
+quack-kernels
+tilelang
 torch
 torch-c-dlpack-ext

@@ -90,8 +90,33 @@ build_requirements="${MIGRATION_ROOT}/autotune/python-build-requirements.txt"
 binary_requirements="${MIGRATION_ROOT}/autotune/python-binary-requirements.txt"
 wheelhouse="${KATAGO_LOCAL_ARCHIVE}/wheels"
 python_packages_ready=0
+requirements_marker="${KATAGO_ENV_ROOT}/state/python-requirements.sha256"
+requirements_identity="$({ sha256sum "${build_requirements}"; sha256sum "${binary_requirements}"; } | sha256sum | awk '{print $1}')"
 
-if [[ -d "${wheelhouse}" ]]; then
+if [[ "$(cat "${requirements_marker}" 2>/dev/null || true)" == "${requirements_identity}" ]] && \
+   python - "${build_requirements}" "${binary_requirements}" <<'PY'
+import importlib.metadata
+import pathlib
+import sys
+
+for requirements in map(pathlib.Path, sys.argv[1:]):
+    for raw in requirements.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        operator = "===" if "===" in line else "=="
+        if operator not in line:
+            raise SystemExit(1)
+        name, expected = line.split(operator, 1)
+        if importlib.metadata.version(name) != expected:
+            raise SystemExit(1)
+PY
+then
+  python_packages_ready=1
+  log "reusing the already verified Python dependency set"
+fi
+
+if (( python_packages_ready == 0 )) && [[ -d "${wheelhouse}" ]]; then
   log "installing the fixed Python dependency set from the local wheel archive"
   if python -m pip install --no-index --find-links "${wheelhouse}" \
     --upgrade --no-deps --requirement "${build_requirements}" \
@@ -112,5 +137,7 @@ if (( python_packages_ready == 0 )); then
     die "could not resolve the fixed Python packages from the domestic mirror; populate archive/wheels or configure a proxy"
   fi
 fi
+
+printf '%s\n' "${requirements_identity}" > "${requirements_marker}"
 
 log "pinned Python environment complete; source components are installed next"

@@ -17,13 +17,13 @@ Common locked environment:
 - CUDA toolkit 13.0.3 from fixed PyPI packages, including nvcc, CRT, CCCL and
   NVVM; the C++ backend and Python generators share this one installation;
 - cuDNN 9.20.0 for CUDA 13 from the PyTorch-compatible PyPI package;
-- FlashAttention `69e1bcbe`, with the SM89 C++ and minimal SM120 both16
-  patches applied before its wheel is built;
-- CUTLASS submodule `71275920` for SM89 FlashAttention and the independently
-  pinned latest CUTLASS source for CuTe generation;
-- exact revisions in `source-lock.tsv` for TileLang, Quack, TVM-FFI and cuDNN
-  frontend;
-- pinned wheels for build tools, PyTorch, CUTLASS DSL and small runtime
+- a clean compatible FlashAttention source with the SM89 C++ and minimal SM120
+  both16 patches applied before its wheel is built;
+- the FlashAttention-declared CUTLASS submodule for SM89 and a clean compatible
+  CUTLASS source for CuTe generation; resolved revisions are provenance only;
+- published TileLang 0.1.13, Quack 0.6.4 and compatible TVM-FFI 0.1.12 wheels,
+  plus KataGo's vendored cuDNN frontend headers;
+- versioned wheels for build tools, PyTorch, CUTLASS DSL and small runtime
   dependencies, including PyTorch's Triton dependency. Triton is not a source
   component or a KataGo kernel generator;
 
@@ -119,9 +119,11 @@ both aggregate metrics and the GTP-shaped verifier's worst-per-request
 max-absolute/per-head RMSE envelope. A single failing row is a hard accuracy
 failure even when the corpus-wide RMSE passes.
 
-The 8192-row input corpus is not a hand-maintained workspace prerequisite.
-Release construction resolves the newest dated `.tgz` in the official
-`kata1/trainingdata` index, freezes its URL and SHA-256, safely extracts it, and
-uniformly samples exactly 8192 full 19x19 rows with seed 20260803. The sampled
-NPZ and full provenance manifest are carried in the tar and revalidated by
-`setup.sh`. Candidate inference output is never accepted as the FP32 reference.
+The 8192-row input corpus is a maintained correctness fixture, not a moving
+"latest training data" target. `corpus.lock.sh` fixes the official archive URL,
+archive SHA-256, and sampled-corpus SHA-256. Reconstruction safely extracts that
+archive and uniformly samples exactly 8192 full 19x19 rows with seed 20260803.
+The sampled NPZ and full provenance manifest are carried in the tar and
+revalidated by `setup.sh`. Changing the fixture requires intentionally
+regenerating the FP32 reference and certified plans together. Candidate
+inference output is never accepted as the FP32 reference.

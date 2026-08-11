@@ -40,32 +40,23 @@ constraint and the unintended base/CUDA-library mismatch.
 
 ## Clean migration source policy
 
-The clean environment resolves upstream default-branch HEAD and builds locally
-instead of copying packages from `/workspace/venv`. The 2026-08-07 source
-manifest resolved:
+Only two upstream source trees remain in the production setup:
 
-| Source | Resolved commit | Description |
-| --- | --- | --- |
-| CUTLASS | `dcf215af68a2d08d305076c152a06f201728cd53` | `dcf215af` |
-| Quack | `050387bde3d3f03a26c87279bff2df3173640127` | `v0.6.3` |
-| FlashAttention | `69e1bcbe77c359c84b3a4589e92a7c076e33a202` | `69e1bcb` |
-| TileLang | `12dbf3e9d30d84b5c27d7b8b672c268457f7eb27` | `12dbf3e9` |
-| Compatible TVM FFI | `3050b0a7bd48e04f853027c5fa1f5ab7bc20b856` | `v0.1.12` |
-| cuDNN frontend | `ec139877e51f17d6b1d7520d9789f34d1c65f77e` | `ec13987` |
+- CUTLASS, for C++ headers and the CuTe dense-GEMM generator;
+- FlashAttention, plus only its required `csrc/cutlass` submodule, because the
+  SM89 and SM120 accepted paths carry checked-in patches.
 
-The complete generated manifest also records recursive submodule commits. A
-future setup run may resolve newer commits; the compiled distribution captures
-the exact resolved tuple and every wheel hash so deployment remains immutable.
+The resolved revisions and source hashes are recorded in every release, but
+are not hard-coded compatibility keys. The generator validates the required
+source layout, each source rewrite requires its expected API fragments, and
+CMake verifies the applied patch markers. A compatible newer upstream source
+is therefore allowed; an incompatible one fails before code generation.
 
-TVM-FFI is deliberately not resolved from its independent default-branch HEAD.
-TileLang's native libraries and Python enum/reflection registry share an ABI,
-while FlashAttention also declares a minimum FFI release. The build therefore
-uses the highest stable source tag in their current constraint intersection:
-`v0.1.12`. An experiment with independent TVM-FFI HEAD
-`620fece9f8d81dded637cec9fc52e388f7bd0ae1` built successfully but failed at
-`import tilelang` because the `tl.SwizzleMode` registration was incompatible.
-Both TileLang and FlashAttention imports pass with `v0.1.12`, and their FFI
-metadata requirements are satisfied.
+TileLang 0.1.13, Quack 0.6.4 and TVM-FFI 0.1.12 use their published wheels.
+TVM-FFI remains at 0.1.12 because TileLang 0.1.13 declares `<0.1.13` and an
+independent newer FFI can break TileLang's reflection registry despite a
+successful native build. KataGo's existing `cpp/external/cudnn-frontend` copy
+replaces a redundant standalone clone.
 
 PyTorch 2.13.0/CUDA 13.0 and other Python bootstrap wheels are binary inputs.
 CUTLASS headers come from current source. CUTLASS CuTe DSL 4.7's compiled MLIR

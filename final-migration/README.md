@@ -36,10 +36,13 @@ resulting manifest and starts KataGo GTP with the certified batch, streams,
 scheduler, and CUDA pipeline.
 
 The same entry-point names are checked in at the root of a direct source
-clone. In that layout `./setup.sh` builds the current dependency sources and
-installs fixed CUDA 13.0.3, cuDNN 9.20, and Python 3.12.13 packages under
+clone. In that layout `./setup.sh` installs CUDA 13.0.3, cuDNN 9.20, and
+Python 3.12.13 packages under
 `.final-migration-env`. CUDA, nvcc, cuDNN and PyTorch share one fixed PyPI
-environment; no separate CUDA toolkit is downloaded. The NVIDIA driver, host
+environment; no separate CUDA toolkit is downloaded. Published TileLang,
+TVM-FFI and Quack wheels are used directly. Only CUTLASS and the locally
+patched FlashAttention sources are acquired, and clean cached checkouts are
+reused unless `KATAGO_REFRESH_SOURCES=1` is set. The NVIDIA driver, host
 compiler, and zlib development files are the only host-side prerequisites. It
 never invokes `sudo` or changes system packages. It then prepares the model and
 8192-row corpus used by autotune. Local archives and `KATAGO_MODEL` are checked
@@ -321,15 +324,17 @@ scheduler or backend.
 Two non-invasive artifacts are produced:
 
 1. The source-complete autotune SDK contains the KataGo source, pinned CPython,
-   CUDA build toolkit, cuDNN, optimizer/library source trees, locked wheels,
+   CUDA build toolkit, cuDNN, the two required source trees, locked wheels,
    model, corpus, plans, patches, licenses, and SHA-256 manifests. The target
    does not clone GitHub or search for dependencies.
 2. The prebuilt runtime tar contains the compiled CUDA backend, required
    user-space runtime libraries, plans, installer, licenses, and hashes. The
    receiver only needs a compatible NVIDIA driver.
 
-Critical optimizer dependencies are built from the carried source. Small PyPI
-dependencies are exact-version and hash locked. The setup detects supported
+Published optimizer components are installed from carried wheels; only the
+patched FA4 package is built from carried source. Wheel versions and hashes are
+locked in a release, while source commits are recorded provenance rather than
+compatibility gates. The setup detects supported
 Ubuntu releases rather than hard-coding Ubuntu 24.04. Build parallelism is
 memory-aware and conservative.
 

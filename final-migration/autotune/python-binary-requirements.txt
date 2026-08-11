@@ -1,3 +1,4 @@
+apache-tvm-ffi==0.1.12
 cloudpickle==3.1.2
 cuda-bindings==13.3.1
 cuda-core==1.0.1
@@ -20,6 +21,7 @@ nvidia-cuda-crt==13.0.88
 nvidia-cuda-culibos==13.0.85
 nvidia-cuda-cupti==13.0.85
 nvidia-cuda-nvcc==13.0.88
+nvidia-cuda-nvdisasm==13.3.73
 nvidia-cuda-nvrtc==13.0.88
 nvidia-cuda-runtime==13.0.96
 nvidia-cudnn-cu13==9.20.0.48
@@ -33,19 +35,23 @@ nvidia-cutlass-dsl==4.7.0
 nvidia-cutlass-dsl-libs-base==4.7.0
 nvidia-cutlass-dsl-libs-core==4.7.0
 nvidia-cutlass-dsl-libs-cu12==4.7.0
+nvidia-cutlass-dsl-libs-cu13==4.7.0
 nvidia-nccl-cu13==2.29.7
 nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
 nvidia-nvvm==13.0.88
+quack-kernels==0.6.4
 psutil==7.2.2
 pluggy==1.6.0
+protobuf==6.33.6
 pygments==2.20.0
 pytest==9.1.1
 pyyaml==6.0.3
 sympy==1.14.0
 torch==2.13.0
 torch-c-dlpack-ext==0.1.5
+tilelang===0.1.13
 triton==3.7.1
 tqdm==4.70.0
 typing-extensions==4.16.0

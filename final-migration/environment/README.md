@@ -3,7 +3,7 @@
 Use `setup.sh` as the public entry point.
 
 ```text
-setup.sh install   pinned private Python + latest locally built dependencies
+setup.sh install   private Python + published wheels + patched FA4 source
 setup.sh audit     version/library/path audit (no installation)
 setup.sh verify    compile/import smokes for third-party dependencies
 setup.sh build     build the KataGo CUDA backend
@@ -27,6 +27,8 @@ Configuration variables:
   python-build-standalone archive. The archive's fixed SHA-256 is always
   checked before extraction.
 - `KATAGO_THIRD_PARTY_ROOT`: override managed source location.
+- `KATAGO_REFRESH_SOURCES=1`: explicitly refresh the two cached upstream
+  source trees. The default reuses a clean checkout and performs no HEAD check.
 - `KATAGO_INCLUDE_RESEARCH=1`: also acquire reference-only repositories.
 - `KATAGO_BUILD_JOBS`: explicit parallel compile override. By default the
   scripts take the lower of `nproc` and a memory-aware limit: 75% of current
@@ -43,31 +45,31 @@ Configuration variables:
   to the CUDA 13.0 baseline (`580.65.06`) and must be updated when moving to a
   CUDA release with a different compatibility floor.
 
-For source-capable dependencies, the setup checks current upstream HEAD and
-builds it locally. A local Git bundle seeds that checkout but does not prevent
-the latest-commit check. GitHub access may require a proxy. Example:
+Only CUTLASS and FlashAttention are source inputs. CUTLASS supplies headers and
+the CuTe dense-GEMM generator; FlashAttention carries the checked-in SM89 and
+SM120 patches. FlashAttention initializes only its required `csrc/cutlass`
+submodule. Clean cached checkouts are reused without network access; use
+`KATAGO_REFRESH_SOURCES=1` to request a new upstream snapshot. A first clone or
+explicit refresh may require a GitHub proxy. Example:
 
 ```bash
 HTTPS_PROXY=http://proxy.example:7890 \
   ./final-migration/environment/setup.sh all
 ```
 
-Each run captures resolved source commits and built wheel hashes. Those
-artifacts are what deployment consumes, so a later upstream change cannot
-silently alter an already packaged build. Binary-only/bootstrap packages first
-use `archive/wheels`, then the domestic PyPI mirror.
+Each run records resolved revisions for provenance, but neither the generator
+nor CMake requires one hard-coded commit. API-shape checks and the two local
+patches fail closed if a newer source is incompatible. Binary packages first
+use `archive/wheels`, then the domestic PyPI mirror and pip cache. A hash of the
+two requirement files plus installed-version checks makes repeated setup
+entirely local instead of contacting the index again.
 
-CUTLASS is cloned at current HEAD and its headers are used directly. CuTe DSL's
-compiled MLIR payload is not published as buildable source by that repository;
-the matching official CUDA-13 wheel selected by the source tree is therefore a
-documented binary exception.
-
-TileLang and FlashAttention are cloned at current HEAD, but their shared native
-ABI dependency is constrained: TVM-FFI is built from the highest stable source
-tag satisfying both projects (`v0.1.12` for this source snapshot). Following
-TVM-FFI's independent HEAD can compile successfully while breaking TileLang's
-reflection registry at import time. The compatibility pin must be revalidated
-when either top-level project's metadata constraint changes.
+CUTLASS DSL, TileLang 0.1.13, Quack 0.6.4 and compatible TVM-FFI 0.1.12 use
+published wheels. TileLang's wheel already carries the native library and the
+CUTLASS/template headers needed to compile generated sources, so cloning its
+roughly gigabyte recursive repository adds no production capability. The
+cuDNN frontend is the copy already vendored by KataGo under `cpp/external`.
+Only the patched `flash-attn-4` Python package is built locally.
 
 Triton is not a KataGo code generator in this workflow and is not cloned or
 built from source. The exact binary version required by PyTorch is carried as
@@ -77,13 +79,17 @@ linked into the CUDA backend.
 The public setup never invokes APT, `sudo`, or a driver installer. A source
 checkout requires an operational NVIDIA driver, a compiler, and zlib
 development files. CUDA 13.0.3, nvcc, cuDNN 9.20 and the CUDA math/runtime
-libraries are fixed PyPI packages installed once into the same private Python
+libraries are PyPI packages installed once into the same private Python
 environment used by PyTorch, TileLang and FlashAttention. The C++ backend uses
 that same wheel layout; there is no second CUDA toolkit tree. Setup also obtains
 the locked Python 3.12.13 standalone archive from the local archive first and
 otherwise from its recorded upstream URL. The source-complete release tar
 carries the complete fixed wheel set, Python runtime and sources, so target
 setup remains fully offline.
+
+The 423 MB cuBLAS wheel and the other PyTorch CUDA libraries are real runtime
+dependencies, not duplicate toolchains. A fresh machine must obtain each once;
+the local archive/cache and the release tar prevent repeated downloads.
 
 The distributable path is separate from source development setup. It bundles
 the compiled executable, a private ELF loader and user-space runtime libraries

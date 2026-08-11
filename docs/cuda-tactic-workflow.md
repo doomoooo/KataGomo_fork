@@ -266,8 +266,8 @@ Scan and generation provenance captures:
 - the search binary's own CMake cache and `compile_commands.json` (configure
   with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`);
 - compiler, CMake, NVIDIA driver, nvcc, CUDA and cuDNN versions;
-- linked-library (`ldd`) output, git submodules and the pinned flash-attention
-  revision/status;
+- linked-library (`ldd`) output, git submodules and the resolved
+  flash-attention revision/status;
 - GPU names and PCI bus IDs from driver tooling, plus CUDA Runtime device
   properties recorded by `benchmarknn`: compute capability, SM/warp/thread and
   register limits, shared-memory/L2 sizes, memory bus/clock, async engines and

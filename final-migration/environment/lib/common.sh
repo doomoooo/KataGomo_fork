@@ -10,9 +10,12 @@ KATAGO_ENV_ROOT="${KATAGO_ENV_ROOT:-${REPO_ROOT}/.final-migration-env}"
 KATAGO_LOCAL_ARCHIVE="${KATAGO_LOCAL_ARCHIVE:-${MIGRATION_ROOT}/archive}"
 KATAGO_THIRD_PARTY_ROOT="${KATAGO_THIRD_PARTY_ROOT:-${KATAGO_ENV_ROOT}/third_party}"
 KATAGO_FINAL_VENV="${KATAGO_FINAL_VENV:-${KATAGO_ENV_ROOT}/venv}"
+KATAGO_PATCHED_SOURCE_ROOT="${KATAGO_PATCHED_SOURCE_ROOT:-${KATAGO_ENV_ROOT}/patched-sources}"
 KATAGO_PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 KATAGO_CUDA_ROOT=""
 KATAGO_CUDNN_ROOT=""
+KATAGO_TILELANG_ROOT=""
+KATAGO_FLASH_ATTN_ROOT="${KATAGO_PATCHED_SOURCE_ROOT}/flash-attention"
 
 default_build_jobs() {
   local cpu_jobs available_bytes cgroup_max cgroup_current cgroup_available memory_jobs
@@ -41,7 +44,8 @@ KATAGO_RECORD_ROOT="${KATAGO_RECORD_ROOT:-${MIGRATION_ROOT}/records}"
 
 export KATAGO_ENV_ROOT KATAGO_LOCAL_ARCHIVE KATAGO_THIRD_PARTY_ROOT
 export KATAGO_FINAL_VENV KATAGO_PYPI_MIRROR KATAGO_BUILD_JOBS KATAGO_RECORD_ROOT
-export KATAGO_CUDA_ROOT KATAGO_CUDNN_ROOT
+export KATAGO_PATCHED_SOURCE_ROOT KATAGO_CUDA_ROOT KATAGO_CUDNN_ROOT
+export KATAGO_TILELANG_ROOT KATAGO_FLASH_ATTN_ROOT
 
 log() {
   printf '[final-migration] %s\n' "$*"
@@ -78,13 +82,17 @@ activate_toolchain() {
     'import sysconfig; print(sysconfig.get_path("purelib"))')"
   KATAGO_CUDA_ROOT="${purelib}/nvidia/cu13"
   KATAGO_CUDNN_ROOT="${purelib}/nvidia/cudnn"
-  export KATAGO_CUDA_ROOT KATAGO_CUDNN_ROOT
+  KATAGO_TILELANG_ROOT="$("${KATAGO_FINAL_VENV}/bin/python" -c \
+    'import importlib.util,pathlib; s=importlib.util.find_spec("tilelang"); print(pathlib.Path(next(iter(s.submodule_search_locations))).resolve())')"
+  export KATAGO_CUDA_ROOT KATAGO_CUDNN_ROOT KATAGO_TILELANG_ROOT
   [[ -x "${KATAGO_CUDA_ROOT}/bin/nvcc" ]] \
     || die "PyPI CUDA compiler missing: ${KATAGO_CUDA_ROOT}; run setup.sh install"
   [[ -r "${KATAGO_CUDNN_ROOT}/include/cudnn.h" ]] \
     || die "PyPI cuDNN headers missing: ${KATAGO_CUDNN_ROOT}; run setup.sh install"
   [[ -r "${KATAGO_CUDNN_ROOT}/lib/libcudnn.so.9" ]] \
     || die "PyPI cuDNN library missing: ${KATAGO_CUDNN_ROOT}; run setup.sh install"
+  [[ -r "${KATAGO_TILELANG_ROOT}/src/tl_templates/cuda/debug.h" ]] \
+    || die "PyPI TileLang package is incomplete: ${KATAGO_TILELANG_ROOT}"
 
   # NVIDIA's PyPI layout intentionally carries versioned DSOs in lib/. nvcc
   # and CMake use the conventional lib64/ and unversioned developer names, so

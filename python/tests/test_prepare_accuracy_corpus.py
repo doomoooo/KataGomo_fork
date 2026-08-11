@@ -20,18 +20,6 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PrepareAccuracyCorpusTests(unittest.TestCase):
-    def test_select_latest_uses_dated_archive_names(self) -> None:
-        html = """
-        <a href="2026-08-02npzs.tgz">old</a>
-        <a href="notes.txt">ignore</a>
-        <a href="/kata1/trainingdata/2026-08-04npzs.tgz">new</a>
-        """
-        self.assertEqual(MODULE.select_latest_archive(html), "2026-08-04npzs.tgz")
-
-    def test_select_latest_rejects_empty_index(self) -> None:
-        with self.assertRaises(ValueError):
-            MODULE.select_latest_archive("<a href='README.txt'>README</a>")
-
     def test_safe_extract_rejects_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -63,6 +51,7 @@ class PrepareAccuracyCorpusTests(unittest.TestCase):
                 corpus,
                 manifest,
                 expected_archive="2026-08-04npzs.tgz",
+                expected_archive_sha256="1" * 64,
                 expected_url="https://katagoarchive.org/kata1/trainingdata/2026-08-04npzs.tgz",
             )
             self.assertEqual(payload["num_samples"], 8192)
@@ -74,7 +63,12 @@ class PrepareAccuracyCorpusTests(unittest.TestCase):
         setup = (SCRIPT.parents[2] / "setup.sh").read_text()
         package = (SCRIPT.parent / "package-autotune.sh").read_text()
         self.assertIn('"${SCRIPT_DIR}/prepare_accuracy_corpus.py"', setup)
-        self.assertIn("--refresh-latest", package)
+        self.assertNotIn("--refresh-latest", setup)
+        self.assertNotIn("--refresh-latest", package)
+        self.assertIn("corpus.lock.sh", setup)
+        self.assertIn("corpus.lock.sh", package)
+        self.assertIn("--archive-sha256", setup)
+        self.assertIn("--archive-sha256", package)
         self.assertIn('"${SCRIPT_DIR}/prepare_accuracy_corpus.py"', package)
         self.assertIn('--corpus "${CORPUS}" --manifest "${CORPUS_MANIFEST}"', package)
         self.assertIn('result["source_url"]', package)

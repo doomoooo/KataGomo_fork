@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import html.parser
 import json
 import os
 import pathlib
@@ -25,44 +24,12 @@ DEFAULT_SAMPLES = 8192
 ARCHIVE_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})npzs\.tgz$")
 
 
-class _LinkParser(html.parser.HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.hrefs: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "a":
-            return
-        for key, value in attrs:
-            if key.lower() == "href" and value:
-                self.hrefs.append(value)
-
-
 def sha256_file(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def select_latest_archive(index_html: str) -> str:
-    parser = _LinkParser()
-    parser.feed(index_html)
-    names = {
-        pathlib.PurePosixPath(urllib.parse.urlparse(href).path).name
-        for href in parser.hrefs
-    }
-    candidates = sorted(name for name in names if ARCHIVE_NAME_RE.fullmatch(name))
-    if not candidates:
-        raise ValueError("the KataGo training-data index contains no dated npzs archive")
-    return candidates[-1]
-
-
-def fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "katago-autotune-sdk/1"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read().decode("utf-8")
 
 
 def download(url: str, output: pathlib.Path) -> None:
@@ -96,6 +63,7 @@ def validate_corpus(
     manifest_path: pathlib.Path,
     *,
     expected_archive: str | None = None,
+    expected_archive_sha256: str | None = None,
     expected_url: str | None = None,
     expected_samples: int = DEFAULT_SAMPLES,
     expected_seed: int = DEFAULT_SEED,
@@ -117,6 +85,10 @@ def validate_corpus(
     }
     if expected_archive is not None:
         checks["expected_archive"] = manifest.get("source_archive") == expected_archive
+    if expected_archive_sha256 is not None:
+        checks["expected_archive_sha256"] = (
+            manifest.get("source_archive_sha256") == expected_archive_sha256
+        )
     if expected_url is not None:
         checks["expected_url"] = manifest.get("source_archive_url") == expected_url
     failed = sorted(name for name, passed in checks.items() if not passed)
@@ -158,12 +130,12 @@ def main() -> int:
     parser.add_argument("--archive-cache-dir", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--archive", type=pathlib.Path)
     parser.add_argument("--archive-url")
+    parser.add_argument("--archive-sha256")
     parser.add_argument("--index-url", default=DEFAULT_INDEX_URL)
     parser.add_argument("--corpus", type=pathlib.Path)
     parser.add_argument("--manifest", type=pathlib.Path)
     parser.add_argument("--num-samples", type=int, default=DEFAULT_SAMPLES)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--refresh-latest", action="store_true")
     parser.add_argument("--keep-extracted", action="store_true")
     parser.add_argument("--result-json", type=pathlib.Path)
     args = parser.parse_args()
@@ -173,15 +145,25 @@ def main() -> int:
     if args.num_samples != DEFAULT_SAMPLES:
         parser.error(f"the release correctness gate requires exactly {DEFAULT_SAMPLES} rows")
 
+    expected_archive: str | None = None
+    if args.archive_url:
+        expected_archive = pathlib.PurePosixPath(
+            urllib.parse.urlparse(args.archive_url).path
+        ).name
+    elif args.archive is not None:
+        expected_archive = args.archive.name
+
     # A release normally carries the already sampled pair. Validate it before
-    # any network access so extraction remains fully offline. The same script
-    # rebuilds the pair from the frozen public archive when either asset is not
-    # carried, and --refresh-latest is used by the release-construction step.
-    if args.corpus is not None and not args.refresh_latest:
+    # any network access so extraction remains fully offline. Production setup
+    # and packaging rebuild only from the URL and hashes in corpus.lock.sh.
+    if args.corpus is not None:
         try:
             manifest = validate_corpus(
                 args.corpus,
                 args.manifest,
+                expected_archive=expected_archive,
+                expected_archive_sha256=args.archive_sha256,
+                expected_url=args.archive_url,
                 expected_samples=args.num_samples,
                 expected_seed=args.seed,
             )
@@ -206,12 +188,11 @@ def main() -> int:
     if args.archive_url:
         source_url = args.archive_url
         archive_name = pathlib.PurePosixPath(urllib.parse.urlparse(source_url).path).name
-    elif args.archive is not None and not args.refresh_latest:
+    elif args.archive is not None:
         archive_name = args.archive.name
         source_url = urllib.parse.urljoin(args.index_url, archive_name)
     else:
-        archive_name = select_latest_archive(fetch_text(args.index_url))
-        source_url = urllib.parse.urljoin(args.index_url, archive_name)
+        parser.error("reconstruction requires --archive-url or --archive")
     if not ARCHIVE_NAME_RE.fullmatch(archive_name):
         raise ValueError(f"invalid KataGo training archive name: {archive_name}")
 
@@ -223,28 +204,24 @@ def main() -> int:
         or output_dir / f"{date}-19x19-{args.num_samples}-seed{args.seed}-full19.manifest.json"
     ).resolve()
     if corpus.is_file() and manifest_path.is_file():
-        try:
-            validate_corpus(
-                corpus,
-                manifest_path,
-                expected_archive=archive_name,
-                expected_url=source_url,
-                expected_samples=args.num_samples,
-                expected_seed=args.seed,
-            )
-        except ValueError:
-            if not args.refresh_latest:
-                raise
-        else:
-            write_result(
-                args.result_json,
-                corpus=corpus,
-                manifest=manifest_path,
-                source_archive=archive_name,
-                source_url=source_url,
-                reused=True,
-            )
-            return 0
+        validate_corpus(
+            corpus,
+            manifest_path,
+            expected_archive=archive_name,
+            expected_archive_sha256=args.archive_sha256,
+            expected_url=source_url,
+            expected_samples=args.num_samples,
+            expected_seed=args.seed,
+        )
+        write_result(
+            args.result_json,
+            corpus=corpus,
+            manifest=manifest_path,
+            source_archive=archive_name,
+            source_url=source_url,
+            reused=True,
+        )
+        return 0
 
     archive: pathlib.Path | None = args.archive.resolve() if args.archive else None
     if archive is not None and archive.name != archive_name:
@@ -260,6 +237,13 @@ def main() -> int:
         if not archive.is_file():
             print(f"[accuracy-corpus] downloading {source_url}", flush=True)
             download(source_url, archive)
+    if args.archive_sha256 is not None:
+        actual_archive_sha256 = sha256_file(archive)
+        if actual_archive_sha256 != args.archive_sha256:
+            raise ValueError(
+                f"training archive SHA-256 mismatch: {actual_archive_sha256} "
+                f"!= {args.archive_sha256}"
+            )
 
     work_dir = args.work_dir.resolve()
     extracted = work_dir / "extracted" / archive_name.removesuffix(".tgz")
@@ -284,13 +268,14 @@ def main() -> int:
     manifest.update({
         "source_archive_url": source_url,
         "source_archive_index_url": args.index_url,
-        "source_resolution": "latest-at-release-construction" if args.refresh_latest else "frozen-release-source",
+        "source_resolution": "frozen-release-source",
     })
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     validate_corpus(
         corpus,
         manifest_path,
         expected_archive=archive_name,
+        expected_archive_sha256=args.archive_sha256,
         expected_url=source_url,
         expected_samples=args.num_samples,
         expected_seed=args.seed,

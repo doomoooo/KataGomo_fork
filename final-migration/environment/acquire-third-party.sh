@@ -43,20 +43,41 @@ sync_latest() {
     [[ -z "$(git -C "${target}" status --porcelain)" ]] || die "managed source checkout is dirty: ${target}"
   fi
 
-  github_fallback_warning "latest ${name} commit check"
-  if ! git -C "${target}" fetch --depth=1 origin "${requested_ref}"; then
-    if [[ "${KATAGO_ALLOW_STALE_SOURCE:-0}" != "1" ]]; then
-      die "could not fetch latest ${name}; configure a GitHub proxy or set KATAGO_ALLOW_STALE_SOURCE=1 to use a cached checkout explicitly"
+  if [[ "${new_checkout}" == "1" || "${KATAGO_REFRESH_SOURCES:-0}" == "1" ]]; then
+    github_fallback_warning "${name} source"
+    if ! git -C "${target}" fetch --depth=1 origin "${requested_ref}"; then
+      if [[ "${new_checkout}" == "1" ]]; then
+        die "could not acquire ${name}; populate archive/git or configure a GitHub proxy"
+      fi
+      die "could not refresh ${name}; rerun without KATAGO_REFRESH_SOURCES=1 to use the clean cached source"
     fi
-    warn "using stale cached ${name} because KATAGO_ALLOW_STALE_SOURCE=1"
-  else
     git -C "${target}" checkout --detach --force FETCH_HEAD
+  else
+    log "reusing clean cached ${name}; set KATAGO_REFRESH_SOURCES=1 to refresh upstream"
   fi
 
-  if [[ "${submodules}" == "recursive" && -f "${target}/.gitmodules" ]]; then
-    github_fallback_warning "${name} submodules"
-    git -C "${target}" submodule sync --recursive
-    git -C "${target}" submodule update --init --recursive --depth=1
+  if [[ "${submodules}" != "none" && -f "${target}/.gitmodules" ]]; then
+    local -a submodule_args submodule_paths
+    local needs_submodule_update=1
+    submodule_args=(--init --depth=1)
+    if [[ "${submodules}" == "recursive" ]]; then
+      submodule_args+=(--recursive)
+      git -C "${target}" submodule sync --recursive
+    else
+      IFS=',' read -r -a submodule_paths <<< "${submodules}"
+      submodule_args+=(-- "${submodule_paths[@]}")
+      git -C "${target}" submodule sync -- "${submodule_paths[@]}"
+      if ! git -C "${target}" submodule status -- "${submodule_paths[@]}" \
+        | grep -qE '^[-+U]'; then
+        needs_submodule_update=0
+      fi
+    fi
+    if (( needs_submodule_update == 1 )); then
+      github_fallback_warning "${name} required submodule(s)"
+      git -C "${target}" submodule update "${submodule_args[@]}"
+    else
+      log "reusing initialized ${name} required submodule(s)"
+    fi
 
     submodule_commits="$(git -C "${target}" submodule status --recursive | sed -E 's/^[ +U-]//' | tr '\n' ',' | sed 's/,$//')"
   fi

@@ -42,8 +42,6 @@ except ModuleNotFoundError:  # imported as ``python.sm120_generate_cute_qkv_aot`
 
 
 CANDIDATE_ID = "wide_qkv-m128-n128-k64-s2-cute-atom4x2-packed"
-CUTLASS_COMMIT = "dcf215af68a2d08d305076c152a06f201728cd53"
-DENSE_GEMM_SHA256 = "613052799aff35d5564d49c8bbb4bbac2e22bc58cb3e27499c4c9c3ee95c6e03"
 SEQUENCE = 361
 INPUT_CHANNELS = 384
 OUTPUT_CHANNELS = 3 * 384
@@ -328,19 +326,11 @@ def main() -> None:
 
     cutlass_root = args.cutlass_root.resolve()
     actual_commit, revision_source = clean_source_revision(cutlass_root)
-    if actual_commit != CUTLASS_COMMIT:
-        raise RuntimeError(
-            f"CUTLASS commit mismatch: {actual_commit} != {CUTLASS_COMMIT}"
-        )
     dense_path = cutlass_root / (
         "examples/python/CuTeDSL/cute/blackwell_geforce/kernel/"
         "dense_gemm/dense_gemm.py"
     )
     dense_sha256 = sha256_file(dense_path)
-    if dense_sha256 != DENSE_GEMM_SHA256:
-        raise RuntimeError(
-            f"dense_gemm.py hash mismatch: {dense_sha256} != {DENSE_GEMM_SHA256}"
-        )
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     Sm120GemmKernel, patched_dense_path = load_sm120_gemm_kernel(

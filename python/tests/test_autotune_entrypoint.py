@@ -38,7 +38,9 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('final-migration/autotune/autotune.py', runner.read_text())
         self.assertIn('--prefix "${prefix}" --repo "${SCRIPT_DIR}"', runner.read_text())
         self.assertIn("KATAGO_LOCAL_ARCHIVE", setup.read_text())
-        self.assertIn("--refresh-latest", setup.read_text())
+        self.assertNotIn("--refresh-latest", setup.read_text())
+        self.assertIn("corpus.lock.sh", setup.read_text())
+        self.assertIn("AUTOTUNE_CORPUS_SHA256", setup.read_text())
         self.assertIn(
             "https://github.com/lightvector/KataGo/releases/download/"
             "v1.17.1/${model_name}",
@@ -102,6 +104,29 @@ class AutotuneEntrypointTests(unittest.TestCase):
             "cutlass flash-attention triton quack", package,
         )
 
+    def test_published_codegen_packages_are_not_cloned_or_source_built(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        catalog = (
+            repo / "final-migration/environment/third-party.lock.tsv"
+        ).read_text()
+        requirements = (
+            repo / "final-migration/autotune/python-binary-requirements.txt"
+        ).read_text()
+        setup = (repo / "setup.sh").read_text()
+        package = (AUTOTUNE_PATH.parent / "package-autotune.sh").read_text()
+
+        for component in ("TileLang", "apache-tvm-ffi", "quack"):
+            self.assertNotIn(f"\n{component}\tcore\t", "\n" + catalog)
+            self.assertNotIn(f'build_source_wheel {component}', setup)
+            self.assertNotIn(f'copy_source "{component}"', package)
+        for requirement in (
+            "tilelang===0.1.13", "apache-tvm-ffi==0.1.12",
+            "quack-kernels==0.6.4",
+        ):
+            self.assertIn(requirement, requirements)
+        self.assertIn("csrc/cutlass", catalog)
+        self.assertIn("build_source_wheel flash_attn_4", setup)
+
     def test_environment_contract_excludes_unused_onnx_tooling(self) -> None:
         repo = AUTOTUNE_PATH.parents[2]
         checker = (
@@ -146,6 +171,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         for source in (third_party_build, katago_build, verify):
             self.assertIn("activate_toolchain", source)
             self.assertNotIn("/usr/local/cuda", source)
+        self.assertIn('"-DKATAGO_TILELANG_ROOT=${KATAGO_TILELANG_ROOT}"', katago_build)
         self.assertIn('cuda_root="${KATAGO_CUDA_ROOT}"', root_setup)
         self.assertNotIn("payload/cuda-", root_setup)
         self.assertNotIn("payload/cudnn-", root_setup)
@@ -174,7 +200,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn("':\\\"\\${CMAKE_PREFIX_PATH:-}\\\"", setup)
         self.assertNotIn("bin:\\${PATH}'", setup)
 
-    def test_package_preserves_latest_corpus_name_and_reference_sidecar(self) -> None:
+    def test_package_preserves_frozen_corpus_name_and_reference_sidecar(self) -> None:
         package = (AUTOTUNE_PATH.parent / "package-autotune.sh").read_text()
         self.assertIn('$(basename -- "${CORPUS}")', package)
         self.assertIn('$(basename -- "${CORPUS_MANIFEST}")', package)

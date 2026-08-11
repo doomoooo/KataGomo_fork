@@ -38,9 +38,10 @@ def main() -> int:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if "==" not in line:
+        operator = "===" if "===" in line else "=="
+        if operator not in line:
             raise SystemExit(f"requirement is not exactly pinned: {line}")
-        name, version = line.split("==", 1)
+        name, version = line.split(operator, 1)
         matches = wheels.get((canonical(name), version), [])
         if len(matches) != 1:
             raise SystemExit(f"expected one wheel for {line}, found {matches}")
