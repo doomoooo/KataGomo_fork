@@ -35,6 +35,15 @@ only its selected artifacts, and does not run autotune. `run.sh` verifies the
 resulting manifest and starts KataGo GTP with the certified batch, streams,
 scheduler, and CUDA pipeline.
 
+The same entry-point names are checked in at the root of a direct source
+clone. In that layout `./setup.sh` builds the current dependency sources and
+installs the current system CUDA stack, keeps managed files under
+`.final-migration-env`, then prepares the model and 8192-row corpus used by
+autotune. Local archives and `KATAGO_MODEL` are checked
+before the pinned model's official GitHub release; the training corpus is
+resolved from the current KataGo archive. The canonical script name is
+`run-autotune.sh` (with a hyphen).
+
 To search and certify a new plan instead:
 
 ```bash
@@ -62,15 +71,15 @@ To search and certify a new plan instead:
 
 This is the only performance summary in the README. All rows use the same
 70M-parameter model, exact 19x19, FP16, two inference streams, and physical
-`launched_batches * batch / wall_time`. The first two rows are accepted
-historical RTX 4090 baselines. The RTX 5080 official rows are fresh B4-B32
-scans; the plan rows are current hardware certificates. Because the GPU model
-and host differ, the table is a reference, not a normalized speedup claim.
+`launched_batches * batch / wall_time`. Both official backends were scanned
+over B4-B32 on each listed GPU; the table reports only each scan winner's
+confirmed value. Plan rows are current hardware certificates. Results should
+be compared within one GPU model, not across hosts or models.
 
 | Backend | GPU | Batch | Physical nnEval/s | Evidence |
 | --- | --- | ---: | ---: | --- |
-| Official CUDA baseline | RTX 4090 | 13 | 1876.3 | Historical accepted baseline |
-| TensorRT baseline | RTX 4090 | 13 | 2542.9 | Historical accepted baseline |
+| Official CUDA baseline | RTX 4090 D | 13 | 1889.8 | [B4-B32 scan](records/rtx4090d-official-backend-baselines-20260811.md) |
+| Official TensorRT baseline | RTX 4090 D | 12 | 2339.7 | [B4-B32 scan](records/rtx4090d-official-backend-baselines-20260811.md) |
 | Checked-in CUDA plan | RTX 4090 D | 12 | 3110.7 | [plan certificate](plans/sm89/rtx4090d-b12-s2/README.md) |
 | Official CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
 | Official TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |

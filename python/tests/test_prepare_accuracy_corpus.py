@@ -71,7 +71,7 @@ class PrepareAccuracyCorpusTests(unittest.TestCase):
                 MODULE.validate_corpus(corpus, manifest)
 
     def test_release_setup_invokes_corpus_validator(self) -> None:
-        setup = (SCRIPT.parent / "setup.sh").read_text()
+        setup = (SCRIPT.parents[2] / "setup.sh").read_text()
         package = (SCRIPT.parent / "package-autotune.sh").read_text()
         self.assertIn('"${SCRIPT_DIR}/prepare_accuracy_corpus.py"', setup)
         self.assertIn("--refresh-latest", package)

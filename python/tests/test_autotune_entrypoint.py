@@ -26,6 +26,20 @@ BUILD_FOR_PLAN_SPEC.loader.exec_module(BUILD_FOR_PLAN)
 
 
 class AutotuneEntrypointTests(unittest.TestCase):
+    def test_direct_clone_exposes_working_root_entrypoints(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        setup = repo / "setup.sh"
+        runner = repo / "run-autotune.sh"
+        for path in (setup, runner):
+            self.assertTrue(path.is_file(), path)
+            self.assertTrue(path.stat().st_mode & 0o111, path)
+        self.assertIn("prepare_source_runtime", setup.read_text())
+        self.assertIn('payload/SHA256SUMS', setup.read_text())
+        self.assertIn('final-migration/autotune/autotune.py', runner.read_text())
+        self.assertIn('--prefix "${prefix}" --repo "${SCRIPT_DIR}"', runner.read_text())
+        self.assertIn("KATAGO_LOCAL_ARCHIVE", setup.read_text())
+        self.assertIn("--refresh-latest", setup.read_text())
+
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()
         self.assertIn("def workflow_discovery(", source)
@@ -37,7 +51,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn("python/portable_tactic_workflow.py", source)
 
     def test_generated_activate_expands_ambient_paths(self) -> None:
-        setup = (AUTOTUNE_PATH.parent / "setup.sh").read_text()
+        setup = (AUTOTUNE_PATH.parents[2] / "setup.sh").read_text()
         self.assertIn("':\\\"\\${PATH}\\\"", setup)
         self.assertIn("':\\\"\\${LD_LIBRARY_PATH:-}\\\"", setup)
         self.assertIn("':\\\"\\${CMAKE_PREFIX_PATH:-}\\\"", setup)
@@ -62,6 +76,10 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('"${bundle}/RUNTIME.md"', package)
         self.assertIn('"${bundle}/records/"', package)
         self.assertIn("find payload patches metadata plans records", package)
+        self.assertIn('"${REPO_ROOT}/setup.sh"', package)
+        self.assertIn('"${REPO_ROOT}/run-autotune.sh"', package)
+        self.assertNotIn('"${SCRIPT_DIR}/setup.sh"', package)
+        self.assertNotIn('"${SCRIPT_DIR}/run-autotune.sh"', package)
         self.assertIn('"${REPO_ROOT}/build-for-plan.sh"', package)
         self.assertIn('"${SCRIPT_DIR}/build_for_plan.py"', package)
 

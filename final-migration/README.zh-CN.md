@@ -31,6 +31,13 @@ product name 查找并校验 plan，只编译该 plan 选中的 artifact，不�
 autotune。`run.sh` 校验构建 manifest 后，以认证的 batch、stream、
 scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
+直接 clone 源码仓库时，仓库根目录也提供同名入口。此时 `./setup.sh` 会在
+`.final-migration-env` 下编译当前依赖源码、安装当前系统 CUDA，并准备
+autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
+`KATAGO_MODEL`，缺失时
+才从 KataGo 官方 GitHub release 下载固定模型；语料从当前 KataGo archive
+解析。脚本的规范名称是带连字符的 `run-autotune.sh`。
+
 如果需要重新搜索并认证当前显卡的 plan：
 
 ```bash
@@ -58,14 +65,14 @@ scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
 这是 README 中唯一的性能汇总。所有结果使用相同的 70M 参数模型、严格 19x19、
 FP16、双推理 stream，并按
-`物理 launch batch 数 * batch / wall time` 计算。前两行是已接受的历史 RTX
-4090 baseline；RTX 5080 官方行来自新执行的 B4-B32 扫描，plan 行是当前硬件
-证书。GPU 型号和宿主机不同，因此这里只作参考，不声称是归一化 speedup。
+`物理 launch batch 数 * batch / wall time` 计算。每张显卡上的两种官方 backend
+都实际扫描 B4-B32；表中只报告各自第一名的确认值。plan 行是当前硬件证书。
+只能在同一 GPU 型号内比较，不能跨宿主机或型号解释为归一化 speedup。
 
 | Backend | GPU | Batch | Physical nnEval/s | 证据 |
 | --- | --- | ---: | ---: | --- |
-| 官方 CUDA baseline | RTX 4090 | 13 | 1876.3 | 已接受历史基线 |
-| TensorRT baseline | RTX 4090 | 13 | 2542.9 | 已接受历史基线 |
+| 官方 CUDA baseline | RTX 4090 D | 13 | 1889.8 | [B4-B32 扫描](records/rtx4090d-official-backend-baselines-20260811.md) |
+| 官方 TensorRT baseline | RTX 4090 D | 12 | 2339.7 | [B4-B32 扫描](records/rtx4090d-official-backend-baselines-20260811.md) |
 | 已提交 CUDA plan | RTX 4090 D | 12 | 3110.7 | [plan 证书](plans/sm89/rtx4090d-b12-s2/README.md) |
 | 官方 CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 扫描](records/rtx5080-official-backend-baselines-20260811.md) |
 | 官方 TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 扫描](records/rtx5080-official-backend-baselines-20260811.md) |

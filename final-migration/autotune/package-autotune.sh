@@ -89,7 +89,7 @@ trap cleanup EXIT
 mkdir -p -- "${bundle}/payload/wheels" "${bundle}/patches" "${bundle}/metadata" \
   "${bundle}/plans" "${bundle}/records" "${source_stage}"
 
-cp -- "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/run-autotune.sh" \
+cp -- "${REPO_ROOT}/setup.sh" "${REPO_ROOT}/run-autotune.sh" \
   "${REPO_ROOT}/build-for-plan.sh" \
   "${SCRIPT_DIR}/autotune.py" "${SCRIPT_DIR}/build_for_plan.py" \
   "${SCRIPT_DIR}/detect_gpu.py" \
@@ -102,7 +102,8 @@ cp -- "${REPO_ROOT}/final-migration/README.md" "${bundle}/README.md"
 cp -- "${REPO_ROOT}/final-migration/README.zh-CN.md" "${bundle}/README.zh-CN.md"
 cp -- "${REPO_ROOT}/final-migration/RUNTIME.md" "${bundle}/RUNTIME.md"
 cp -a -- "${REPO_ROOT}/final-migration/plans/." "${bundle}/plans/"
-cp -- "${REPO_ROOT}/final-migration/records/rtx5080-official-backend-baselines-20260811.md" \
+cp -- "${REPO_ROOT}/final-migration/records/rtx4090d-official-backend-baselines-20260811.md" \
+  "${REPO_ROOT}/final-migration/records/rtx5080-official-backend-baselines-20260811.md" \
   "${bundle}/records/"
 cp -- "${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch" \
   "${SCRIPT_DIR}/patches/flash-attention-sm120-both16.patch" "${bundle}/patches/"

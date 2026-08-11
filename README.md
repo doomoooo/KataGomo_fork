@@ -4,6 +4,8 @@
 > on official KataGo. See the detailed [English fork README](final-migration/README.md)
 > or [中文说明](final-migration/README.zh-CN.md). The upstream documentation
 > below is retained unchanged for KataGo's general features and usage.
+> A direct clone exposes `./setup.sh`, `./run-autotune.sh`,
+> `./build-for-plan.sh`, and `./run.sh` at the repository root.
 
 * [Overview](#overview)
 * [Training History and Research](#training-history-and-research)

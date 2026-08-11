@@ -3,6 +3,173 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
+  ENV_SETUP="${SCRIPT_DIR}/final-migration/environment/setup.sh"
+  # shellcheck source=final-migration/environment/lib/common.sh
+  source "${SCRIPT_DIR}/final-migration/environment/lib/common.sh"
+
+  prepare_source_runtime() {
+    local model_name model_sha256 model_url runtime_root assets downloads
+    local cuda_root multiarch cudnn_include cudnn_library system_library
+    local model_source candidate actual_model_sha corpus manifest corpus_state
+    local golden golden_metadata target link
+    local -a corpus_args existing_corpus
+
+    model_name="b11c768h12nbt3tflrs-fson-silu.bin.gz"
+    model_sha256="1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
+    model_url="https://github.com/lightvector/KataGo/releases/download/v1.17.0/${model_name}"
+    runtime_root="${KATAGO_ENV_ROOT}"
+    assets="${runtime_root}/assets"
+    downloads="${runtime_root}/downloads"
+
+    for command_name in curl gcc ldconfig readlink sha256sum; do
+      require_command "${command_name}"
+    done
+    [[ -x "${KATAGO_FINAL_VENV}/bin/python" ]] \
+      || die "Python environment missing; run ./setup.sh install first"
+    mkdir -p -- "${assets}" "${downloads}" "${runtime_root}/state"
+
+    link_source_runtime_path() {
+      target="$1"
+      link="$2"
+      if [[ -e "${link}" && ! -L "${link}" ]]; then
+        die "refusing to replace non-symlink runtime path: ${link}"
+      fi
+      ln -sfn -- "$(readlink -m -- "${target}")" "${link}"
+    }
+
+    cuda_root="${CUDA_HOME:-/usr/local/cuda}"
+    [[ -x "${cuda_root}/bin/nvcc" ]] || die "CUDA toolkit missing: ${cuda_root}"
+    cuda_root="$(readlink -e -- "${cuda_root}")"
+    multiarch="$(gcc -print-multiarch)"
+    cudnn_include="/usr/include/${multiarch}"
+    [[ -r "${cudnn_include}/cudnn_version.h" ]] || cudnn_include="/usr/include"
+    [[ -r "${cudnn_include}/cudnn_version.h" ]] \
+      || die "system cuDNN headers are missing"
+    cudnn_library="$(ldconfig -p | awk '$1 == "libcudnn.so" {print $NF; exit}')"
+    [[ -r "${cudnn_library}" ]] || die "system libcudnn.so is missing"
+    system_library="$(dirname -- "${cudnn_library}")"
+    [[ -r "${system_library}/libz.so" ]] \
+      || die "system libz development library is missing"
+    for source_name in TileLang cutlass flash-attention; do
+      [[ -d "${KATAGO_THIRD_PARTY_ROOT}/${source_name}" ]] \
+        || die "third-party source missing: ${source_name}; run ./setup.sh install first"
+    done
+
+    link_source_runtime_path "${SCRIPT_DIR}" "${runtime_root}/repo"
+    link_source_runtime_path "${cuda_root}" "${runtime_root}/cuda"
+    link_source_runtime_path "${KATAGO_THIRD_PARTY_ROOT}" "${runtime_root}/sources"
+    mkdir -p -- "${runtime_root}/cudnn" "${runtime_root}/native"
+    link_source_runtime_path "${cudnn_include}" "${runtime_root}/cudnn/include"
+    link_source_runtime_path "${system_library}" "${runtime_root}/cudnn/lib"
+    link_source_runtime_path /usr/include "${runtime_root}/native/include"
+    link_source_runtime_path "${system_library}" "${runtime_root}/native/lib"
+
+    model_source="${KATAGO_MODEL:-}"
+    if [[ -z "${model_source}" ]]; then
+      for candidate in \
+        "${assets}/${model_name}" \
+        "${KATAGO_LOCAL_ARCHIVE}/assets/${model_name}" \
+        "${downloads}/${model_name}"; do
+        if [[ -r "${candidate}" ]]; then
+          model_source="${candidate}"
+          break
+        fi
+      done
+    fi
+    if [[ -z "${model_source}" ]]; then
+      model_source="${downloads}/${model_name}"
+      github_fallback_warning "the pinned KataGo v1.17.0 transformer model"
+      curl --fail --location --retry 3 \
+        --output "${model_source}.partial" "${model_url}"
+      mv -- "${model_source}.partial" "${model_source}"
+    fi
+    [[ -r "${model_source}" ]] || die "model is missing: ${model_source}"
+    actual_model_sha="$(sha256sum "${model_source}" | awk '{print $1}')"
+    [[ "${actual_model_sha}" == "${model_sha256}" ]] \
+      || die "model SHA-256 mismatch: ${actual_model_sha}"
+    link_source_runtime_path "${model_source}" "${assets}/${model_name}"
+
+    corpus="${KATAGO_CORPUS:-}"
+    manifest="${KATAGO_CORPUS_MANIFEST:-}"
+    if [[ -n "${corpus}" && -z "${manifest}" ]] || \
+       [[ -z "${corpus}" && -n "${manifest}" ]]; then
+      die "KATAGO_CORPUS and KATAGO_CORPUS_MANIFEST must be set together"
+    fi
+    corpus_state="${runtime_root}/state/accuracy-corpus.json"
+    if [[ -z "${corpus}" && -r "${corpus_state}" ]]; then
+      mapfile -t existing_corpus < <("${KATAGO_FINAL_VENV}/bin/python" -c \
+        'import json,sys; d=json.load(open(sys.argv[1])); print(d["corpus"]); print(d["manifest"])' \
+        "${corpus_state}")
+      if [[ -r "${existing_corpus[0]}" && -r "${existing_corpus[1]}" ]]; then
+        corpus="${existing_corpus[0]}"
+        manifest="${existing_corpus[1]}"
+      fi
+    fi
+    corpus_args=()
+    if [[ -n "${corpus}" ]]; then
+      corpus_args+=(--corpus "${corpus}" --manifest "${manifest}")
+    else
+      corpus_args+=(
+        --refresh-latest
+        --archive-cache-dir "${KATAGO_LOCAL_ARCHIVE}/trainingdata"
+        --archive-cache-dir "${downloads}/trainingdata"
+      )
+    fi
+    "${KATAGO_FINAL_VENV}/bin/python" \
+      "${SCRIPT_DIR}/final-migration/autotune/prepare_accuracy_corpus.py" \
+      --repo "${SCRIPT_DIR}" --python "${KATAGO_FINAL_VENV}/bin/python" \
+      --output-dir "${assets}" --work-dir "${runtime_root}/accuracy-corpus" \
+      --result-json "${corpus_state}" "${corpus_args[@]}"
+
+    golden="${KATAGO_FP32_GOLDEN:-${runtime_root}/release-assets/replay-fixed-fp32-full19.krnn}"
+    golden_metadata="${KATAGO_FP32_GOLDEN_METADATA:-${runtime_root}/release-assets/replay-fixed-fp32-full19.json}"
+    if [[ -e "${golden}" || -e "${golden_metadata}" ]]; then
+      [[ -r "${golden}" && -r "${golden_metadata}" ]] \
+        || die "FP32 golden and metadata must be supplied together"
+      link_source_runtime_path "${golden}" "${assets}/replay-fixed-fp32-full19.krnn"
+      link_source_runtime_path "${golden_metadata}" "${assets}/replay-fixed-fp32-full19.json"
+    fi
+    log "source autotune runtime ready: ${runtime_root}"
+  }
+
+  source_usage() {
+    cat <<'EOF'
+Usage: ./setup.sh [COMMAND]
+
+With no command, configure the complete source-development environment and
+prepare the local autotune runtime. Environment commands are:
+
+  install | audit | verify | build | package | extract | deploy | all
+
+Additional source-tree command:
+
+  autotune-runtime  Prepare or validate model, corpus, and runtime links only.
+EOF
+  }
+
+  source_command="${1:-all}"
+  case "${source_command}" in
+    -h|--help|help)
+      source_usage
+      ;;
+    autotune-runtime)
+      [[ $# -eq 1 ]] || { source_usage >&2; exit 2; }
+      prepare_source_runtime
+      ;;
+    all)
+      [[ $# -le 1 ]] || { source_usage >&2; exit 2; }
+      "${ENV_SETUP}" all
+      prepare_source_runtime
+      ;;
+    *)
+      exec "${ENV_SETUP}" "$@"
+      ;;
+  esac
+  exit 0
+fi
+
 PREFIX="${SCRIPT_DIR}/runtime"
 JOBS=""
 
