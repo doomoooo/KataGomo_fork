@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
+if [[ -d "${KATAGO_FINAL_VENV}/bin" ]]; then
+  export PATH="${KATAGO_FINAL_VENV}/bin:${PATH}"
+fi
 ensure_record_root
 record="${KATAGO_RECORD_ROOT}/environment-$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee "${record}") 2>&1
@@ -66,7 +69,7 @@ dpkg-query -W -f='${binary:Package}\t${Version}\n' 2>/dev/null \
   | grep -E '^(cuda-toolkit|cuda-compiler|libcublas|libcudnn|nsight|zlib1g-dev)' \
   | sort || true
 required_packages=(
-  build-essential cmake ninja-build git zlib1g-dev
+  build-essential git zlib1g-dev
   libzip-dev libcudnn9-dev-cuda-13
 )
 for package_name in "${required_packages[@]}"; do

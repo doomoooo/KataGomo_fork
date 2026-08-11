@@ -62,6 +62,11 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn("python -m ensurepip --version", installer)
         self.assertNotIn("bootstrap-ubuntu.sh", environment_setup)
         self.assertNotIn("python3-venv", audit)
+        self.assertIn('KATAGO_FINAL_VENV}/bin:${PATH}', audit)
+        build_matrix = (
+            repo / "final-migration" / "environment" / "build-matrix.sh"
+        ).read_text()
+        self.assertIn("activate_venv", build_matrix)
         self.assertIn('KATAGO_PYTHON_RUNTIME_VERSION="3.12.13"', runtime_lock)
         self.assertIn("KATAGO_PYTHON_RUNTIME_SHA256", runtime_lock)
 
