@@ -63,20 +63,21 @@ To search and certify a new plan instead:
 This is the only performance summary in the README. All rows use the same
 70M-parameter model, exact 19x19, FP16, two inference streams, and physical
 `launched_batches * batch / wall_time`. The first two rows are accepted
-historical RTX 4090 baselines. The RTX 5080 official row is a fresh B4-B32 scan;
-the plan rows are current hardware certificates. Because the GPU model and host
-differ, the table is a reference, not a normalized speedup claim.
+historical RTX 4090 baselines. The RTX 5080 official rows are fresh B4-B32
+scans; the plan rows are current hardware certificates. Because the GPU model
+and host differ, the table is a reference, not a normalized speedup claim.
 
 | Backend | GPU | Batch | Physical nnEval/s | Evidence |
 | --- | --- | ---: | ---: | --- |
 | Official CUDA baseline | RTX 4090 | 13 | 1876.3 | Historical accepted baseline |
 | TensorRT baseline | RTX 4090 | 13 | 2542.9 | Historical accepted baseline |
 | Checked-in CUDA plan | RTX 4090 D | 12 | 3110.7 | [plan certificate](plans/sm89/rtx4090d-b12-s2/README.md) |
-| Official CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 scan](records/rtx5080-official-cuda-baseline-20260811.md) |
+| Official CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
+| Official TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
 | Checked-in CUDA plan | RTX 5080 | 16 | 2836.2 | [plan certificate](plans/sm120/rtx5080-b16-s2/README.md) |
 
-TensorRT is shown only as a historical comparison. It is not included in the
-environment, build, runtime, or release artifacts.
+TensorRT is shown only as a comparison. It is not included in the environment,
+build, runtime, or release artifacts.
 
 ## Plan-driven backend
 
