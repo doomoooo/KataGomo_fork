@@ -39,6 +39,13 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('--prefix "${prefix}" --repo "${SCRIPT_DIR}"', runner.read_text())
         self.assertIn("KATAGO_LOCAL_ARCHIVE", setup.read_text())
         self.assertIn("--refresh-latest", setup.read_text())
+        self.assertIn(
+            "https://github.com/lightvector/KataGo/releases/download/"
+            "v1.17.1/${model_name}",
+            setup.read_text(),
+        )
+        self.assertIn('model_source="${model_asset}"', setup.read_text())
+        self.assertIn('--output "${model_source}.partial"', setup.read_text())
         self.assertNotIn("bootstrap-ubuntu.sh", setup.read_text())
         self.assertNotIn("sudo", setup.read_text())
         installer = (
@@ -94,6 +101,24 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn(
             "cutlass flash-attention triton quack", package,
         )
+
+    def test_environment_contract_excludes_unused_onnx_tooling(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        checker = (
+            repo / "final-migration/environment/check-python-environment.py"
+        ).read_text()
+        bootstrap = (
+            repo / "final-migration/environment/python-bootstrap-requirements.txt"
+        ).read_text().splitlines()
+        audit = (
+            repo / "final-migration/environment/audit-environment.sh"
+        ).read_text()
+
+        for unused in ("onnx", "onnx2torch", "pillow"):
+            self.assertNotIn(f'"{unused}"', checker)
+            self.assertNotIn(unused, bootstrap)
+        self.assertNotIn('"onnx"', audit)
+        self.assertNotIn('"onnx2torch"', audit)
 
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()

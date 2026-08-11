@@ -41,10 +41,12 @@ uses the CUDA, cuDNN, compiler, and zlib development files already installed
 on the host. It never invokes `sudo` or changes system packages; a pinned
 Python 3.12.13 runtime and all managed files stay under
 `.final-migration-env`. It then prepares the model and 8192-row corpus used by
-autotune. Local archives and `KATAGO_MODEL` are checked
-before the pinned model's official GitHub release; the training corpus is
-resolved from the current KataGo archive. The canonical script name is
-`run-autotune.sh` (with a hyphen).
+autotune. Local archives and `KATAGO_MODEL` are checked before the pinned
+v1.17.1 model's official GitHub release. A downloaded model is stored at
+`.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`, the same
+relative location produced by tar setup. The training corpus is resolved from
+the current KataGo archive. The canonical script name is `run-autotune.sh`
+(with a hyphen).
 
 To search and certify a new plan instead:
 

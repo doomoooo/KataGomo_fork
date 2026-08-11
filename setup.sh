@@ -12,18 +12,18 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
   prepare_source_runtime() {
     local model_name model_sha256 model_url runtime_root assets downloads
     local cuda_root multiarch cudnn_include cudnn_library system_library
-    local model_source candidate actual_model_sha corpus manifest corpus_state
+    local model_source model_asset candidate actual_model_sha corpus manifest corpus_state
     local golden golden_metadata target link
     local -a corpus_args existing_corpus
 
     model_name="b11c768h12nbt3tflrs-fson-silu.bin.gz"
     model_sha256="1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
-    model_url="https://github.com/lightvector/KataGo/releases/download/v1.17.0/${model_name}"
+    model_url="https://github.com/lightvector/KataGo/releases/download/v1.17.1/${model_name}"
     runtime_root="${KATAGO_ENV_ROOT}"
     assets="${runtime_root}/assets"
     downloads="${runtime_root}/downloads"
 
-    for command_name in curl gcc ldconfig readlink sha256sum; do
+    for command_name in cp curl gcc ldconfig readlink sha256sum; do
       require_command "${command_name}"
     done
     [[ -x "${KATAGO_FINAL_VENV}/bin/python" ]] \
@@ -66,10 +66,11 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     link_source_runtime_path /usr/include "${runtime_root}/native/include"
     link_source_runtime_path "${system_library}" "${runtime_root}/native/lib"
 
+    model_asset="${assets}/${model_name}"
     model_source="${KATAGO_MODEL:-}"
     if [[ -z "${model_source}" ]]; then
       for candidate in \
-        "${assets}/${model_name}" \
+        "${model_asset}" \
         "${KATAGO_LOCAL_ARCHIVE}/assets/${model_name}" \
         "${downloads}/${model_name}"; do
         if [[ -r "${candidate}" ]]; then
@@ -79,8 +80,8 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
       done
     fi
     if [[ -z "${model_source}" ]]; then
-      model_source="${downloads}/${model_name}"
-      github_fallback_warning "the pinned KataGo v1.17.0 transformer model"
+      model_source="${model_asset}"
+      github_fallback_warning "the pinned KataGo v1.17.1 transformer model"
       curl --fail --location --retry 3 \
         --output "${model_source}.partial" "${model_url}"
       mv -- "${model_source}.partial" "${model_source}"
@@ -89,7 +90,11 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     actual_model_sha="$(sha256sum "${model_source}" | awk '{print $1}')"
     [[ "${actual_model_sha}" == "${model_sha256}" ]] \
       || die "model SHA-256 mismatch: ${actual_model_sha}"
-    link_source_runtime_path "${model_source}" "${assets}/${model_name}"
+    if [[ "$(readlink -m -- "${model_source}")" != "$(readlink -m -- "${model_asset}")" ]]; then
+      log "copying the verified model into the managed runtime assets"
+      cp -- "${model_source}" "${model_asset}.partial"
+      mv -- "${model_asset}.partial" "${model_asset}"
+    fi
 
     corpus="${KATAGO_CORPUS:-}"
     manifest="${KATAGO_CORPUS_MANIFEST:-}"

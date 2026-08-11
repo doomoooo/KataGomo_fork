@@ -123,7 +123,7 @@ import sys
 
 modules = [
     "torch", "triton", "tilelang", "flash_attn.cute", "cutlass", "cuda",
-    "onnx", "onnx2torch", "numpy", "psutil", "yaml", "quack", "tvm_ffi",
+    "numpy", "psutil", "yaml", "quack", "tvm_ffi",
 ]
 failed = False
 for name in modules:

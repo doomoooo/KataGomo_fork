@@ -5,10 +5,7 @@
 cuda-python
 einops
 numpy
-onnx
-onnx2torch
 packaging
-pillow
 psutil
 pytest
 PyYAML

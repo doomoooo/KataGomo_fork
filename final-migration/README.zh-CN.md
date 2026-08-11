@@ -36,9 +36,10 @@ scheduler 和 CUDA pipeline 启动 KataGo GTP。
 编译器和 zlib 开发文件。它不会调用 `sudo` 或修改系统软件包，Python 3.12.13
 固定安装在 `.final-migration-env` 中。
 随后准备 autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
-`KATAGO_MODEL`，缺失时
-才从 KataGo 官方 GitHub release 下载固定模型；语料从当前 KataGo archive
-解析。脚本的规范名称是带连字符的 `run-autotune.sh`。
+`KATAGO_MODEL`，缺失时从 KataGo v1.17.1 官方 GitHub release 下载，并保存到
+`.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`，与 tar
+解包后的相对路径一致。语料从当前 KataGo archive 解析。脚本的规范名称是带
+连字符的 `run-autotune.sh`。
 
 如果需要重新搜索并认证当前显卡的 plan：
 
