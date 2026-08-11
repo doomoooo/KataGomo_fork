@@ -1,18 +1,17 @@
 # Dependency observations
 
-## System and Python CUDA stacks
+## Unified PyPI CUDA stack
 
-The current host intentionally has two related but non-identical stacks:
+The build and code-generation environment uses one fixed CUDA stack:
 
 | Layer | CUDA | cuDNN | Purpose |
 | --- | --- | --- | --- |
-| managed toolkit | 13.2.2 | 9.25 | nvcc and C++ KataGo backends |
-| PyTorch wheels | 13.0 | 9.20 | Python search/codegen tooling |
+| fixed PyPI wheels | 13.0.3 | 9.20 | nvcc, C++ backend, PyTorch and codegen |
 
-The environment audit must report both. The managed toolkit is installed below
-`.final-migration-env/toolchains`; neither TileLang nor the C++ build may fall
-back to `/usr/local/cuda`. `LD_LIBRARY_PATH` must not cause the Python wheel
-libraries to replace the managed libraries for the C++ executable.
+The CUDA compiler, headers and libraries live below the private venv's
+`site-packages/nvidia` tree. TileLang and the C++ build must not fall back to
+`/usr/local/cuda`; the resulting executable is packaged with the same PyPI
+runtime libraries.
 
 ## Historical optimization toolchain observed
 

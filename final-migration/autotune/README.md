@@ -9,10 +9,12 @@ resolves the newest dated archive listed by the official KataGo public
 training-data index, records its URL and SHA-256, and deterministically samples
 exactly 8192 full 19x19 rows with seed 20260803. It carries that corpus and its
 complete source/row manifest. It also carries a pinned
-Python runtime, CUDA 13.2 build toolkit, cuDNN 9.25 for CUDA 13, the complete
+Python runtime, fixed CUDA 13.0.3 and cuDNN 9.20 PyPI wheels, the complete
 KataGo source tree, materialized third-party source trees, build-prerequisite
-payloads, pinned binary wheels, the model, and integrity manifests.  The
-target does not clone GitHub repositories or resolve dependency versions.
+payloads, the model, and integrity manifests. The CUDA compiler and C++ backend
+use the same NVIDIA wheel tree as PyTorch, so the release does not carry a
+second CUDA toolkit. The target does not clone GitHub repositories or resolve
+dependency versions.
 
 After extracting the release in a writable persistent directory:
 
@@ -45,7 +47,7 @@ pipeline, and the default search-thread budget. It does not reuse scan-host
 paths from the plan.
 
 The host baseline is Linux x86-64 with glibc 2.28 or newer, an NVIDIA driver
-compatible with CUDA 13.2, and the small OS bootstrap set checked by `setup.sh`
+compatible with CUDA 13.0, and the small OS bootstrap set checked by `setup.sh`
 (`bash`, GNU tar/coreutils, and GCC/G++). Everything above that
 bootstrap is carried in the tar; setup performs no APT transaction, Git clone,
 or network access. Setup validates the carried corpus before building. The
@@ -62,8 +64,8 @@ are explicit upstream-binary exceptions; their exact wheels are carried
 because neither project exposes a practical equivalent source-only Python
 payload for this workflow. PyTorch's exact Triton wheel dependency is carried
 as a binary package only; this workflow does not generate or benchmark Triton
-kernels. CUDA and cuDNN are NVIDIA binary toolchains, not Python source
-dependencies.
+kernels. CUDA, nvcc and cuDNN are fixed NVIDIA PyPI packages shared by Python
+code generation and the C++ backend.
 
 Build parallelism defaults to the lower of `nproc`, 8, and a memory-aware limit
 (75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler

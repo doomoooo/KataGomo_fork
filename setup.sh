@@ -45,9 +45,9 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     cuda_root="$(readlink -e -- "${cuda_root}")"
     cudnn_include="${KATAGO_CUDNN_ROOT}/include"
     [[ -r "${cudnn_include}/cudnn_version.h" ]] \
-      || die "managed cuDNN headers are missing"
+      || die "PyPI cuDNN headers are missing"
     cudnn_library="${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"
-    [[ -r "${cudnn_library}" ]] || die "managed libcudnn.so is missing"
+    [[ -r "${cudnn_library}" ]] || die "PyPI libcudnn.so is missing"
     system_library="$(dirname -- "${cudnn_library}")"
     for source_name in TileLang cutlass flash-attention; do
       [[ -d "${KATAGO_THIRD_PARTY_ROOT}/${source_name}" ]] \
@@ -141,15 +141,16 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
 Usage: ./setup.sh [COMMAND]
 
 With no command, configure the source-development environment without changing
-system packages, then prepare the local autotune runtime. CUDA 13.2, cuDNN 9.25,
-and Python 3.12.13 are pinned and installed below .final-migration-env. The host
-only provides the NVIDIA driver, base compiler tools, and zlib development files.
+system packages, then prepare the local autotune runtime. CUDA 13.0.3, cuDNN
+9.20, and Python 3.12.13 are fixed PyPI/runtime dependencies installed below
+.final-migration-env. The host only provides the NVIDIA driver, base compiler
+tools, and zlib development files.
 
 Commands:
 
   install           Acquire/build user-space dependencies and runtime assets.
   audit | verify    Inspect the existing host and user-space environment.
-  build             Build KataGo with the existing host CUDA toolchain.
+  build             Build KataGo with the CUDA compiler installed from PyPI.
   package | extract | deploy
                     Run the corresponding distribution operation.
   all               Run install, audit, verify, and build in order.
@@ -239,7 +240,7 @@ default_build_jobs() {
   printf '%s\n' "${cpu_jobs}"
 }
 
-for command_name in bash tar sha256sum readlink find uname getconf gcc g++; do need "${command_name}"; done
+for command_name in bash tar sha256sum readlink find sort tail ln uname getconf gcc g++; do need "${command_name}"; done
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] \
   || die "the release supports Linux x86-64 only"
 glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
@@ -278,40 +279,17 @@ extract_once() {
 }
 
 extract_once "${SCRIPT_DIR}/payload/python.tar.gz" "${PREFIX}/state/python.extracted"
-extract_once "${SCRIPT_DIR}/payload/cuda-13.2.tar.gz" "${PREFIX}/state/cuda.extracted"
-extract_once "${SCRIPT_DIR}/payload/cudnn-9.25-cuda13.tar.gz" "${PREFIX}/state/cudnn.extracted"
 extract_once "${SCRIPT_DIR}/payload/sources.tar.gz" "${PREFIX}/state/sources.extracted"
 extract_once "${SCRIPT_DIR}/payload/repo.tar.gz" "${PREFIX}/state/repo.extracted"
 extract_once "${SCRIPT_DIR}/payload/assets.tar.gz" "${PREFIX}/state/assets.extracted"
 
-for tree in "${PREFIX}/cuda" "${PREFIX}/cudnn"; do
-  broken_link="$(find "${tree}" -xtype l -print -quit)"
-  [[ -z "${broken_link}" ]] || die "carried toolchain contains a broken symlink: ${broken_link}"
-done
-for library in \
-  "${PREFIX}/cuda/targets/x86_64-linux/lib/libcublas.so" \
-  "${PREFIX}/cuda/targets/x86_64-linux/lib/libcublasLt.so" \
-  "${PREFIX}/cuda/lib64/libcudart.so" \
-  "${PREFIX}/cudnn/lib/libcudnn.so"; do
-  [[ -r "${library}" ]] || die "carried CUDA library is missing: ${library}"
-done
-
-export CUDA_HOME="${PREFIX}/cuda"
-export CUDA_PATH="${CUDA_HOME}"
-export CUDNN_ROOT="${PREFIX}/cudnn"
 export CC="$(command -v gcc)"
 export CXX="$(command -v g++)"
-export PATH="${PREFIX}/venv/bin:${PREFIX}/python/bin:${CUDA_HOME}/bin:${PATH}"
-export LD_LIBRARY_PATH="${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib:${LD_LIBRARY_PATH:-}"
-export CMAKE_PREFIX_PATH="${PREFIX}/native:${CMAKE_PREFIX_PATH:-}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${JOBS}"
 export MAX_JOBS="${JOBS}"
 export XDG_CACHE_HOME="${PREFIX}/cache"
 export AUTOTUNE_PREFIX="${PREFIX}"
 mkdir -p -- "${XDG_CACHE_HOME}"
-
-"${CUDA_HOME}/bin/nvcc" --version | tail -n 1
-[[ -r "${CUDNN_ROOT}/include/cudnn_version.h" ]] || die "cuDNN headers missing"
 
 if [[ ! -x "${PREFIX}/venv/bin/python" ]]; then
   log "creating the locked Python environment"
@@ -325,6 +303,17 @@ log "installing pinned build and binary prerequisites without an index"
   --require-hashes -r "${SCRIPT_DIR}/payload/python-build-requirements.lock"
 "${python_bin}" -m pip install --no-index --find-links "${wheelhouse}" \
   --no-deps --require-hashes -r "${SCRIPT_DIR}/payload/python-binary-requirements.lock"
+
+export KATAGO_ENV_ROOT="${PREFIX}"
+export KATAGO_FINAL_VENV="${PREFIX}/venv"
+# shellcheck source=final-migration/environment/lib/common.sh
+source "${PREFIX}/repo/final-migration/environment/lib/common.sh"
+activate_toolchain
+export PATH="${PREFIX}/venv/bin:${PREFIX}/python/bin:${CUDA_HOME}/bin:${PATH}"
+export LD_LIBRARY_PATH="${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export CMAKE_PREFIX_PATH="${PREFIX}/native:${CMAKE_PREFIX_PATH:-}"
+"${CUDA_HOME}/bin/nvcc" --version | tail -n 1
+[[ -r "${CUDNN_ROOT}/include/cudnn_version.h" ]] || die "PyPI cuDNN headers missing"
 
 mapfile -t corpus_files < <(find "${PREFIX}/assets" -maxdepth 1 -type f \
   -name '*-19x19-8192-seed*-full19.npz' -print | sort)
@@ -394,7 +383,7 @@ build_source_wheel() {
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_APACHE_TVM_FFI=0.1.12
 build_source_wheel apache_tvm_ffi "${PREFIX}/sources/apache-tvm-ffi" apache-tvm-ffi
 
-export CUDA_VERSION=13.2
+export CUDA_VERSION=13.0
 export USE_CUDA=1
 build_source_wheel tilelang "${PREFIX}/sources/TileLang" tilelang
 build_source_wheel quack_kernels "${PREFIX}/sources/quack" quack-kernels

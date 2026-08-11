@@ -35,7 +35,7 @@ build_cuda() {
     "-DCMAKE_CUDA_COMPILER=${CUDA_HOME}/bin/nvcc"
     "-DCUDNN_ROOT_DIR=${KATAGO_CUDNN_ROOT}"
     "-DCUDNN_INCLUDE_DIR=${KATAGO_CUDNN_ROOT}/include"
-    "-DCUDNN_LIBRARY=${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"
+    "-DCUDNN_LIBRARY=${KATAGO_CUDNN_ROOT}/lib/libcudnn.so.9"
     -DZLIB_INCLUDE_DIR=/usr/include
     "-DZLIB_LIBRARY=${system_zlib}"
     "-DZLIB_LIBRARY_RELEASE=${system_zlib}"

@@ -44,7 +44,7 @@ for arch in "${smoke_archs[@]}"; do
     "${SCRIPT_DIR}/smoke/cuda_stack.cu" \
     -I"${KATAGO_CUDNN_ROOT}/include" \
     -L"${CUDA_HOME}/lib64" -L"${KATAGO_CUDNN_ROOT}/lib" \
-    -lcublas -lcudnn \
+    -l:libcublas.so.13 -l:libcudnn.so.9 \
     -o "${smoke_build}/cuda-stack-sm${arch}"
 
   log "compiling CUTLASS/CuTe header smoke for sm_${arch}"
@@ -61,7 +61,8 @@ g++ -std=c++17 \
   -I"${CUDA_HOME}/include" \
   -I"${KATAGO_CUDNN_ROOT}/include" \
   "${SCRIPT_DIR}/smoke/cudnn_frontend.cpp" \
-  -L"${CUDA_HOME}/lib64" -L"${KATAGO_CUDNN_ROOT}/lib" -lcudnn -lcudart \
+  -L"${CUDA_HOME}/lib64" -L"${KATAGO_CUDNN_ROOT}/lib" \
+  -l:libcudnn.so.9 -l:libcudart.so.13 \
   -o "${smoke_build}/cudnn-frontend"
 
 log "checking Python CUDA/codegen imports"

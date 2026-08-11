@@ -6,11 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-if [[ -d "${KATAGO_FINAL_VENV}/bin" ]]; then
-  export PATH="${KATAGO_FINAL_VENV}/bin:${PATH}"
-fi
-export PATH="${KATAGO_CUDA_ROOT}/bin:${PATH}"
-export LD_LIBRARY_PATH="${KATAGO_CUDNN_ROOT}/lib:${KATAGO_CUDA_ROOT}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+activate_venv
+activate_toolchain
 ensure_record_root
 record="${KATAGO_RECORD_ROOT}/environment-$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee "${record}") 2>&1
@@ -56,7 +53,7 @@ nvcc --version 2>/dev/null | tail -n 1 || true
 printf '\n[nvidia-driver-and-devices]\n'
 if nvidia-smi --query-gpu=index,name,driver_version,pci.bus_id,compute_cap,memory.total --format=csv,noheader 2>/dev/null; then
   driver_version="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
-  min_driver="${KATAGO_MIN_DRIVER:-595.45}"
+  min_driver="${KATAGO_MIN_DRIVER:-580.65.06}"
   if [[ "$(printf '%s\n%s\n' "${min_driver}" "${driver_version}" | sort -V | head -n 1)" != "${min_driver}" ]]; then
     printf 'FAIL driver %s is older than required %s\n' "${driver_version}" "${min_driver}"
     failures=$((failures + 1))
@@ -88,8 +85,8 @@ else
   printf 'INFO optional package libzip-dev absent (not needed with BUILD_DISTRIBUTED=0)\n'
 fi
 
-printf '\n[managed-cuda-and-cudnn]\n'
-for managed_path in \
+printf '\n[pypi-cuda-and-cudnn]\n'
+for pypi_path in \
   "${KATAGO_CUDA_ROOT}/bin/nvcc" \
   "${KATAGO_CUDA_ROOT}/include/cuda.h" \
   "${KATAGO_CUDA_ROOT}/lib64/libcudart.so" \
@@ -98,10 +95,10 @@ for managed_path in \
   "${KATAGO_CUDNN_ROOT}/include/cudnn.h" \
   "${KATAGO_CUDNN_ROOT}/include/cudnn_version.h" \
   "${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"; do
-  if [[ -r "${managed_path}" ]]; then
-    printf 'OK managed %s\n' "${managed_path}"
+  if [[ -r "${pypi_path}" ]]; then
+    printf 'OK PyPI %s\n' "${pypi_path}"
   else
-    printf 'FAIL managed %s\n' "${managed_path}"
+    printf 'FAIL PyPI %s\n' "${pypi_path}"
     failures=$((failures + 1))
   fi
 done
@@ -110,7 +107,7 @@ printf '\n[dynamic-libraries]\n'
 ldconfig -p 2>/dev/null | grep -E 'lib(cudnn|cublas|cuda|cudart)\.so' | sort || true
 find "${KATAGO_CUDA_ROOT}/lib64" "${KATAGO_CUDNN_ROOT}/lib" -maxdepth 1 \
   \( -name 'libcudart.so' -o -name 'libcublas.so' -o -name 'libcudnn.so' \) \
-  -printf 'managed %p -> %l\n' 2>/dev/null | sort || true
+  -printf 'PyPI %p -> %l\n' 2>/dev/null | sort || true
 
 printf '\n[resolved-source-checkouts]\n'
 source_manifest="${KATAGO_ENV_ROOT}/state/source-manifest.tsv"

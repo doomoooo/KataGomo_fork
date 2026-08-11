@@ -230,7 +230,7 @@ done
   printf 'driver=%s\n' "$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | sort -u | paste -sd, - || printf unavailable)"
   printf 'gpu_architectures=%s\n' "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sort -Vu | paste -sd, - || printf unavailable)"
 } > "${metadata_dir}/build-platform.txt"
-printf '%s\n' "${KATAGO_MIN_DRIVER:-595.45}" > "${metadata_dir}/minimum-driver.txt"
+printf '%s\n' "${KATAGO_MIN_DRIVER:-580.65.06}" > "${metadata_dir}/minimum-driver.txt"
 "${bundle}/bin/katago" version > "${metadata_dir}/katago-version.txt"
 cp -- "${katago_build_dir}/CMakeCache.txt" "${metadata_dir}/katago-CMakeCache.txt"
 dpkg-query -W -f='${binary:Package}\t${Version}\n' 2>/dev/null \

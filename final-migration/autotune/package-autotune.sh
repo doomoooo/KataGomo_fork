@@ -9,8 +9,6 @@ source "${SCRIPT_DIR}/../environment/python-runtime.lock.sh"
 ENV_ROOT="${KATAGO_ENV_ROOT:-${REPO_ROOT}/.final-migration-env}"
 SOURCE_ROOT="${AUTOTUNE_SOURCE_ROOT:-${ENV_ROOT}/third_party}"
 OUTPUT_ROOT="${AUTOTUNE_OUTPUT_ROOT:-${ENV_ROOT}/autotune-distributions}"
-CUDA_ROOT="${AUTOTUNE_CUDA_ROOT:-${ENV_ROOT}/toolchains/cuda-13.2}"
-CUDNN_ROOT="${AUTOTUNE_CUDNN_ROOT:-${ENV_ROOT}/toolchains/cudnn-9.25-cuda13}"
 FLASH_CUTLASS_ROOT="${AUTOTUNE_FLASH_CUTLASS_ROOT:-/workspace/third_party/flash-attention/csrc/cutlass}"
 MODEL="${AUTOTUNE_MODEL:-/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz}"
 CORPUS="${AUTOTUNE_CORPUS:-}"
@@ -56,8 +54,7 @@ fi
 
 [[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] \
   || die "package only from a clean committed final-migration tree"
-for path in "${CUDA_ROOT}" "${CUDNN_ROOT}" \
-            "${FLASH_CUTLASS_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
+for path in "${FLASH_CUTLASS_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
   [[ -e "${path}" ]] || die "required payload input missing: ${path}"
 done
 mkdir -p -- "${OUTPUT_ROOT}" "$(dirname -- "${PYTHON_ARCHIVE}")"
@@ -163,16 +160,6 @@ git -C "${REPO_ROOT}" archive --format=tar --prefix=repo/ HEAD \
   | gzip -9 > "${bundle}/payload/repo.tar.gz"
 cp -- "${PYTHON_ARCHIVE}" "${bundle}/payload/python.tar.gz"
 
-log "packing the CUDA 13.2 build toolkit"
-tar --create --gzip --file "${bundle}/payload/cuda-13.2.tar.gz" \
-  --directory "${CUDA_ROOT}" \
-  --exclude='./nsight*' --exclude='./extras' --exclude='./gds' --exclude='./samples' \
-  --transform='flags=r;s#^\.$#cuda#;s#^\./#cuda/#' .
-log "packing cuDNN 9.25 CUDA 13"
-tar --create --gzip --file "${bundle}/payload/cudnn-9.25-cuda13.tar.gz" \
-  --directory "${CUDNN_ROOT}" \
-  --transform='flags=r;s#^\.$#cudnn#;s#^\./#cudnn/#' .
-
 asset_stage="${stage}/asset-stage/assets"
 mkdir -p -- "${asset_stage}"
 cp -- "${MODEL}" "${asset_stage}/b11c768h12nbt3tflrs-fson-silu.bin.gz"
@@ -218,7 +205,7 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
   printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"
   printf 'katago_commit=%s\n' "$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   printf 'python_version=3.12.13\npython_build_standalone_release=20260807\n'
-  printf 'cuda_toolkit=13.2\ncudnn_cuda13=9.25.0.15\n'
+  printf 'cuda_toolkit_pypi=13.0.3.0\ncudnn_cuda13_pypi=9.20.0.48\n'
   printf 'model_sha256=%s\n' "$(sha256sum "${MODEL}" | awk '{print $1}')"
   printf 'corpus_sha256=%s\n' "$(sha256sum "${CORPUS}" | awk '{print $1}')"
   "${CORPUS_PYTHON}" -c 'import json,sys; manifest=json.load(open(sys.argv[1])); result=json.load(open(sys.argv[2])); print("training_data_archive="+manifest["source_archive"]); print("training_data_archive_sha256="+manifest["source_archive_sha256"]); print("training_data_url="+result["source_url"])' "${CORPUS_MANIFEST}" "${CORPUS_RESULT}"

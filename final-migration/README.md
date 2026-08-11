@@ -37,14 +37,13 @@ scheduler, and CUDA pipeline.
 
 The same entry-point names are checked in at the root of a direct source
 clone. In that layout `./setup.sh` builds the current dependency sources and
-installs pinned CUDA 13.2.2, cuDNN 9.25, and Python 3.12.13 under
-`.final-migration-env`. The NVIDIA driver, host compiler, and zlib development
-files are the only host-side prerequisites. It never invokes `sudo` or changes
-system packages. NVIDIA redistributable archives are resolved from
-`final-migration/archive` first and otherwise downloaded from NVIDIA with
-manifest hashes enforced. It then prepares the model and 8192-row corpus used
-by autotune. Local archives and `KATAGO_MODEL` are checked before the pinned
-v1.17.1 model's official GitHub release. A downloaded model is stored at
+installs fixed CUDA 13.0.3, cuDNN 9.20, and Python 3.12.13 packages under
+`.final-migration-env`. CUDA, nvcc, cuDNN and PyTorch share one fixed PyPI
+environment; no separate CUDA toolkit is downloaded. The NVIDIA driver, host
+compiler, and zlib development files are the only host-side prerequisites. It
+never invokes `sudo` or changes system packages. It then prepares the model and
+8192-row corpus used by autotune. Local archives and `KATAGO_MODEL` are checked
+before the pinned v1.17.1 model's official GitHub release. A downloaded model is stored at
 `.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`, the same
 relative location produced by tar setup. The training corpus is resolved from
 the current KataGo archive. The canonical script name is `run-autotune.sh`

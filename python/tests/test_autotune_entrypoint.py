@@ -69,7 +69,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn("python -m ensurepip --version", installer)
         self.assertNotIn("bootstrap-ubuntu.sh", environment_setup)
         self.assertNotIn("python3-venv", audit)
-        self.assertIn('KATAGO_FINAL_VENV}/bin:${PATH}', audit)
+        self.assertIn("activate_venv", audit)
         build_matrix = (
             repo / "final-migration" / "environment" / "build-matrix.sh"
         ).read_text()
@@ -120,7 +120,7 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn('"onnx"', audit)
         self.assertNotIn('"onnx2torch"', audit)
 
-    def test_source_setup_uses_only_the_managed_cuda_toolchain(self) -> None:
+    def test_source_setup_uses_one_fixed_pypi_cuda_toolchain(self) -> None:
         repo = AUTOTUNE_PATH.parents[2]
         environment = repo / "final-migration/environment"
         environment_setup = (environment / "setup.sh").read_text()
@@ -130,17 +130,28 @@ class AutotuneEntrypointTests(unittest.TestCase):
         verify = (environment / "verify-third-party.sh").read_text()
         audit = (environment / "audit-environment.sh").read_text()
         root_setup = (repo / "setup.sh").read_text()
+        package = (repo / "final-migration/autotune/package-autotune.sh").read_text()
+        binary_requirements = (
+            repo / "final-migration/autotune/python-binary-requirements.txt"
+        ).read_text()
 
         self.assertLess(
-            environment_setup.index("acquire-nvidia-toolchain.sh"),
+            environment_setup.index("install-python.sh"),
             environment_setup.index("build-third-party.sh"),
         )
-        self.assertIn('KATAGO_CUDA_ROOT="${KATAGO_CUDA_ROOT:-', common)
+        self.assertNotIn("acquire-nvidia-toolchain", environment_setup)
+        self.assertIn('nvidia/cu13', common)
+        self.assertIn('nvidia/cudnn', common)
         self.assertIn('export CUDA_HOME="${KATAGO_CUDA_ROOT}"', common)
         for source in (third_party_build, katago_build, verify):
             self.assertIn("activate_toolchain", source)
             self.assertNotIn("/usr/local/cuda", source)
         self.assertIn('cuda_root="${KATAGO_CUDA_ROOT}"', root_setup)
+        self.assertNotIn("payload/cuda-", root_setup)
+        self.assertNotIn("payload/cudnn-", root_setup)
+        self.assertNotIn("packing the CUDA", package)
+        self.assertIn("nvidia-cuda-nvcc==13.0.88", binary_requirements)
+        self.assertIn("nvidia-nvvm==13.0.88", binary_requirements)
         self.assertNotIn("libcudnn9-dev-cuda-13", audit)
         self.assertNotIn("libzip-dev libcudnn", audit)
         self.assertNotIn("nsys", audit)
