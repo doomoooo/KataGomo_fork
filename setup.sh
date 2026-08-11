@@ -138,15 +138,30 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     cat <<'EOF'
 Usage: ./setup.sh [COMMAND]
 
-With no command, configure the complete source-development environment and
-prepare the local autotune runtime. Environment commands are:
+With no command, configure the source-development environment without changing
+system packages, then prepare the local autotune runtime. The host must already
+provide the base compiler tools, CUDA, cuDNN, Python 3, and zlib development
+files. Managed dependencies are written below .final-migration-env.
 
-  install | audit | verify | build | package | extract | deploy | all
+Commands:
+
+  install           Acquire/build user-space dependencies and runtime assets.
+  audit | verify    Inspect the existing host and user-space environment.
+  build             Build KataGo with the existing host CUDA toolchain.
+  package | extract | deploy
+                    Run the corresponding distribution operation.
+  all               Run install, audit, verify, and build in order.
 
 Additional source-tree command:
 
   autotune-runtime  Prepare or validate model, corpus, and runtime links only.
 EOF
+  }
+
+  install_source_environment() {
+    "${SCRIPT_DIR}/final-migration/environment/acquire-third-party.sh"
+    "${SCRIPT_DIR}/final-migration/environment/install-python.sh"
+    "${SCRIPT_DIR}/final-migration/environment/build-third-party.sh"
   }
 
   source_command="${1:-all}"
@@ -158,9 +173,17 @@ EOF
       [[ $# -eq 1 ]] || { source_usage >&2; exit 2; }
       prepare_source_runtime
       ;;
+    install)
+      [[ $# -eq 1 ]] || { source_usage >&2; exit 2; }
+      install_source_environment
+      prepare_source_runtime
+      ;;
     all)
       [[ $# -le 1 ]] || { source_usage >&2; exit 2; }
-      "${ENV_SETUP}" all
+      install_source_environment
+      "${ENV_SETUP}" audit
+      "${ENV_SETUP}" verify
+      "${ENV_SETUP}" build
       prepare_source_runtime
       ;;
     *)

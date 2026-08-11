@@ -39,6 +39,8 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('--prefix "${prefix}" --repo "${SCRIPT_DIR}"', runner.read_text())
         self.assertIn("KATAGO_LOCAL_ARCHIVE", setup.read_text())
         self.assertIn("--refresh-latest", setup.read_text())
+        self.assertNotIn("bootstrap-ubuntu.sh", setup.read_text())
+        self.assertNotIn("sudo", setup.read_text())
 
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()

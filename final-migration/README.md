@@ -37,9 +37,10 @@ scheduler, and CUDA pipeline.
 
 The same entry-point names are checked in at the root of a direct source
 clone. In that layout `./setup.sh` builds the current dependency sources and
-installs the current system CUDA stack, keeps managed files under
-`.final-migration-env`, then prepares the model and 8192-row corpus used by
-autotune. Local archives and `KATAGO_MODEL` are checked
+uses the CUDA, cuDNN, compiler, Python 3, and zlib development files already
+installed on the host. It never invokes `sudo` or changes system packages;
+managed files stay under `.final-migration-env`. It then prepares the model
+and 8192-row corpus used by autotune. Local archives and `KATAGO_MODEL` are checked
 before the pinned model's official GitHub release; the training corpus is
 resolved from the current KataGo archive. The canonical script name is
 `run-autotune.sh` (with a hyphen).
