@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 activate_venv
+activate_toolchain
 require_command cmake
 require_command ninja
 ensure_record_root
@@ -16,10 +17,6 @@ exec > >(tee "${record}") 2>&1
 build_root="${KATAGO_BUILD_ROOT:-${KATAGO_ENV_ROOT}/katago-builds}"
 assert_safe_managed_path "${build_root}"
 mkdir -p -- "${build_root}"
-
-export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-export PATH="${CUDA_HOME}/bin:${PATH}"
-export LD_LIBRARY_PATH="${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 build_cuda() {
   local build_dir="${build_root}/cuda"
@@ -36,7 +33,9 @@ build_cuda() {
     -DBUILD_DISTRIBUTED=0
     -DUSE_TCMALLOC=0
     "-DCMAKE_CUDA_COMPILER=${CUDA_HOME}/bin/nvcc"
-    -DCUDNN_ROOT_DIR=/usr
+    "-DCUDNN_ROOT_DIR=${KATAGO_CUDNN_ROOT}"
+    "-DCUDNN_INCLUDE_DIR=${KATAGO_CUDNN_ROOT}/include"
+    "-DCUDNN_LIBRARY=${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"
     -DZLIB_INCLUDE_DIR=/usr/include
     "-DZLIB_LIBRARY=${system_zlib}"
     "-DZLIB_LIBRARY_RELEASE=${system_zlib}"

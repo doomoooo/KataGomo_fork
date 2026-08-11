@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 activate_venv
+activate_toolchain
 ensure_record_root
 for command_name in dpkg-query ldd readelf sha256sum tar; do
   require_command "${command_name}"
@@ -19,7 +20,13 @@ source_build="$(<"${latest_build_file}")"
 katago_binary="${KATAGO_BUILD_ROOT:-${KATAGO_ENV_ROOT}/katago-builds}/cuda/katago"
 [[ -x "${katago_binary}" ]] || die "KataGo CUDA binary missing; run setup.sh build before packaging"
 katago_build_dir="$(dirname -- "${katago_binary}")"
-unexpected_runtime_paths="$(ldd "${katago_binary}" | grep -E '=> /(workspace|opt/nvidia)/' || true)"
+unexpected_runtime_paths="$(
+  ldd "${katago_binary}" \
+    | grep -E '=> /(workspace|opt/nvidia)/' \
+    | grep -vF "=> ${KATAGO_CUDA_ROOT}/" \
+    | grep -vF "=> ${KATAGO_CUDNN_ROOT}/" \
+    || true
+)"
 [[ -z "${unexpected_runtime_paths}" ]] \
   || die "KataGo binary contains host-specific runtime paths:${unexpected_runtime_paths//$'\n'/; }"
 
@@ -135,12 +142,12 @@ elf_interpreter="$(readelf -l "${katago_binary}" \
 enqueue_runtime "${elf_interpreter}"
 
 for cuda_library in \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libcublas.so.${cuda_major}" \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libcublasLt.so.${cuda_major}" \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libcudart.so.${cuda_major}" \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libnvJitLink.so.${cuda_major}" \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libnvrtc.so.${cuda_major}" \
-  "${CUDA_HOME:-/usr/local/cuda}/lib64/libnvrtc-builtins.so.${cuda_release}"; do
+  "${CUDA_HOME}/lib64/libcublas.so.${cuda_major}" \
+  "${CUDA_HOME}/lib64/libcublasLt.so.${cuda_major}" \
+  "${CUDA_HOME}/lib64/libcudart.so.${cuda_major}" \
+  "${CUDA_HOME}/lib64/libnvJitLink.so.${cuda_major}" \
+  "${CUDA_HOME}/lib64/libnvrtc.so.${cuda_major}" \
+  "${CUDA_HOME}/lib64/libnvrtc-builtins.so.${cuda_release}"; do
   enqueue_runtime "${cuda_library}"
 done
 while IFS= read -r cudnn_library; do
@@ -183,8 +190,8 @@ while (( queue_index < ${#runtime_queue[@]} )); do
   done < <(ldd "${resolved}" 2>/dev/null | awk '/=> \// {print $3}')
 done
 
-[[ -r "${CUDA_HOME:-/usr/local/cuda}/EULA.txt" ]] \
-  && cp -- "${CUDA_HOME:-/usr/local/cuda}/EULA.txt" "${bundle}/licenses/NVIDIA-CUDA-EULA.txt"
+[[ -r "${CUDA_HOME}/EULA.txt" ]] \
+  && cp -- "${CUDA_HOME}/EULA.txt" "${bundle}/licenses/NVIDIA-CUDA-EULA.txt"
 while IFS= read -r package_owner; do
   copyright_file="/usr/share/doc/${package_owner}/copyright"
   [[ -r "${copyright_file}" ]] || continue

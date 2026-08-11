@@ -6,11 +6,13 @@ The current host intentionally has two related but non-identical stacks:
 
 | Layer | CUDA | cuDNN | Purpose |
 | --- | --- | --- | --- |
-| system toolkit | 13.2 | 9.25 | nvcc and C++ KataGo backends |
+| managed toolkit | 13.2.2 | 9.25 | nvcc and C++ KataGo backends |
 | PyTorch wheels | 13.0 | 9.20 | Python search/codegen tooling |
 
-The environment audit must report both. `LD_LIBRARY_PATH` must not cause the
-Python wheel libraries to replace system libraries for the C++ executable.
+The environment audit must report both. The managed toolkit is installed below
+`.final-migration-env/toolchains`; neither TileLang nor the C++ build may fall
+back to `/usr/local/cuda`. `LD_LIBRARY_PATH` must not cause the Python wheel
+libraries to replace the managed libraries for the C++ executable.
 
 ## Historical optimization toolchain observed
 

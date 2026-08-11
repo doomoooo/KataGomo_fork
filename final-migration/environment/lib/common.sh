@@ -11,6 +11,9 @@ KATAGO_LOCAL_ARCHIVE="${KATAGO_LOCAL_ARCHIVE:-${MIGRATION_ROOT}/archive}"
 KATAGO_THIRD_PARTY_ROOT="${KATAGO_THIRD_PARTY_ROOT:-${KATAGO_ENV_ROOT}/third_party}"
 KATAGO_FINAL_VENV="${KATAGO_FINAL_VENV:-${KATAGO_ENV_ROOT}/venv}"
 KATAGO_PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+KATAGO_TOOLCHAIN_ROOT="${KATAGO_TOOLCHAIN_ROOT:-${KATAGO_ENV_ROOT}/toolchains}"
+KATAGO_CUDA_ROOT="${KATAGO_CUDA_ROOT:-${KATAGO_TOOLCHAIN_ROOT}/cuda-13.2}"
+KATAGO_CUDNN_ROOT="${KATAGO_CUDNN_ROOT:-${KATAGO_TOOLCHAIN_ROOT}/cudnn-9.25-cuda13}"
 
 default_build_jobs() {
   local cpu_jobs available_bytes cgroup_max cgroup_current cgroup_available memory_jobs
@@ -39,6 +42,7 @@ KATAGO_RECORD_ROOT="${KATAGO_RECORD_ROOT:-${MIGRATION_ROOT}/records}"
 
 export KATAGO_ENV_ROOT KATAGO_LOCAL_ARCHIVE KATAGO_THIRD_PARTY_ROOT
 export KATAGO_FINAL_VENV KATAGO_PYPI_MIRROR KATAGO_BUILD_JOBS KATAGO_RECORD_ROOT
+export KATAGO_TOOLCHAIN_ROOT KATAGO_CUDA_ROOT KATAGO_CUDNN_ROOT
 
 log() {
   printf '[final-migration] %s\n' "$*"
@@ -65,6 +69,20 @@ activate_venv() {
   [[ -f "${KATAGO_FINAL_VENV}/bin/activate" ]] || die "Python venv missing: ${KATAGO_FINAL_VENV}; run setup.sh install"
   # shellcheck disable=SC1091
   source "${KATAGO_FINAL_VENV}/bin/activate"
+}
+
+activate_toolchain() {
+  [[ -x "${KATAGO_CUDA_ROOT}/bin/nvcc" ]] \
+    || die "managed CUDA toolkit missing: ${KATAGO_CUDA_ROOT}; run setup.sh install"
+  [[ -r "${KATAGO_CUDNN_ROOT}/include/cudnn.h" ]] \
+    || die "managed cuDNN headers missing: ${KATAGO_CUDNN_ROOT}; run setup.sh install"
+  [[ -r "${KATAGO_CUDNN_ROOT}/lib/libcudnn.so" ]] \
+    || die "managed cuDNN library missing: ${KATAGO_CUDNN_ROOT}; run setup.sh install"
+  export CUDA_HOME="${KATAGO_CUDA_ROOT}"
+  export CUDA_PATH="${KATAGO_CUDA_ROOT}"
+  export CUDNN_ROOT="${KATAGO_CUDNN_ROOT}"
+  export PATH="${KATAGO_CUDA_ROOT}/bin:${PATH}"
+  export LD_LIBRARY_PATH="${KATAGO_CUDNN_ROOT}/lib:${KATAGO_CUDA_ROOT}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 }
 
 github_fallback_warning() {

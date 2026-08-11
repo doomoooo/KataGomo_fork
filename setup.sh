@@ -11,7 +11,7 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
 
   prepare_source_runtime() {
     local model_name model_sha256 model_url runtime_root assets downloads
-    local cuda_root multiarch cudnn_include cudnn_library system_library
+    local cuda_root cudnn_include cudnn_library system_library
     local model_source model_asset candidate actual_model_sha corpus manifest corpus_state
     local golden golden_metadata target link
     local -a corpus_args existing_corpus
@@ -29,6 +29,7 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     [[ -x "${KATAGO_FINAL_VENV}/bin/python" ]] \
       || die "Python environment missing; run ./setup.sh install first"
     mkdir -p -- "${assets}" "${downloads}" "${runtime_root}/state"
+    activate_toolchain
 
     link_source_runtime_path() {
       target="$1"
@@ -39,19 +40,15 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
       ln -sfn -- "$(readlink -m -- "${target}")" "${link}"
     }
 
-    cuda_root="${CUDA_HOME:-/usr/local/cuda}"
+    cuda_root="${KATAGO_CUDA_ROOT}"
     [[ -x "${cuda_root}/bin/nvcc" ]] || die "CUDA toolkit missing: ${cuda_root}"
     cuda_root="$(readlink -e -- "${cuda_root}")"
-    multiarch="$(gcc -print-multiarch)"
-    cudnn_include="/usr/include/${multiarch}"
-    [[ -r "${cudnn_include}/cudnn_version.h" ]] || cudnn_include="/usr/include"
+    cudnn_include="${KATAGO_CUDNN_ROOT}/include"
     [[ -r "${cudnn_include}/cudnn_version.h" ]] \
-      || die "system cuDNN headers are missing"
-    cudnn_library="$(ldconfig -p | awk '$1 == "libcudnn.so" {print $NF; exit}')"
-    [[ -r "${cudnn_library}" ]] || die "system libcudnn.so is missing"
+      || die "managed cuDNN headers are missing"
+    cudnn_library="${KATAGO_CUDNN_ROOT}/lib/libcudnn.so"
+    [[ -r "${cudnn_library}" ]] || die "managed libcudnn.so is missing"
     system_library="$(dirname -- "${cudnn_library}")"
-    [[ -r "${system_library}/libz.so" ]] \
-      || die "system libz development library is missing"
     for source_name in TileLang cutlass flash-attention; do
       [[ -d "${KATAGO_THIRD_PARTY_ROOT}/${source_name}" ]] \
         || die "third-party source missing: ${source_name}; run ./setup.sh install first"
@@ -64,7 +61,7 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
     link_source_runtime_path "${cudnn_include}" "${runtime_root}/cudnn/include"
     link_source_runtime_path "${system_library}" "${runtime_root}/cudnn/lib"
     link_source_runtime_path /usr/include "${runtime_root}/native/include"
-    link_source_runtime_path "${system_library}" "${runtime_root}/native/lib"
+    link_source_runtime_path "/usr/lib/$(gcc -print-multiarch)" "${runtime_root}/native/lib"
 
     model_asset="${assets}/${model_name}"
     model_source="${KATAGO_MODEL:-}"
@@ -144,9 +141,9 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
 Usage: ./setup.sh [COMMAND]
 
 With no command, configure the source-development environment without changing
-system packages, then prepare the local autotune runtime. The host must already
-provide the base compiler tools, CUDA, cuDNN, and zlib development files.
-Python is pinned and installed below .final-migration-env.
+system packages, then prepare the local autotune runtime. CUDA 13.2, cuDNN 9.25,
+and Python 3.12.13 are pinned and installed below .final-migration-env. The host
+only provides the NVIDIA driver, base compiler tools, and zlib development files.
 
 Commands:
 

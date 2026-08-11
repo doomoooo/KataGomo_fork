@@ -32,9 +32,10 @@ autotune。`run.sh` 校验构建 manifest 后，以认证的 batch、stream、
 scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
 直接 clone 源码仓库时，仓库根目录也提供同名入口。此时 `./setup.sh` 会在
-`.final-migration-env` 下编译当前依赖源码，并使用宿主机已有的 CUDA、cuDNN、
-编译器和 zlib 开发文件。它不会调用 `sudo` 或修改系统软件包，Python 3.12.13
-固定安装在 `.final-migration-env` 中。
+`.final-migration-env` 下编译当前依赖源码，并在其中固定安装 CUDA 13.2.2、
+cuDNN 9.25 和 Python 3.12.13。宿主机只需提供 NVIDIA 驱动、基础编译器和 zlib
+开发文件。它不会调用 `sudo` 或修改系统软件包。NVIDIA redistributable 优先从
+`final-migration/archive` 读取，缺失时从 NVIDIA 下载并严格校验 manifest hash。
 随后准备 autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
 `KATAGO_MODEL`，缺失时从 KataGo v1.17.1 官方 GitHub release 下载，并保存到
 `.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`，与 tar

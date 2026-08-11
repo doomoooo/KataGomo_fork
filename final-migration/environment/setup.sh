@@ -24,6 +24,7 @@ EOF
 install_environment() {
   "${SCRIPT_DIR}/acquire-third-party.sh"
   "${SCRIPT_DIR}/install-python.sh"
+  "${SCRIPT_DIR}/acquire-nvidia-toolchain.sh"
   "${SCRIPT_DIR}/build-third-party.sh"
 }
 

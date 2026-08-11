@@ -27,6 +27,10 @@ Configuration variables:
   python-build-standalone archive. The archive's fixed SHA-256 is always
   checked before extraction.
 - `KATAGO_THIRD_PARTY_ROOT`: override managed source location.
+- `KATAGO_TOOLCHAIN_ROOT`: private NVIDIA toolkit root; default
+  `.final-migration-env/toolchains`.
+- `KATAGO_CUDA_ROOT`, `KATAGO_CUDNN_ROOT`: advanced overrides for the managed
+  CUDA 13.2.2 and cuDNN 9.25 trees. Every build stage uses these paths.
 - `KATAGO_INCLUDE_RESEARCH=1`: also acquire reference-only repositories.
 - `KATAGO_BUILD_JOBS`: explicit parallel compile override. By default the
   scripts take the lower of `nproc` and a memory-aware limit: 75% of current
@@ -75,11 +79,14 @@ a pinned transitive wheel; no Triton kernel is generated, benchmarked, or
 linked into the CUDA backend.
 
 The public setup never invokes APT, `sudo`, or a driver installer. A source
-checkout requires existing compiler, CUDA, cuDNN, and zlib development files.
-It obtains the locked Python 3.12.13 standalone archive from the local archive
+checkout requires an operational NVIDIA driver, a compiler, and zlib
+development files. It installs the locked CUDA 13.2.2 and cuDNN 9.25 NVIDIA
+redistributable archives below `.final-migration-env`, preferring the local
+archive and verifying the official manifests and every component hash. It also
+obtains the locked Python 3.12.13 standalone archive from the local archive
 first and otherwise from its recorded upstream URL, then creates the venv with
-that interpreter. The source-complete release tar carries the same Python
-archive and all CUDA/cuDNN/source payloads, so its setup is fully offline.
+that interpreter. The source-complete release tar carries the same Python and
+CUDA/cuDNN/source payloads, so its setup is fully offline.
 
 The distributable path is separate from source development setup. It bundles
 the compiled executable, a private ELF loader and user-space runtime libraries

@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 activate_venv
+activate_toolchain
 ensure_record_root
 [[ -r "${KATAGO_ENV_ROOT}/state/source-manifest.tsv" ]] || die "source manifest missing; run acquire-third-party.sh"
 
@@ -32,8 +33,6 @@ else
   exec > >(tee "${record}") 2>&1
 fi
 
-export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-export PATH="${CUDA_HOME}/bin:${PATH}"
 export PIP_INDEX_URL="${KATAGO_PYPI_MIRROR}"
 export MAX_JOBS="${KATAGO_BUILD_JOBS}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${KATAGO_BUILD_JOBS}"

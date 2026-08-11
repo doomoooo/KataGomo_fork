@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 activate_venv
+activate_toolchain
 require_command nvcc
 require_command g++
 
@@ -18,9 +19,6 @@ smoke_build="${KATAGO_ENV_ROOT}/smoke-build"
 assert_safe_managed_path "${smoke_build}"
 mkdir -p -- "${smoke_build}"
 
-export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-export PATH="${CUDA_HOME}/bin:${PATH}"
-export LD_LIBRARY_PATH="${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export XDG_CACHE_HOME="${KATAGO_ENV_ROOT}/cache"
 mkdir -p -- "${XDG_CACHE_HOME}"
 
@@ -44,6 +42,8 @@ for arch in "${smoke_archs[@]}"; do
   log "compiling CUDA/cuBLAS/cuDNN link smoke for sm_${arch}"
   nvcc -std=c++17 -arch="sm_${arch}" \
     "${SCRIPT_DIR}/smoke/cuda_stack.cu" \
+    -I"${KATAGO_CUDNN_ROOT}/include" \
+    -L"${CUDA_HOME}/lib64" -L"${KATAGO_CUDNN_ROOT}/lib" \
     -lcublas -lcudnn \
     -o "${smoke_build}/cuda-stack-sm${arch}"
 
@@ -59,8 +59,9 @@ log "compiling cuDNN frontend header smoke"
 g++ -std=c++17 \
   -I"${KATAGO_THIRD_PARTY_ROOT}/cudnn-frontend/include" \
   -I"${CUDA_HOME}/include" \
+  -I"${KATAGO_CUDNN_ROOT}/include" \
   "${SCRIPT_DIR}/smoke/cudnn_frontend.cpp" \
-  -L"${CUDA_HOME}/lib64" -lcudnn -lcudart \
+  -L"${CUDA_HOME}/lib64" -L"${KATAGO_CUDNN_ROOT}/lib" -lcudnn -lcudart \
   -o "${smoke_build}/cudnn-frontend"
 
 log "checking Python CUDA/codegen imports"

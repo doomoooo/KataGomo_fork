@@ -120,6 +120,32 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn('"onnx"', audit)
         self.assertNotIn('"onnx2torch"', audit)
 
+    def test_source_setup_uses_only_the_managed_cuda_toolchain(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        environment = repo / "final-migration/environment"
+        environment_setup = (environment / "setup.sh").read_text()
+        common = (environment / "lib/common.sh").read_text()
+        third_party_build = (environment / "build-third-party.sh").read_text()
+        katago_build = (environment / "build-matrix.sh").read_text()
+        verify = (environment / "verify-third-party.sh").read_text()
+        audit = (environment / "audit-environment.sh").read_text()
+        root_setup = (repo / "setup.sh").read_text()
+
+        self.assertLess(
+            environment_setup.index("acquire-nvidia-toolchain.sh"),
+            environment_setup.index("build-third-party.sh"),
+        )
+        self.assertIn('KATAGO_CUDA_ROOT="${KATAGO_CUDA_ROOT:-', common)
+        self.assertIn('export CUDA_HOME="${KATAGO_CUDA_ROOT}"', common)
+        for source in (third_party_build, katago_build, verify):
+            self.assertIn("activate_toolchain", source)
+            self.assertNotIn("/usr/local/cuda", source)
+        self.assertIn('cuda_root="${KATAGO_CUDA_ROOT}"', root_setup)
+        self.assertNotIn("libcudnn9-dev-cuda-13", audit)
+        self.assertNotIn("libzip-dev libcudnn", audit)
+        self.assertNotIn("nsys", audit)
+        self.assertNotIn("ncu", audit)
+
     def test_both_architectures_use_one_external_workflow(self) -> None:
         source = AUTOTUNE_PATH.read_text()
         self.assertIn("def workflow_discovery(", source)

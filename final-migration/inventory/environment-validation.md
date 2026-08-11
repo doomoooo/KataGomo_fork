@@ -41,11 +41,12 @@ Official KataGo `v1.17.2` commit
 CUDA backend, CUDA 13.2.86, distributed build disabled, and TCMalloc disabled.
 TensorRT, OpenCL, and Eigen were not built.
 
-The binary's dynamic dependencies resolve only through the versioned CUDA
-toolkit and Ubuntu system library directories. A first build accidentally found
-Nsight Systems' private zlib; the build script now pins
-`/usr/lib/<multiarch>/libz.so` and packaging rejects `/opt/nvidia` or
-`/workspace` runtime resolutions.
+The binary's dynamic dependencies resolve only through the managed versioned
+CUDA/cuDNN toolkit and Ubuntu base-library directories. A first build
+accidentally found Nsight Systems' private zlib; the build script now pins
+`/usr/lib/<multiarch>/libz.so`. Packaging accepts the explicitly managed
+toolchain root but rejects unrelated `/opt/nvidia` or `/workspace` runtime
+resolutions.
 
 The release form is a plain, non-invasive tar: the KataGo executable, locally
 built source wheels, the exact binary wheel closure, a private ELF loader and
