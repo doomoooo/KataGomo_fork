@@ -1,0 +1,34 @@
+{
+  "artifactTimeUtc": "2026-08-06T19:24:18.274888757+00:00",
+  "target": "RTX 4090 SM89, exact B13/S361/H12/D32 both16 FlashAttention",
+  "control": "M64xN96, four warps, one stage",
+  "candidate": "M64xN128, four warps, one stage",
+  "decision": "rejected_before_network_integration",
+  "naturalEventScreenUs": {
+    "controlMean": 20.8662005,
+    "controlMedian": 20.859686,
+    "candidateMean": 21.4539475,
+    "candidateMedian": 21.4488115,
+    "candidateVsControlMeanPercent": 2.816742,
+    "candidateVsControlMedianPercent": 2.824230,
+    "pairedCandidateVsControlPercent": [2.985705, 2.769863, 2.810719, 2.700881]
+  },
+  "ncuMedian": {
+    "durationUs": {"control": 21.50, "candidate": 22.18},
+    "registersPerThread": {"control": 117, "candidate": 168},
+    "dynamicSharedMemoryKiB": {"control": 16.77, "candidate": 20.86},
+    "registerBlockLimit": {"control": 4, "candidate": 3},
+    "theoreticalOccupancyPercent": {"control": 33.33, "candidate": 25.00},
+    "achievedOccupancyPercent": {"control": 29.32, "candidate": 22.28},
+    "eligibleWarpsPerScheduler": {"control": 0.87, "candidate": 0.69},
+    "spill": {"control": 0, "candidate": 0}
+  },
+  "mechanismConclusion": "N128 removes one K/V loop without increasing padded positions, but expands live fragments enough to restore the 168-register, three-CTA bottleneck and loses latency.",
+  "validationSkipped": ["integrated S1", "integrated S2", "accuracy", "post-change full-graph profile"],
+  "sourceTreeChanged": false,
+  "codeCommit": null,
+  "reportsSha256": {
+    "controlNcu": "8572df2ad5fda931db0abd5b4162c218442fc9acf0413f064915e77d64d5e872",
+    "candidateNcu": "6557b0fe6466762c7c1bd43c1aa6e714ae995c00cc04476d59229d29c48e4ae5"
+  }
+}

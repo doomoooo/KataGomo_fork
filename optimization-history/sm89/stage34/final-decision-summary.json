@@ -1,0 +1,74 @@
+{
+  "stage": 34,
+  "candidate": "exact C384 affine plus SiLU flat vec8",
+  "target": "RTX 4090 exact 19x19 B13 FP16 S2 only",
+  "decision": "reject-and-revert",
+  "preselectionFlashAudit": {
+    "ncuDurationUs": [28.22, 27.97, 28.10],
+    "registersPerThread": 168,
+    "residentBlocksPerSm": 3,
+    "theoreticalOccupancyPct": 25.0,
+    "spills": 0,
+    "conclusion": "current Stage-7 tile is already at the three-CTA resource limit and its independent tile/warp/pack variables were previously swept"
+  },
+  "controlNcu": {
+    "kernel": "applyCScaleBiasNHWCSiluHalfKernel C384",
+    "durationUs": [6.85, 6.85, 6.91],
+    "medianDurationUs": 6.85,
+    "gridCtas": 4693,
+    "threadsPerCta": 384,
+    "wavesPerSm": 9.17,
+    "registersPerThread": 16,
+    "achievedOccupancyPctRange": [63.67, 64.78],
+    "noEligiblePctRange": [54.79, 54.99],
+    "spills": 0
+  },
+  "candidateNcu": {
+    "durationUs": [4.51, 4.67, 4.67],
+    "medianDurationUs": 4.67,
+    "medianDurationDeltaPct": -31.82,
+    "gridCtas": 880,
+    "threadsPerCta": 256,
+    "wavesPerSm": 1.15,
+    "registersPerThread": 31,
+    "achievedOccupancyPctRange": [75.78, 75.97],
+    "noEligiblePctRange": [52.75, 52.78],
+    "spills": 0
+  },
+  "nsysS2": {
+    "iterationsPerRun": 20,
+    "forwardOrder": {
+      "controlTargetAverageUs": 8.724985,
+      "candidateTargetAverageUs": 6.026871,
+      "controlNNEvalsPerSec": 3202.153457,
+      "candidateNNEvalsPerSec": 3133.345724,
+      "throughputDeltaPct": -2.1488,
+      "summedKernelTimeDeltaPct": -0.9850,
+      "gpuBusyUnionDeltaPct": 1.3855
+    },
+    "reverseOrder": {
+      "controlTargetAverageUs": 8.694037,
+      "candidateTargetAverageUs": 6.082802,
+      "controlNNEvalsPerSec": 3144.020812,
+      "candidateNNEvalsPerSec": 3131.980813,
+      "throughputDeltaPct": -0.3829,
+      "summedKernelTimeDeltaPct": -1.4625,
+      "gpuBusyUnionDeltaPct": 2.9130
+    }
+  },
+  "smoke": {
+    "rows": 26,
+    "finite": true,
+    "byteIdentical": true,
+    "controlReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "longTests": {
+    "abba100": "skipped: both S2 full-network order gates failed",
+    "fp32Reference8192": "skipped: performance gate failed after byte-identical smoke"
+  },
+  "mechanismConclusion": "Vec8 reduced the target kernel and total summed work, but changed dual-stream overlap enough to increase GPU busy union in both orders. This is an S2 phase/overlap regression, not a failed local vectorization mechanism.",
+  "sourceState": "candidate kernel and runtime switch removed; accepted S2 path rebuilt",
+  "candidateBinarySha256": "53284115c76e7045106abb03da6fed9c309f545ad300bd15bd3a05859a357a6a",
+  "postRevertBinarySha256": "06816f817a4ccbceb3a9a5f0980d79d9b03b837658d1bf8daeb13145cef41125"
+}

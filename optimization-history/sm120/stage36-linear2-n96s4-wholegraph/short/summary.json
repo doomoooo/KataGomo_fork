@@ -1,0 +1,39 @@
+{
+  "order": [
+    "A",
+    "B",
+    "B",
+    "A",
+    "B",
+    "A",
+    "A",
+    "B"
+  ],
+  "A": "cudaUseLinear2ResidualAotN96S4Sm120=false",
+  "B": "cudaUseLinear2ResidualAotN96S4Sm120=true",
+  "iterations": 400,
+  "warmup": 25,
+  "control_nneval_per_sec": [
+    3880.583193,
+    3877.34699,
+    3854.272927,
+    3848.14855
+  ],
+  "candidate_nneval_per_sec": [
+    3799.854162,
+    3820.44164,
+    3843.461118,
+    3846.012714
+  ],
+  "control_mean_nneval_per_sec": 3865.087915,
+  "candidate_mean_nneval_per_sec": 3827.4424085,
+  "candidate_mean_delta_percent": -0.9739883626942003,
+  "adjacent_candidate_delta_percent": [
+    -2.080332439351462,
+    -1.4676362509407515,
+    -0.2805148780269495,
+    -0.05550295089309376
+  ],
+  "positive_adjacent_comparisons": 0,
+  "advance": false
+}

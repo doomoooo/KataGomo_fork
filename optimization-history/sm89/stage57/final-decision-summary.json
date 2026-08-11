@@ -1,0 +1,87 @@
+{
+  "stage": 57,
+  "strategy": "fuse the final inner FFN linear2 residual epilogue with the following outer C384 BN plus SiLU",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment with S1 attribution",
+  "switch": "cudaUseLinear2PostBNSiluSm89",
+  "implementationStatus": "intrinsic-accepted",
+  "deploymentStatus": "S2-disabled-individual-regressed-and-bundle-phase-sensitive",
+  "sourceRetained": true,
+  "sourceCommit": "91f6aae",
+  "measuredDirtyBinarySha256": "4e5fb9b4873cb771b65c5de4fcf1650aacd5940fa929d5e2e4887bf9cb3bee7c",
+  "cleanBuildBinarySha256": "3ecb8d6766b6a3e69fcd837cf4584c2b12e9d628213f2000f5b03f10fe1e7c05",
+  "mechanism": {
+    "residualHalfRoundingPreserved": true,
+    "followingHalfFmaAndFloatExpfPreserved": true,
+    "bnLaunchesRemovedPerForward": 11,
+    "fullC384ResidualReadsRemovedPerForward": 11
+  },
+  "ncuFromS2Invocation": {
+    "controlLinear2MedianUs": 23.104,
+    "controlBnMedianUs": 7.008,
+    "controlBoundaryMedianUs": 30.112,
+    "candidateDurationsUs": [24.608, 24.704, 24.640],
+    "candidateMedianUs": 24.640,
+    "boundaryChangePercent": -18.172157,
+    "candidateKernelOnlyChangeVsLinear2Percent": 6.648,
+    "candidateRegistersPerThread": 164,
+    "candidateRequestedSharedBytes": 65536,
+    "candidateWavesPerSm": 0.87,
+    "candidateLocalSpillRequests": 0,
+    "candidateSharedSpillRequests": 0
+  },
+  "shortNsys": {
+    "s1": {
+      "forwardControlNNEvalsPerSec": 2456.812978,
+      "forwardCandidateNNEvalsPerSec": 2479.931643,
+      "forwardChangePercent": 0.941002,
+      "reverseControlNNEvalsPerSec": 2453.059849,
+      "reverseCandidateNNEvalsPerSec": 2476.794375,
+      "reverseChangePercent": 0.967548
+    },
+    "s2": {
+      "validForwardControlNNEvalsPerSec": 3259.923319,
+      "validForwardCandidateNNEvalsPerSec": 3162.407612,
+      "validForwardChangePercent": -2.991350,
+      "reverseRunsStatus": "contaminated: both control runs entered approximately half-throughput phases",
+      "candidateC384BnLaunchesPerForward": 0,
+      "controlC384BnLaunchesPerForward": 11
+    }
+  },
+  "locked2400S1Abba100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 2492.208904,
+      "B1Candidate": 2511.933700,
+      "B2Candidate": 2512.306377,
+      "A2Control": 2492.208904
+    },
+    "controlMeanNNEvalsPerSec": 2492.208904,
+    "candidateMeanNNEvalsPerSec": 2512.1200385,
+    "changePercent": 0.798935,
+    "adjacentPairChangesPercent": [0.791458, 0.806412]
+  },
+  "accuracy": {
+    "rows": 8192,
+    "policyTop1VsFp32": 0.997802734375,
+    "policyProbabilityRmseVsFp32": 0.00012818185496143997,
+    "valueOutcomeRmseVsFp32": 0.0026525238063186407,
+    "scoreMeanRmseVsFp32": 0.0022080170456320047,
+    "ownershipSigmoidRmseVsFp32": 0.00030037766555324197,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "sevenRouteBundleS2Nsys": {
+    "forwardControlNNEvalsPerSec": 3236.604504,
+    "forwardCandidateNNEvalsPerSec": 3256.937340,
+    "forwardChangePercent": 0.628215,
+    "reverseControlNNEvalsPerSec": 3251.512259,
+    "reverseCandidateNNEvalsPerSec": 3174.767744,
+    "reverseChangePercent": -2.360271,
+    "decision": "phase-sensitive; keep all six strict-local default-off routes disabled"
+  },
+  "deployedCurrentBest": {
+    "stage": 56,
+    "nnevalsPerSec": 3288.9709125,
+    "tensorrtBaselineNNEvalsPerSec": 2432.1979345,
+    "changeVsTensorRTPercent": 35.226285
+  },
+  "decision": "retain the implementation in its own commit as a strict intrinsic win, leave it default-off for S2, and carry it as item six in the cumulative strict-local bundle"
+}

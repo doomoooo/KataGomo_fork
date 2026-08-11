@@ -9,7 +9,7 @@ Usage:
   python compare_replay_krnn.py \
     --reference replay-fp32-full19.krnn \
     --candidate replay-fp16-full19.krnn \
-    --output /workspace/results/accuracy/replay-fp16-vs-fp32.json
+    --output /workspace/results/shared/accuracy/replay-fp16-vs-fp32.json
 """
 
 import argparse

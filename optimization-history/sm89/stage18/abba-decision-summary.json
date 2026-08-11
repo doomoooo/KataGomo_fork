@@ -1,0 +1,151 @@
+{
+   "adjacentPairs" : {
+      "maxImprovementPercent" : 1.30127453448206,
+      "medianImprovementPercent" : -0.558963560062464,
+      "minImprovementPercent" : -1.75005014619936,
+      "positivePairs" : 3,
+      "samples" : [
+         {
+            "candidateLabel" : "B1",
+            "candidateNNEvalsPerSec" : 3061.878507,
+            "controlLabel" : "A1",
+            "controlNNEvalsPerSec" : 3081.01262,
+            "improvementPercent" : -0.621033256267545,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "B2",
+            "candidateNNEvalsPerSec" : 3119.050042,
+            "controlLabel" : "A2",
+            "controlNNEvalsPerSec" : 3082.508943,
+            "improvementPercent" : 1.18543367353339,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B1",
+            "candidateNNEvalsPerSec" : 3109.785993,
+            "controlLabel" : "R-A1",
+            "controlNNEvalsPerSec" : 3078.024587,
+            "improvementPercent" : 1.03187629280623,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B2",
+            "candidateNNEvalsPerSec" : 3116.752523,
+            "controlLabel" : "R-A2",
+            "controlNNEvalsPerSec" : 3123.270257,
+            "improvementPercent" : -0.208682997745457,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "B1",
+            "candidateNNEvalsPerSec" : 3058.927276,
+            "controlLabel" : "A1",
+            "controlNNEvalsPerSec" : 3082.976966,
+            "improvementPercent" : -0.780080106508341,
+            "round" : 2
+         },
+         {
+            "candidateLabel" : "B2",
+            "candidateNNEvalsPerSec" : 3058.835051,
+            "controlLabel" : "A2",
+            "controlNNEvalsPerSec" : 3083.070449,
+            "improvementPercent" : -0.786079929112893,
+            "round" : 2
+         },
+         {
+            "candidateLabel" : "R-B1",
+            "candidateNNEvalsPerSec" : 3068.446868,
+            "controlLabel" : "R-A1",
+            "controlNNEvalsPerSec" : 3115.987707,
+            "improvementPercent" : -1.52570688559522,
+            "round" : 2
+         },
+         {
+            "candidateLabel" : "R-B2",
+            "candidateNNEvalsPerSec" : 3124.23277,
+            "controlLabel" : "R-A2",
+            "controlNNEvalsPerSec" : 3084.10016,
+            "improvementPercent" : 1.30127453448206,
+            "round" : 2
+         },
+         {
+            "candidateLabel" : "B1",
+            "candidateNNEvalsPerSec" : 3059.111538,
+            "controlLabel" : "A1",
+            "controlNNEvalsPerSec" : 3078.584668,
+            "improvementPercent" : -0.632535145205237,
+            "round" : 3
+         },
+         {
+            "candidateLabel" : "B2",
+            "candidateNNEvalsPerSec" : 3058.466484,
+            "controlLabel" : "A2",
+            "controlNNEvalsPerSec" : 3073.739708,
+            "improvementPercent" : -0.496893863857384,
+            "round" : 3
+         },
+         {
+            "candidateLabel" : "R-B1",
+            "candidateNNEvalsPerSec" : 3064.465,
+            "controlLabel" : "R-A1",
+            "controlNNEvalsPerSec" : 3119.049938,
+            "improvementPercent" : -1.75005014619936,
+            "round" : 3
+         },
+         {
+            "candidateLabel" : "R-B2",
+            "candidateNNEvalsPerSec" : 3116.563051,
+            "controlLabel" : "R-A2",
+            "controlNNEvalsPerSec" : 3117.326637,
+            "improvementPercent" : -0.0244948986396487,
+            "round" : 3
+         }
+      ],
+      "totalPairs" : 12
+   },
+   "direction" : {
+      "forwardCandidateMedianNNEvalsPerSec" : 3059.019407,
+      "forwardControlMedianNNEvalsPerSec" : 3081.7607815,
+      "forwardImprovementPercent" : -0.737934450867117,
+      "reverseCandidateMedianNNEvalsPerSec" : 3113.174522,
+      "reverseControlMedianNNEvalsPerSec" : 3116.657172,
+      "reverseImprovementPercent" : -0.11174312116482
+   },
+   "pooled" : {
+      "actualWallImprovementPercent" : -0.405747397412082,
+      "candidateMedianActualWallPerForwardMs" : 8.5515253385,
+      "candidateMedianNNEvalsPerSec" : 3066.455934,
+      "candidateSamples" : 12,
+      "controlMedianActualWallPerForwardMs" : 8.516827747,
+      "controlMedianNNEvalsPerSec" : 3083.0237075,
+      "controlSamples" : 12,
+      "improvementPercent" : -0.53738715857734
+   },
+   "rawDirectories" : [
+      "abba-500-locked2400-warm-r1",
+      "abba-500-locked2400-warm-r2",
+      "abba-500-locked2400-warm-r3"
+   ],
+   "regime" : "L1K-EXACT19-B13-S2",
+   "rounds" : [
+      {
+         "candidateMedianNNEvalsPerSec" : 3113.269258,
+         "controlMedianNNEvalsPerSec" : 3081.7607815,
+         "improvementPercent" : 1.02241798549543,
+         "round" : 1
+      },
+      {
+         "candidateMedianNNEvalsPerSec" : 3063.687072,
+         "controlMedianNNEvalsPerSec" : 3083.5853045,
+         "improvementPercent" : -0.645295347301145,
+         "round" : 2
+      },
+      {
+         "candidateMedianNNEvalsPerSec" : 3061.788269,
+         "controlMedianNNEvalsPerSec" : 3097.9556525,
+         "improvementPercent" : -1.16745969138755,
+         "round" : 3
+      }
+   ]
+}

@@ -1,0 +1,72 @@
+{
+  "createdUtc": "2026-08-05T18:18:42Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090 (SM89)",
+    "board": "19x19 exact",
+    "batchSize": 13,
+    "serverThreads": 2,
+    "precision": "FP16",
+    "modelSha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "corpusSha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "fp32ReferenceSha256": "4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3"
+  },
+  "change": "fuse learnable Q and K RoPE into one SM89 kernel launch per attention block",
+  "testedBinarySha256": "6d56b598ad6a2b8d47312a6c8761dd7d972b61161bd7a13cfa5aa2015e46f863",
+  "locked2400WarmAbba500": {
+    "rawDirectories": [
+      "integrated-abba-500-locked2400-warm-r1",
+      "integrated-abba-500-locked2400-warm-r2",
+      "integrated-abba-500-locked2400-warm-r3b"
+    ],
+    "controlSamples": 12,
+    "candidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 2904.6904795,
+    "candidateMedianNNEvalsPerSec": 2964.2899645,
+    "combinedImprovementPercent": 2.051836,
+    "forwardImprovementPercent": 2.059989,
+    "reverseImprovementPercent": 3.314240,
+    "actualWallImprovementPercent": 2.069298,
+    "perRoundImprovementPercent": [1.981375, 3.469333, 0.725129]
+  },
+  "nsys": {
+    "controlReport": "nsys-control-fused-qk-rope-b13.nsys-rep",
+    "candidateReport": "nsys-candidate-fused-qk-rope-b13.nsys-rep",
+    "controlRopeCalls": 6996,
+    "candidateRopeCalls": 3498,
+    "capturedForwardsAcrossAllStreams": 106,
+    "controlCallsPerForward": 66,
+    "candidateCallsPerForward": 33,
+    "controlLast30KernelUnionMs": 272.152509,
+    "candidateLast30KernelUnionMs": 266.441370,
+    "kernelUnionReductionPercent": 2.098507
+  },
+  "stability": {
+    "initialAnomalies": "one startup stall and one complete-result process that later exited with SIGSEGV under timeout",
+    "memcheckInvalidDeviceAccesses": 0,
+    "memcheckInstrumentationApiErrors": 39,
+    "alternatingCandidateProcesses": 20,
+    "alternatingCandidateFailures": 0,
+    "alternatingControlProcesses": 20,
+    "alternatingControlFailures": 0,
+    "gdbCandidateProcesses": 4,
+    "gdbSignals": 0,
+    "replacementThirdRoundCompleted": true
+  },
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage11": true,
+    "policyTop1VsFp32": 0.9969482421875,
+    "p0lossFp32Weighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915454626083374,
+    "report": "replay-fused-qk-rope-vs-fp32.json"
+  },
+  "finalDefaultConfigSmoke": {
+    "iterations": 300,
+    "combinedNNEvalsPerSec": 3106.837718,
+    "actualWallPerForwardMs": 8.518676971,
+    "raw": "final-default-config-300.raw"
+  },
+  "decision": "accepted and enabled in bench-cuda-gpu0-4090-s2.cfg"
+}

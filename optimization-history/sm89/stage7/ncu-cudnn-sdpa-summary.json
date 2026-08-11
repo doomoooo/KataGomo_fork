@@ -1,0 +1,22 @@
+{
+  "artifact_time_utc": "2026-08-05T15:22:03.742489646Z",
+  "report": "../stage7-cudnn-sdpa-b13.ncu-rep",
+  "report_sha256": "bbbbeacbb71b47948601a2b64f04111ff33403038cd4608bee7662be904dc8e4",
+  "shape": "FP16 BSHD [13,361,12,32]",
+  "kernel": "cudnn_generated_fort_native_sdpa_sm80_flash_fprop_wmma_f16_knob_1_64x64x64_4x1x1_cga1x1x1_kernel0_0",
+  "duration_us": 54.98,
+  "grid": [3, 12, 13],
+  "block": [256, 1, 1],
+  "sm_frequency_ghz": 2.53,
+  "compute_throughput_percent": 32.26,
+  "dram_throughput_percent": 20.05,
+  "issue_slots_busy_percent": 17.52,
+  "achieved_occupancy_percent": 16.61,
+  "achieved_active_warps_per_sm": 7.97,
+  "register_block_limit_per_sm": 1,
+  "shared_memory_block_limit_per_sm": 2,
+  "local_memory_spills": 0,
+  "math_pipeline_stall_cycles_per_issue": 5.9,
+  "cycles_per_issue": 10.1,
+  "math_pipeline_stall_percent": 58.5
+}

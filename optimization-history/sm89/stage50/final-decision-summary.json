@@ -1,0 +1,66 @@
+{
+  "stage": 50,
+  "strategy": "eliminate exact-19 full-board mask extraction, conversion, and reduction",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "switch": "cudaUseExactMaskElisionSm89",
+  "decision": "accepted",
+  "binarySha256": "3e66a8d878bb7ace8177aee9127cbabd718d8744e811f13092a4abb87d76c990",
+  "configSha256": "6ec9eb3324c5eab207240418ea5f41cd84f72f3ed834a239d95a6d7a27ab5a70",
+  "mechanism": {
+    "controlBoundaryNcuUs": 6.848,
+    "candidateBoundaryNcuUs": 0.0,
+    "removedPerForward": [
+      "extractChannel0KernelNHWC",
+      "copyFromHalfKernel(mask)",
+      "sumChannelsNCHWKernel"
+    ],
+    "replacement": "one B13 float vector filled with exact xySize=361, uploaded once per handle",
+    "fallback": "non-exact shapes retain the original mask path"
+  },
+  "pairedNsysS2": {
+    "forward": {
+      "controlNNEvalsPerSec": 3121.584299,
+      "candidateNNEvalsPerSec": 3207.703323,
+      "changePercent": 2.758824,
+      "controlBusyUnionMs": 268.570699,
+      "candidateBusyUnionMs": 258.778698,
+      "busyChangePercent": -3.645968
+    },
+    "reverse": {
+      "controlNNEvalsPerSec": 3119.7685,
+      "candidateNNEvalsPerSec": 3208.818339,
+      "changePercent": 2.854377,
+      "controlBusyUnionMs": 266.874343,
+      "candidateBusyUnionMs": 261.579119,
+      "busyChangePercent": -1.984164
+    }
+  },
+  "locked2400Abba100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 3173.828357,
+      "B1Candidate": 3234.989636,
+      "B2Candidate": 3271.039269,
+      "A2Control": 3263.891157
+    },
+    "controlMeanNNEvalsPerSec": 3218.859757,
+    "candidateMeanNNEvalsPerSec": 3253.0144525,
+    "changePercent": 1.061081,
+    "candidateVsTensorRT2432_1979345Percent": 33.747933
+  },
+  "accuracy": {
+    "rows": 8192,
+    "byteIdenticalToStage25AcceptedS2": true,
+    "replaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "policyTop1VsFp32": 0.9969482421875,
+    "policyProbabilityRmse": 0.00012512259127106518,
+    "valueOutcomeRmse": 0.002610212890431285,
+    "ownershipSigmoidRmse": 0.0002988878113683313,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "postAcceptanceCheckpoint": {
+    "nsysNNEvalsPerSec": 3216.453,
+    "busyUnionPercent": 98.457,
+    "broadNcuDistinctGeometries": 77,
+    "nextSelectionRule": "choose the next macro fusion or boundary elimination from this full-graph Nsys/NCU checkpoint"
+  }
+}

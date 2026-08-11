@@ -1,0 +1,40 @@
+{
+  "stage": 55,
+  "strategy": "fuse exact wide-head BN plus SiLU with policy and value pooling",
+  "target": "RTX4090 exact19 B13 FP16; strict-local bundle",
+  "decision": "mechanism-rejected-and-reverted",
+  "preImplementationNcuFromS2": {
+    "policyBnMedianUs": 3.168,
+    "policyPoolMedianUs": 5.600,
+    "policyBoundaryUs": 8.768,
+    "valueBnMedianUs": 4.960,
+    "valuePoolMedianUs": 4.320,
+    "valueBoundaryUs": 9.280,
+    "policyPoolWavesPerSm": 0.07,
+    "valuePoolWavesPerSm": 0.10
+  },
+  "candidateNcuFromS2": {
+    "policyFusedDurationUs": [10.368, 10.368, 10.304],
+    "policyFusedMedianUs": 10.368,
+    "policyBoundaryChangePercent": 18.248175,
+    "valueFusedDurationUs": [10.432, 10.400, 10.400],
+    "valueFusedMedianUs": 10.400,
+    "valueBoundaryChangePercent": 12.068966,
+    "policyRegistersPerThread": 34,
+    "valueRegistersPerThread": 35,
+    "policyWavesPerSm": 0.07,
+    "valueWavesPerSm": 0.10,
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "smoke": {
+    "rows": 26,
+    "candidateByteIdenticalWithinSameBinary": true,
+    "postRevertAllTensorRmseZero": true
+  },
+  "s1Run": false,
+  "s2NsysRun": false,
+  "longTestRun": false,
+  "sourceState": "all Stage55 runtime, interface, and kernel changes removed; Stage54 C384 vec4 retained",
+  "mechanismConclusion": "saving FP32 intermediate traffic did not compensate for serializing half-FMA and expf work into the 0.07/0.10-waves pooling grids"
+}

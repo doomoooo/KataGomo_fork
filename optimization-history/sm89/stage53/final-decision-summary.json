@@ -1,0 +1,39 @@
+{
+  "stage": 53,
+  "strategy": "add the Stage51 value-terminal fusion to the cumulative strict-local bundle",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "bundleSwitches": [
+    "cudaUseInitialGlobalMatMulAdd",
+    "cudaUseWideHeadProjection",
+    "cudaUseHeadBNHalfToFloat",
+    "cudaUseFusedValueTerminalSm89"
+  ],
+  "bundleStatus": "strict-local-retained",
+  "deploymentStatus": "S2-disabled-regressed",
+  "sourceRetained": true,
+  "binarySha256": "7ce51d558c49422ee06ea40f31d31dddf9d2c836ceaaa206ff0ec4a95c05411f",
+  "pairedS2Nsys": {
+    "forward": {
+      "controlNNEvalsPerSec": 3238.716413,
+      "candidateNNEvalsPerSec": 3129.980874,
+      "throughputChangePercent": -3.357365,
+      "busyUnionChangePercent": 3.974609,
+      "launchChangeAcross64Forwards": -512
+    },
+    "reverse": {
+      "controlNNEvalsPerSec": 3209.430059,
+      "candidateNNEvalsPerSec": 3134.596686,
+      "throughputChangePercent": -2.331672,
+      "busyUnionChangePercent": 2.034824,
+      "launchChangeAcross64Forwards": -512
+    }
+  },
+  "s2AbbaRun": false,
+  "reasonS2AbbaSkipped": "both short full-graph S2 orders regressed",
+  "accuracy": {
+    "threeIntrinsicComponentsJointlyCoveredByStage29": true,
+    "valueTerminalCoveredByStage51": true,
+    "status": "all components passed established 8,192-row envelope"
+  },
+  "decision": "keep all four implementations default-off in the strict-local bundle; deployed current best remains Stage50; add subsequent strict-local wins and retest the complete bundle"
+}

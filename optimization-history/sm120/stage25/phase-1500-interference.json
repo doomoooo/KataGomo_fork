@@ -1,0 +1,992 @@
+{
+  "families": [
+    {
+      "family": "fused_ffn",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.1085313370083116,
+      "median_us": 47.297,
+      "overlap_fraction": 0.6529972445429806,
+      "p90_us": 55.2001,
+      "summed_excess_ms": 7.722588,
+      "total_ms": 63.31799
+    },
+    {
+      "family": "library_gemm",
+      "instances": 2760,
+      "matched_instances": 2760,
+      "median_slowdown": 1.8249985889802802,
+      "median_us": 19.36,
+      "overlap_fraction": 0.9600229727603493,
+      "p90_us": 23.553,
+      "summed_excess_ms": 21.239112,
+      "total_ms": 46.923399
+    },
+    {
+      "family": "linear2_residual",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.3864585504424347,
+      "median_us": 29.408,
+      "overlap_fraction": 0.9512597387559699,
+      "p90_us": 32.38720000000001,
+      "summed_excess_ms": 10.830452,
+      "total_ms": 38.725172
+    },
+    {
+      "family": "wide_qkv",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.3821138211382114,
+      "median_us": 26.944,
+      "overlap_fraction": 0.8032669212593992,
+      "p90_us": 29.12,
+      "summed_excess_ms": 8.376994,
+      "total_ms": 34.140278
+    },
+    {
+      "family": "fa4",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.568933400171713,
+      "median_us": 18.9125,
+      "overlap_fraction": 0.8063050182655535,
+      "p90_us": 21.568,
+      "summed_excess_ms": 8.335412,
+      "total_ms": 24.277392
+    },
+    {
+      "family": "rmsnorm",
+      "instances": 2640,
+      "matched_instances": 2640,
+      "median_slowdown": 1.6303534321413944,
+      "median_us": 4.416,
+      "overlap_fraction": 0.9719868567401386,
+      "p90_us": 6.592,
+      "summed_excess_ms": 5.283027,
+      "total_ms": 12.446836
+    },
+    {
+      "family": "qk_rope",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.3740458015267176,
+      "median_us": 5.76,
+      "overlap_fraction": 0.9651109336564759,
+      "p90_us": 6.72,
+      "summed_excess_ms": 2.150442,
+      "total_ms": 7.661426
+    },
+    {
+      "family": "affine_silu",
+      "instances": 920,
+      "matched_instances": 920,
+      "median_slowdown": 1.4012345679012346,
+      "median_us": 6.4,
+      "overlap_fraction": 0.7349440188153238,
+      "p90_us": 7.424,
+      "summed_excess_ms": 1.726909,
+      "total_ms": 5.682177
+    },
+    {
+      "family": "head_elementwise",
+      "instances": 480,
+      "matched_instances": 480,
+      "median_slowdown": 1.28125,
+      "median_us": 3.0085,
+      "overlap_fraction": 0.8020595005743208,
+      "p90_us": 8.009600000000002,
+      "summed_excess_ms": 0.510224,
+      "total_ms": 1.713328
+    },
+    {
+      "family": "cudnn",
+      "instances": 120,
+      "matched_instances": 120,
+      "median_slowdown": 1.4166666666666667,
+      "median_us": 2.864,
+      "overlap_fraction": 0.4097752189734503,
+      "p90_us": 23.433600000000002,
+      "summed_excess_ms": 0.218062,
+      "total_ms": 1.114062
+    },
+    {
+      "family": "copy_reformat",
+      "instances": 200,
+      "matched_instances": 200,
+      "median_slowdown": 1.4285714285714286,
+      "median_us": 2.336,
+      "overlap_fraction": 0.9307116019686866,
+      "p90_us": 3.04,
+      "summed_excess_ms": 0.151747,
+      "total_ms": 0.439684
+    },
+    {
+      "family": "sumChannelsNCHWKernel",
+      "instances": 40,
+      "matched_instances": 40,
+      "median_slowdown": 1.8823529411764706,
+      "median_us": 3.072,
+      "overlap_fraction": 0.9549477071600966,
+      "p90_us": 3.808,
+      "summed_excess_ms": 0.054048,
+      "total_ms": 0.119328
+    }
+  ],
+  "isolated_sqlite": "/workspace/results/rebuild/stage24/isolated-s2-kernels-b13.sqlite",
+  "iterations": 20,
+  "kernels_per_forward": {
+    "65": 344,
+    "82": 344
+  },
+  "pairs": [
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "cudnn",
+      "instances": 23,
+      "matched_instances": 23,
+      "median_overlap_fraction": 0.967479674796748,
+      "median_slowdown": 2.55,
+      "median_us": 3.264
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "rmsnorm",
+      "instances": 690,
+      "matched_instances": 690,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.299411933448078,
+      "median_us": 6.272
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "library_gemm",
+      "instances": 458,
+      "matched_instances": 458,
+      "median_overlap_fraction": 0.9528023598820059,
+      "median_slowdown": 2.2870459156730316,
+      "median_us": 19.8565
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "head_elementwise",
+      "instances": 41,
+      "matched_instances": 41,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.2753623188405796,
+      "median_us": 5.12
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "library_gemm",
+      "instances": 888,
+      "matched_instances": 888,
+      "median_overlap_fraction": 0.9781121751025992,
+      "median_slowdown": 2.260162154046344,
+      "median_us": 20.464
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "qk_rope",
+      "instances": 42,
+      "matched_instances": 42,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.200989971201656,
+      "median_us": 9.216
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "qk_rope",
+      "instances": 12,
+      "matched_instances": 12,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.1237766005207868,
+      "median_us": 8.784
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "affine_silu",
+      "instances": 25,
+      "matched_instances": 25,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.1054529067147363,
+      "median_us": 7.104
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "sumChannelsNCHWKernel",
+      "instances": 27,
+      "matched_instances": 27,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.0784313725490198,
+      "median_us": 3.392
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "rmsnorm",
+      "instances": 48,
+      "matched_instances": 48,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.0588235294117645,
+      "median_us": 5.5525
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "copy_reformat",
+      "instances": 16,
+      "matched_instances": 16,
+      "median_overlap_fraction": 0.9048839312631896,
+      "median_slowdown": 1.9500000000000002,
+      "median_us": 2.288
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "affine_silu",
+      "instances": 108,
+      "matched_instances": 108,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.8785046728971964,
+      "median_us": 6.48
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "copy_reformat",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.7333333333333334,
+      "median_us": 1.952
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "head_elementwise",
+      "instances": 58,
+      "matched_instances": 58,
+      "median_overlap_fraction": 0.8833869670152856,
+      "median_slowdown": 1.7301438270795066,
+      "median_us": 3.52
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "fa4",
+      "instances": 648,
+      "matched_instances": 648,
+      "median_overlap_fraction": 0.9574492792711798,
+      "median_slowdown": 1.6852265211640212,
+      "median_us": 20.384
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "rmsnorm",
+      "instances": 738,
+      "matched_instances": 738,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.6202101213474442,
+      "median_us": 4.416
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "rmsnorm",
+      "instances": 440,
+      "matched_instances": 440,
+      "median_overlap_fraction": 0.8993685715420356,
+      "median_slowdown": 1.6162790697674418,
+      "median_us": 4.416
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "fa4",
+      "instances": 55,
+      "matched_instances": 55,
+      "median_overlap_fraction": 0.6677577741407529,
+      "median_slowdown": 1.5973676586234014,
+      "median_us": 19.264
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "linear2_residual",
+      "instances": 126,
+      "matched_instances": 126,
+      "median_overlap_fraction": 0.9705615878843883,
+      "median_slowdown": 1.5617036606002128,
+      "median_us": 32.784
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "rmsnorm",
+      "instances": 13,
+      "matched_instances": 13,
+      "median_overlap_fraction": 0.9121621621621622,
+      "median_slowdown": 1.5529411764705883,
+      "median_us": 4.224
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "library_gemm",
+      "instances": 932,
+      "matched_instances": 932,
+      "median_overlap_fraction": 0.9736012432666475,
+      "median_slowdown": 1.5289991838680264,
+      "median_us": 19.168
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "wide_qkv",
+      "instances": 126,
+      "matched_instances": 126,
+      "median_overlap_fraction": 0.9397021441326131,
+      "median_slowdown": 1.527313984429335,
+      "median_us": 29.904
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "fa4",
+      "instances": 203,
+      "matched_instances": 203,
+      "median_overlap_fraction": 0.7201342599158512,
+      "median_slowdown": 1.5229909391142349,
+      "median_us": 17.985
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "cudnn",
+      "instances": 15,
+      "matched_instances": 15,
+      "median_overlap_fraction": 0.6842105263157895,
+      "median_slowdown": 1.5208333333333333,
+      "median_us": 2.336
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "copy_reformat",
+      "instances": 107,
+      "matched_instances": 107,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.5,
+      "median_us": 2.304
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "library_gemm",
+      "instances": 16,
+      "matched_instances": 16,
+      "median_overlap_fraction": 0.9164708036470774,
+      "median_slowdown": 1.4931506849315068,
+      "median_us": 3.856
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "rmsnorm",
+      "instances": 496,
+      "matched_instances": 496,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4761904761904763,
+      "median_us": 4.0
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "affine_silu",
+      "instances": 389,
+      "matched_instances": 389,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4299065420560748,
+      "median_us": 5.056
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "affine_silu",
+      "instances": 24,
+      "matched_instances": 24,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4210526315789473,
+      "median_us": 7.3285
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "wide_qkv",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 0.9486520710883574,
+      "median_slowdown": 1.418694098230666,
+      "median_us": 27.808
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "cudnn",
+      "instances": 9,
+      "matched_instances": 9,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4166666666666667,
+      "median_us": 2.176
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "linear2_residual",
+      "instances": 411,
+      "matched_instances": 411,
+      "median_overlap_fraction": 0.9660297239915074,
+      "median_slowdown": 1.408696465745094,
+      "median_us": 29.952
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "qk_rope",
+      "instances": 42,
+      "matched_instances": 42,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.3931354981571318,
+      "median_us": 5.824
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "qk_rope",
+      "instances": 648,
+      "matched_instances": 648,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.3919713366481425,
+      "median_us": 5.824
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "cudnn",
+      "instances": 25,
+      "matched_instances": 25,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.375,
+      "median_us": 2.048
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "rmsnorm",
+      "instances": 9,
+      "matched_instances": 9,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.372093023255814,
+      "median_us": 3.776
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "linear2_residual",
+      "instances": 648,
+      "matched_instances": 648,
+      "median_overlap_fraction": 0.9708408875075543,
+      "median_slowdown": 1.3719512195121952,
+      "median_us": 28.96
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "library_gemm",
+      "instances": 190,
+      "matched_instances": 190,
+      "median_overlap_fraction": 0.959813913115717,
+      "median_slowdown": 1.369179600886918,
+      "median_us": 15.376
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "library_gemm",
+      "instances": 4,
+      "matched_instances": 4,
+      "median_overlap_fraction": 0.858235294117647,
+      "median_slowdown": 1.3515981735159817,
+      "median_us": 4.736
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "library_gemm",
+      "instances": 187,
+      "matched_instances": 187,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.3483472575372322,
+      "median_us": 6.433
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "rmsnorm",
+      "instances": 84,
+      "matched_instances": 84,
+      "median_overlap_fraction": 0.8996319731404958,
+      "median_slowdown": 1.3470708329007923,
+      "median_us": 3.664
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "head_elementwise",
+      "instances": 141,
+      "matched_instances": 141,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.3448275862068966,
+      "median_us": 3.072
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "fa4",
+      "instances": 326,
+      "matched_instances": 326,
+      "median_overlap_fraction": 0.6057692307692307,
+      "median_slowdown": 1.334613791355736,
+      "median_us": 16.096
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "affine_silu",
+      "instances": 96,
+      "matched_instances": 96,
+      "median_overlap_fraction": 0.5724115334207077,
+      "median_slowdown": 1.318951926912192,
+      "median_us": 6.832
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "library_gemm",
+      "instances": 11,
+      "matched_instances": 11,
+      "median_overlap_fraction": 0.9011299435028248,
+      "median_slowdown": 1.2990825688073395,
+      "median_us": 11.264
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "library_gemm",
+      "instances": 16,
+      "matched_instances": 16,
+      "median_overlap_fraction": 0.8882414897202562,
+      "median_slowdown": 1.2949855028561537,
+      "median_us": 11.072
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "affine_silu",
+      "instances": 256,
+      "matched_instances": 256,
+      "median_overlap_fraction": 0.21549863964724647,
+      "median_slowdown": 1.2892335075361658,
+      "median_us": 6.688
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "qk_rope",
+      "instances": 515,
+      "matched_instances": 515,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.2822898032200358,
+      "median_us": 5.344
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "copy_reformat",
+      "instances": 29,
+      "matched_instances": 29,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.2794117647058822,
+      "median_us": 2.752
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "fused_ffn",
+      "instances": 308,
+      "matched_instances": 308,
+      "median_overlap_fraction": 0.712025160663095,
+      "median_slowdown": 1.267725041450384,
+      "median_us": 53.3285
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "head_elementwise",
+      "instances": 38,
+      "matched_instances": 38,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.2629310344827587,
+      "median_us": 1.28
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "fa4",
+      "instances": 41,
+      "matched_instances": 41,
+      "median_overlap_fraction": 0.45625957758678126,
+      "median_slowdown": 1.2617801047120418,
+      "median_us": 15.168
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "fused_ffn",
+      "instances": 407,
+      "matched_instances": 407,
+      "median_overlap_fraction": 0.8188235294117647,
+      "median_slowdown": 1.228963310092582,
+      "median_us": 52.512
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "copy_reformat",
+      "instances": 8,
+      "matched_instances": 8,
+      "median_overlap_fraction": 0.6642124051762606,
+      "median_slowdown": 1.2058823529411766,
+      "median_us": 2.576
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "head_elementwise",
+      "instances": 65,
+      "matched_instances": 65,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.202020202020202,
+      "median_us": 3.937
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "head_elementwise",
+      "instances": 114,
+      "matched_instances": 114,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.1935483870967742,
+      "median_us": 1.216
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "cudnn",
+      "instances": 32,
+      "matched_instances": 32,
+      "median_overlap_fraction": 0.3922858269573292,
+      "median_slowdown": 1.1912020016339868,
+      "median_us": 12.224
+    },
+    {
+      "dominant_peer": "copy_reformat",
+      "family": "rmsnorm",
+      "instances": 12,
+      "matched_instances": 12,
+      "median_overlap_fraction": 0.8374149659863945,
+      "median_slowdown": 1.180722891566265,
+      "median_us": 3.184
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "linear2_residual",
+      "instances": 6,
+      "matched_instances": 6,
+      "median_overlap_fraction": 0.9198965071151359,
+      "median_slowdown": 1.1793359290719272,
+      "median_us": 24.768
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "sumChannelsNCHWKernel",
+      "instances": 9,
+      "matched_instances": 9,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.1764705882352942,
+      "median_us": 1.92
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "wide_qkv",
+      "instances": 423,
+      "matched_instances": 423,
+      "median_overlap_fraction": 0.6041118917288048,
+      "median_slowdown": 1.1673171602765235,
+      "median_us": 22.784
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "rmsnorm",
+      "instances": 65,
+      "matched_instances": 65,
+      "median_overlap_fraction": 0.9174311926605505,
+      "median_slowdown": 1.1666666666666667,
+      "median_us": 3.168
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "copy_reformat",
+      "instances": 13,
+      "matched_instances": 13,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.1666666666666667,
+      "median_us": 1.728
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "affine_silu",
+      "instances": 4,
+      "matched_instances": 4,
+      "median_overlap_fraction": 0.35277777777777775,
+      "median_slowdown": 1.1612903225806452,
+      "median_us": 5.76
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "linear2_residual",
+      "instances": 98,
+      "matched_instances": 98,
+      "median_overlap_fraction": 0.9080548303577702,
+      "median_slowdown": 1.1538212925117204,
+      "median_us": 24.5285
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "fa4",
+      "instances": 5,
+      "matched_instances": 5,
+      "median_overlap_fraction": 0.4965634521363282,
+      "median_slowdown": 1.1462140992167102,
+      "median_us": 14.048
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "linear2_residual",
+      "instances": 9,
+      "matched_instances": 9,
+      "median_overlap_fraction": 0.6557377049180327,
+      "median_slowdown": 1.1424287856071964,
+      "median_us": 24.384
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "library_gemm",
+      "instances": 8,
+      "matched_instances": 8,
+      "median_overlap_fraction": 0.923172118536357,
+      "median_slowdown": 1.1214981421070815,
+      "median_us": 9.7125
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "fused_ffn",
+      "instances": 42,
+      "matched_instances": 42,
+      "median_overlap_fraction": 0.6853134145114312,
+      "median_slowdown": 1.1173995781364638,
+      "median_us": 47.5685
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "wide_qkv",
+      "instances": 42,
+      "matched_instances": 42,
+      "median_overlap_fraction": 0.6327276073931147,
+      "median_slowdown": 1.1144696834197818,
+      "median_us": 21.793
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "fused_ffn",
+      "instances": 8,
+      "matched_instances": 8,
+      "median_overlap_fraction": 0.6787245623801571,
+      "median_slowdown": 1.1137689493506628,
+      "median_us": 45.0725
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "wide_qkv",
+      "instances": 20,
+      "matched_instances": 20,
+      "median_overlap_fraction": 0.46493455861876914,
+      "median_slowdown": 1.1032462840627582,
+      "median_us": 21.456
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "cudnn",
+      "instances": 11,
+      "matched_instances": 11,
+      "median_overlap_fraction": 0.25644699140401145,
+      "median_slowdown": 1.0947712418300655,
+      "median_us": 21.44
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "head_elementwise",
+      "instances": 11,
+      "matched_instances": 11,
+      "median_overlap_fraction": 0.20833333333333334,
+      "median_slowdown": 1.0909090909090908,
+      "median_us": 8.384
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "fa4",
+      "instances": 16,
+      "matched_instances": 16,
+      "median_overlap_fraction": 0.36715686274509807,
+      "median_slowdown": 1.071842362924282,
+      "median_us": 13.0885
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "wide_qkv",
+      "instances": 5,
+      "matched_instances": 5,
+      "median_overlap_fraction": 0.28290468986384265,
+      "median_slowdown": 1.0713128038897892,
+      "median_us": 21.152
+    },
+    {
+      "dominant_peer": "sumChannelsNCHWKernel",
+      "family": "wide_qkv",
+      "instances": 22,
+      "matched_instances": 22,
+      "median_overlap_fraction": 0.32216222632422975,
+      "median_slowdown": 1.0630953307897948,
+      "median_us": 20.496
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "qk_rope",
+      "instances": 6,
+      "matched_instances": 6,
+      "median_overlap_fraction": 0.23632709192848833,
+      "median_slowdown": 1.0574712643678161,
+      "median_us": 4.416
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "qk_rope",
+      "instances": 16,
+      "matched_instances": 16,
+      "median_overlap_fraction": 0.5314304390456477,
+      "median_slowdown": 1.0383192389006344,
+      "median_us": 4.32
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "fused_ffn",
+      "instances": 531,
+      "matched_instances": 531,
+      "median_overlap_fraction": 0.4800339847068819,
+      "median_slowdown": 1.0326823482437495,
+      "median_us": 43.425
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "head_elementwise",
+      "instances": 12,
+      "matched_instances": 12,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.0238440920259102,
+      "median_us": 1.952
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "fa4",
+      "instances": 22,
+      "matched_instances": 22,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.0186916221033868,
+      "median_us": 12.272
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "library_gemm",
+      "instances": 50,
+      "matched_instances": 50,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.0184959782466059,
+      "median_us": 8.752
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "linear2_residual",
+      "instances": 22,
+      "matched_instances": 22,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.015279929794632,
+      "median_us": 21.457
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "wide_qkv",
+      "instances": 22,
+      "matched_instances": 22,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.0095118861697483,
+      "median_us": 19.6485
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "copy_reformat",
+      "instances": 5,
+      "matched_instances": 5,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.0,
+      "median_us": 1.473
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "qk_rope",
+      "instances": 33,
+      "matched_instances": 33,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 0.9923664122137404,
+      "median_us": 4.16
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "affine_silu",
+      "instances": 15,
+      "matched_instances": 15,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 0.9907120743034056,
+      "median_us": 5.12
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "rmsnorm",
+      "instances": 44,
+      "matched_instances": 44,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 0.9763305322128851,
+      "median_us": 2.656
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "fused_ffn",
+      "instances": 20,
+      "matched_instances": 20,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 0.9760714948534168,
+      "median_us": 42.129
+    }
+  ],
+  "phase": {
+    "max_offset_us": 2295.159,
+    "median_offset_us": 2247.639,
+    "min_offset_us": 1506.127,
+    "offsets_us": [
+      1506.127,
+      2196.631,
+      2216.95,
+      2214.871,
+      2211.19,
+      2250.007,
+      2237.463,
+      2234.966,
+      2248.375,
+      2253.783,
+      2295.159,
+      2257.655,
+      2244.791,
+      2246.903,
+      2274.615,
+      2251.319,
+      2260.599,
+      2239.415,
+      2252.311,
+      2253.431
+    ],
+    "p10_offset_us": 2209.7341,
+    "p90_offset_us": 2262.0006000000003,
+    "stream_order": [
+      65,
+      82
+    ]
+  },
+  "sqlite": "/workspace/results/rebuild/stage25/phase-1500-s2.sqlite",
+  "streams": [
+    65,
+    82
+  ]
+}

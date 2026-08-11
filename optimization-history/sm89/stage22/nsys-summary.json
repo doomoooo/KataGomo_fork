@@ -1,0 +1,50 @@
+{
+  "regime": "L2400-EXACT19-B13-S2-NSYS",
+  "protocol": "40 timed plus 10 benchmark warmup forwards per server; last 30 complete forwards on each timed stream",
+  "control": {
+    "targetKernel": "applyCScaleBiasNHWCSiluHalfKernel",
+    "targetCompleteCaptureCalls": 1272,
+    "targetCompleteCaptureAverageUs": 14.787906,
+    "targetSteadyStateCalls": 720,
+    "targetSteadyStateAverageUs": 14.776522222,
+    "steadyStateSelectedKernels": 18660,
+    "kernelsPerForwardPerStream": 311,
+    "steadyStateKernelUnionMs": 251.929689,
+    "steadyStateSummedKernelMs": 387.118586,
+    "memcpyCalls": 4238,
+    "memcpyBytes": 1484391248,
+    "memsetCalls": 228,
+    "memsetBytes": 59242880,
+    "synchronizationCalls": 53
+  },
+  "candidate": {
+    "targetKernel": "sm89ScaleBiasSiluNHWCHalfVec8B13Kernel",
+    "targetCompleteCaptureCalls": 1272,
+    "targetCompleteCaptureAverageUs": 8.629010,
+    "targetSteadyStateCalls": 720,
+    "targetSteadyStateAverageUs": 8.632098611,
+    "steadyStateSelectedKernels": 18660,
+    "kernelsPerForwardPerStream": 311,
+    "steadyStateKernelUnionMs": 245.016048,
+    "steadyStateSummedKernelMs": 380.669763,
+    "memcpyCalls": 4238,
+    "memcpyBytes": 1484391248,
+    "memsetCalls": 228,
+    "memsetBytes": 59242880,
+    "synchronizationCalls": 53
+  },
+  "changes": {
+    "targetSteadyStateAveragePercent": -41.582339327,
+    "steadyStateKernelUnionPercent": -2.744274018,
+    "steadyStateSummedKernelPercent": -1.665852076
+  },
+  "reports": {
+    "control": "nsys-paired/control.sqlite",
+    "candidate": "nsys-paired/candidate.sqlite"
+  },
+  "contaminatedAttempt": {
+    "path": "nsys-dispatch/candidate.raw",
+    "reason": "benchmark completed, but report generation timed out with OS runtime tracing and symbol resolution enabled",
+    "usedForDecision": false
+  }
+}

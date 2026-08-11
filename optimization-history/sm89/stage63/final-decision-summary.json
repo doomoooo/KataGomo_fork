@@ -1,0 +1,67 @@
+{
+  "stage": 63,
+  "candidate": "packed half2 RoPE rotation in the fused SM89 QKV epilogue",
+  "status": "rejected-and-reverted",
+  "scope": "RTX 4090 exact 19x19 B13 FP16 NHWC",
+  "preChangeCurrentGraph": {
+    "qkvUnionBusyPercent": 25.34,
+    "qkvExclusiveBusyPercent": 11.50,
+    "broadNcuDurationUs": 30.784,
+    "registersPerThread": 240,
+    "sharedKiB": 49.152,
+    "wavesPerSm": 1.30
+  },
+  "mechanism": {
+    "applied": true,
+    "hmmaPerLaunchControl": 64,
+    "hmmaPerLaunchCandidate": 64,
+    "mufuSinPerLaunch": 64,
+    "mufuCosPerLaunch": 64,
+    "controlFfmaPerLaunch": 192,
+    "candidateFfmaPerLaunch": 64,
+    "controlFmulPerLaunch": 256,
+    "candidateFmulPerLaunch": 128,
+    "candidateHmul2PerLaunch": 64,
+    "candidateHfma2PerLaunch": 64,
+    "controlF2fPerLaunch": 128,
+    "candidateF2fPerLaunch": 192,
+    "candidatePrmtPerLaunch": 64
+  },
+  "targetedNcuThreeLaunchMeanUs": {
+    "control": 30.005333333333333,
+    "candidate": 29.962666666666667,
+    "changePercent": -0.1422,
+    "resources": "unchanged: 240 registers/thread, 49.152 KiB shared, 1.30 waves/SM, zero spill"
+  },
+  "shortNsysComplete198LaunchBoundaryMs": {
+    "control": 5.734371,
+    "candidate": 5.728286,
+    "changePercent": -0.1061
+  },
+  "shortS1NNEvalsPerSec": {
+    "control": 2570.486652,
+    "candidate": 2560.208190,
+    "changePercent": -0.3999
+  },
+  "smoke": {
+    "rows": 26,
+    "policyTop1VsControl": 1.0,
+    "optimisticPolicyTop1VsControl": 1.0,
+    "policyProbabilityRmse": 0.0001382985501550138,
+    "finite": true
+  },
+  "decision": "The packed arithmetic was emitted, but unchanged sincos work plus added coefficient conversions and lane packing left kernel time inside noise with no resource improvement. The candidate fails the strict-local retention gate and was fully reverted.",
+  "testsSkipped": [
+    "S2 ABBA/BAAB",
+    "8192-row accuracy",
+    "new full-graph Nsys/NCU"
+  ],
+  "restored": "26-row all-head output is numerically identical to Stage62",
+  "artifacts": {
+    "hypothesis": "stage63/hypothesis-qkv-rope-half2-rotation.md",
+    "prechangeNcu": "stage63/ncu-qkv-rope-control-s1",
+    "candidateNcu": "stage63/ncu-qkv-rope-half2-s1",
+    "shortNsys": "stage63/nsys-qkv-rope-half2-s1-short",
+    "restoredComparison": "stage63/restored-vs-stage62.json"
+  }
+}

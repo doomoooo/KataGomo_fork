@@ -1,0 +1,78 @@
+{
+  "stage": 27,
+  "strategy": "fused FP32 initial global-feature dot and FP16 spatial broadcast-add",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; primary S1",
+  "binarySha256": "e039b7d9afaf8e5ded47af48c638effa51f1bcd8156d8f5ebf537203bf03e867",
+  "switch": "cudaUseInitialGlobalMatMulAdd",
+  "decision": "accepted-for-s1",
+  "enabledIn": "/workspace/bench-cuda-gpu0-4090-s1.cfg",
+  "s2ConfigEnabled": false,
+  "baselineNcu": {
+    "broadcastAddDurationsUs": [10.82, 10.82],
+    "initialGemmUs": 3.90,
+    "initialReduceUs": 1.98,
+    "summedBoundaryUs": 16.70,
+    "gemmWavesPerSm": 0.05,
+    "reduceWavesPerSm": 0.09,
+    "broadcastGridCtas": 14079,
+    "spillRequests": 0
+  },
+  "candidateNcuGeometrySweep": {
+    "v1NonCoalesced4ChannelsDurationsUs": [37.50, 37.82],
+    "v2FourRowsDurationsUs": [12.00, 12.00],
+    "v3EightRowsDurationsUs": [9.60, 9.44],
+    "v4SixteenRowsDurationsUs": [9.70, 9.76],
+    "selectedRowsPerCta": 8,
+    "selectedMedianUs": 9.52,
+    "selectedChangeVsSummedBaselinePercent": -42.994,
+    "selectedRegistersPerThread": 40,
+    "selectedWavesPerSm": 2.34,
+    "selectedAchievedOccupancyPercent": "82.86-82.87",
+    "selectedSpillRequests": 0
+  },
+  "nsysS1": {
+    "kernelsRemovedPerForward": 2,
+    "forward": {
+      "baselineBoundaryUs": 15.872125,
+      "candidateBoundaryUs": 8.733031,
+      "changePercent": -44.978817
+    },
+    "reverse": {
+      "baselineBoundaryUs": 15.875063,
+      "candidateBoundaryUs": 8.747031,
+      "changePercent": -44.900811
+    }
+  },
+  "fullGraphLocked2400S1Abba100": {
+    "controlRunsNNEvalsPerSec": [2460.972745, 2459.378542, 2460.756615, 2460.786489],
+    "candidateRunsNNEvalsPerSec": [2463.591866, 2463.674126, 2463.674126, 2463.666668],
+    "controlPooledMedianNNEvalsPerSec": 2460.771552,
+    "candidatePooledMedianNNEvalsPerSec": 2463.670397,
+    "changePercent": 0.117802,
+    "forwardChangePercent": 0.140533,
+    "reverseChangePercent": 0.117802,
+    "adjacentPairChangesPercent": [0.106426, 0.174661, 0.118562, 0.117043],
+    "positivePairs": 4,
+    "totalPairs": 4
+  },
+  "topologyProbeLocked2400Iterations100": {
+    "s1ControlNNEvalsPerSec": 2460.316920,
+    "s1CandidateNNEvalsPerSec": 2463.621808,
+    "s1CandidateChangePercent": 0.134328,
+    "s2ControlNNEvalsPerSec": 3271.144650,
+    "s2CandidateNNEvalsPerSec": 3232.312774,
+    "s2CandidateChangePercent": -1.187104,
+    "s1AsPercentOfS2Control": 75.212722,
+    "s2PremiumOverS1ControlPercent": 32.956231,
+    "note": "one-order magnitude probe; not an S2 acceptance measurement"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "policyTop1VsFp32": 0.9970703125,
+    "policyProbabilityRmse": 0.00012730756134260446,
+    "valueOutcomeRmse": 0.002648415043950081,
+    "ownershipSigmoidRmse": 0.0003015638794749975,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "reason": "local profiler evidence and S1 full-graph tests agree; S2 is kept on its prior path because the topology probe regressed"
+}

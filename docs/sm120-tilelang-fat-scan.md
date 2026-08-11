@@ -140,14 +140,14 @@ inspecting incomplete discovery.
 
 ```sh
 python3 python/sm120_tactic_plan.py build \
-  results/rebuild/cross-batch-search/full-5090d/ffn.json \
-  results/rebuild/cross-batch-search/full-5090d/qkv.json \
-  results/rebuild/cross-batch-search/full-5090d/linear2.json \
-  results/rebuild/cross-batch-search/full-5090d/fa4.json \
-  results/rebuild/cross-batch-search/full-5090d/l2.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  results/sm120/cross-batch-search/full-5090d/ffn.json \
+  results/sm120/cross-batch-search/full-5090d/qkv.json \
+  results/sm120/cross-batch-search/full-5090d/linear2.json \
+  results/sm120/cross-batch-search/full-5090d/fa4.json \
+  results/sm120/cross-batch-search/full-5090d/l2.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --families ffn,qkv,linear2,fa4,l2 --batches 4-32 \
-  --output results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32.json
+  --output results/sm120/cross-batch-search/tactic-plan-5090d-b4-32.json
 ```
 
 Run the small family spaces again as an accumulated per-batch coordinate
@@ -167,12 +167,12 @@ as complete coverage.
 
 ```sh
 python3 python/sm120_coordinate_search.py \
-  --seed-plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --seed-plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --repo . --build-dir build-cuda-coordinate-5090d-sm120 \
-  --active-dir results/rebuild/cross-batch-search/coordinate-active-5090d \
-  --output results/rebuild/cross-batch-search/coordinate-5090d-b4-32.json \
-  --plan-output results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
+  --active-dir results/sm120/cross-batch-search/coordinate-active-5090d \
+  --output results/sm120/cross-batch-search/coordinate-5090d-b4-32.json \
+  --plan-output results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
   --model /workspace/models/model.bin.gz --device 2 \
   --batches 4-32 --streams 2 --iterations 100 --warmup 30 --repeats 1
@@ -200,13 +200,13 @@ selected tactic IDs, iteration count, sample count, and sample spread:
 
 ```sh
 python3 python/sm120_tactic_plan.py finalize \
-  --plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --model /workspace/models/model.bin.gz \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
   --batches 4-32 --streams 2 \
-  --joint-result results/rebuild/cross-batch-search/joint-plan-5090d-s2-long.json \
-  --output results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-final.json
+  --joint-result results/sm120/cross-batch-search/joint-plan-5090d-s2-long.json \
+  --output results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-final.json
 ```
 
 Every requested batch must have a `long_stable` joint row with the same five
@@ -216,8 +216,8 @@ than 10% relative sample spread. Only then does the plan become
 
 ```sh
 python3 python/sm120_tactic_plan.py validate \
-  --plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --model /workspace/models/model.bin.gz \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
   --family ffn --batches 4-32 --streams 2 --device 2
@@ -232,8 +232,8 @@ per family when materializing a complete build, or consume the plan's
 
 ```sh
 python3 python/sm120_run_tactic_search.py \
-  --tactic-plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --tactic-plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --family ffn --repo . --build-dir build/plan-ffn \
   --active-source-dir build/plan-ffn/active \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
@@ -256,8 +256,8 @@ and BAAB orderings and stores the complete commands and environment snapshot:
 
 ```sh
 python3 python/sm120_validate_tactic_plan.py \
-  --plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-final.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --family qkv --batches 32 \
   --binary build/plan-b32/katago \
   --config docs/baseline-configs/bench-cuda-gpu2-5090d-s2.cfg \
@@ -283,11 +283,11 @@ CuTe QKV, TileLang Linear2, FA4 AOT, and persisting-L2 choices together:
 
 ```sh
 python3 python/sm120_measure_joint_plan.py \
-  --plan results/rebuild/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
-  --space results/rebuild/cross-batch-search/space-5090d-b4-32-s2-v7.json \
+  --plan results/sm120/cross-batch-search/tactic-plan-5090d-b4-32-coordinate.json \
+  --space results/sm120/cross-batch-search/space-5090d-b4-32-s2-v7.json \
   --repo . --build-dir build-cuda-joint-plan-5090d-sm120 \
-  --active-dir results/rebuild/cross-batch-search/joint-plan-active-5090d \
-  --output results/rebuild/cross-batch-search/joint-plan-5090d-s2-full.json \
+  --active-dir results/sm120/cross-batch-search/joint-plan-active-5090d \
+  --output results/sm120/cross-batch-search/joint-plan-5090d-s2-full.json \
   --config /workspace/bench-cuda-gpu2-5090d-s2.cfg \
   --model /workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz \
   --device 2 --batches 4-32 --streams 2 \
@@ -299,8 +299,8 @@ The joint runner's default is a long measurement. Only rows marked
 
 ```sh
 python3 python/sm120_report_joint_plan.py \
-  results/rebuild/cross-batch-search/joint-plan-5090d-s2-long.json \
-  --output results/rebuild/cross-batch-search/joint-plan-5090d-s2-report.json
+  results/sm120/cross-batch-search/joint-plan-5090d-s2-long.json \
+  --output results/sm120/cross-batch-search/joint-plan-5090d-s2-report.json
 ```
 
 This reports the highest `stable_long_nn_evals_per_sec` and its batch/tactic
@@ -308,14 +308,14 @@ selection. Short S2 scan medians remain useful for pruning and ranking, but
 are not final performance claims.
 
 The first run is retained in
-`results/rebuild/cross-batch-search/joint-plan-5090d-s2-full.json`, but it must
+`results/sm120/cross-batch-search/joint-plan-5090d-s2-full.json`, but it must
 not be used as CuTe-QKV evidence: its generated CuTe bridge was copied beside
 the object while CMake still compiled the ordinary QKV stub. The fixed runner
 selects the bridge itself as `SM120_SEARCH_QKV_SOURCE`, while linking the
 generated device object through `SM120_SEARCH_QKV_OBJECT`.
 
 An earlier corrected RTX 5090D diagnostic run is recorded in
-`results/rebuild/cross-batch-search/joint-plan-5090d-s2-fixed-qkv.json`. Key
+`results/sm120/cross-batch-search/joint-plan-5090d-s2-fixed-qkv.json`. Key
 short whole-graph observations were B13 4,265.6, B14 4,332.3, B15 4,306.6,
 B16 4,251.5,
 B18 4,263.7, B19 4,368.8, B20 4,065.8, B25 4,079.5, B27 4,047.5, and B32
@@ -328,7 +328,7 @@ commands, model/config hashes, and the full environment snapshot.
 ## Corrected Nsight evidence and resource gaps
 
 Full-graph Nsight Systems reports are under
-`results/rebuild/cross-batch-search/nsight-joint-5090d-s2/`, including
+`results/sm120/cross-batch-search/nsight-joint-5090d-s2/`, including
 `nsys-fixed-b13.nsys-rep`, `nsys-fixed-b14.nsys-rep`, `nsys-b16.nsys-rep`,
 `nsys-fixed-b19.nsys-rep`, `nsys-fixed-b20.nsys-rep`, `nsys-fixed-b25.nsys-rep`,
 and `nsys-fixed-b27.nsys-rep`. The corresponding `stats-fixed-*` CSV files

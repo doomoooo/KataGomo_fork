@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "createdUtc": "2026-08-06T19:39:05Z",
+  "candidateId": "ffn-m128-n64-k32-s2-mb3-tanh-half2",
+  "fixedBoard": [19, 19],
+  "batches": [1, 32],
+  "gpuUsed": false,
+  "checks": {
+    "b1ThroughB32Generated": true,
+    "b1ThroughB32StaticVerification": true,
+    "independentRepeatSourceHashesIdentical": "32/32",
+    "b19HistoricalDeviceSourceByteExact": true,
+    "representativeFatbinCompile": {
+      "batches": [1, 13, 19, 32],
+      "architectures": ["sm_89", "sm_120"],
+      "status": "passed",
+      "nvcc": "CUDA 13.2.86",
+      "objectsRetained": false
+    }
+  },
+  "hashes": {
+    "generatorSha256": "9357d9b9409543c11d98fe9bac38de5448666eb50f2fc3c2fc6ba92faa4ff66d",
+    "verifierSha256": "8edcc5191c47b30266c4c5211da8eff3aef8ecac3d158272a0be5eb3752e44f4",
+    "provenanceManifestSha256": "9cb55907d0955da838df6e4d3ed2e52a1b80b3fabacdb354f39b5116244f1981",
+    "generatedManifestSha256": "09385dedc4d79fe9edabf52135ef60b60c1c10e259a35edeaeec3c59ee20508b",
+    "staticVerificationSha256": "39035a3e0f32921b84969ca79dea01f1a1a34eb4bb02d7691920da9a4257cf8c",
+    "b19HistoricalDeviceSourceSha256": "905d8068911c4c1e08408ebf4c8968dd4c6e5e97189abb2057c2aec2669aaa81",
+    "b1SourceSha256": "65d69f8122d0f9ad9010ba093b742eb773b131c577ba7eba14b8d2defdd6ed73",
+    "b13SourceSha256": "7f41a9ea0a7d6ce642e1645e453d196f52ce7adec2526b612031a017e6e479d2",
+    "b19SourceSha256": "749044844add83a62349050a31f16129e2b615d5a5e4c08f1fc1d234b939f300",
+    "b32SourceSha256": "58cb5c176845e1fe2d9cfe808f2f487193cc757b3fd9bc7d1fdefc6d01dd9bea"
+  },
+  "acceptanceMetric": "natural whole-graph S2 total throughput",
+  "performanceMeasured": false,
+  "accuracyMeasured": false
+}

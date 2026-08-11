@@ -1,0 +1,88 @@
+{
+  "stage": 25,
+  "strategy": "fuse policy P1 FP16-to-FP32 conversion, global bias, BN affine, and SiLU",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "binarySha256": "c2e5cb3a86d11bcc184e39a4fb224fc42723bd72dfe0a0dfa64d7ee7359e2a4d",
+  "switch": "cudaUseFusedPolicyP1",
+  "decision": "accepted-small-low-confidence",
+  "enabledInTargetConfig": true,
+  "dispatch": "batchSize=13, 19x19, FP16, NHWC, policy P1 channels=96, no mask",
+  "preImplementationNsys": {
+    "sequence": ["copyFromHalfKernel", "addNCBiasInplaceNHWCKernel", "applyCScaleBiasNHWCSiluKernel"],
+    "observedBoundaries": 64,
+    "meanSummedKernelUs": 8.216578,
+    "meanElapsedBoundaryUs": 11.381594,
+    "fp32IntermediateBytes": 1802112
+  },
+  "baselineNcu": {
+    "biasAddDurationsUs": [2.88, 2.94],
+    "bnSiluDurationsUs": [3.17, 3.14],
+    "biasAddComputeSolPercent": 17.71,
+    "biasAddMemorySolPercent": 34.10,
+    "bnSiluComputeSolPercent": 19.92,
+    "bnSiluMemorySolPercent": 31.53,
+    "l2HitPercent": "98.21-99.25",
+    "registersPerThread": 16,
+    "spillRequests": 0
+  },
+  "candidateNcu": {
+    "v1": {
+      "durationsUs": [4.38, 4.38, 4.42, 4.48],
+      "geometry": "grid4693 block96",
+      "achievedOccupancyPercent": "29.11-31.46",
+      "decision": "rejected geometry"
+    },
+    "v2": {
+      "durationsUs": [3.20, 3.20, 3.23, 3.23],
+      "medianUs": 3.215,
+      "geometry": "grid949 block480 (96x5)",
+      "registersPerThread": 20,
+      "achievedOccupancyPercent": "66.53-68.32",
+      "spillRequests": 0
+    }
+  },
+  "nsysSteadyStateLast20PerStream": {
+    "controlKernelsPerForwardPerStream": 311,
+    "candidateKernelsPerForwardPerStream": 309,
+    "forward": {
+      "controlTargetSummedUs": 8.616000,
+      "candidateTargetUs": 3.114682,
+      "targetChangePercent": -63.850000,
+      "controlUnionMs": 164.068977,
+      "candidateUnionMs": 161.168959,
+      "unionChangePercent": -1.767560
+    },
+    "reverse": {
+      "controlTargetSummedUs": 9.072531,
+      "candidateTargetUs": 3.343515,
+      "targetChangePercent": -63.146800,
+      "controlUnionMs": 164.658530,
+      "candidateUnionMs": 163.749537,
+      "unionChangePercent": -0.552047
+    }
+  },
+  "fullGraphLocked2400Abba300": {
+    "controlRunsNNEvalsPerSec": [3165.124014, 3220.117419, 3227.587632, 3220.015235],
+    "candidateRunsNNEvalsPerSec": [3167.789956, 3265.990292, 3181.085615, 3263.786254],
+    "controlPooledMedianNNEvalsPerSec": 3220.066327,
+    "candidatePooledMedianNNEvalsPerSec": 3222.435935,
+    "changePercent": 0.073589,
+    "forwardChangePercent": 0.760172,
+    "reverseChangePercent": -0.042357,
+    "adjacentPairChangesPercent": [0.084229, 1.424570, -1.440770, 1.359340],
+    "positivePairs": 3,
+    "totalPairs": 4,
+    "confidence": "low; magnitude is close to run-to-run state variation"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "stage24ByteIdentical": true,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "allOutputDeltasVsStage24": 0
+  },
+  "diagnosticNoSample": {
+    "artifact": "ncu-baseline/p1-pointwise.raw",
+    "reason": "combined-regex NCU invocation returned application code 11 before collecting any sample; exact-name reruns completed"
+  },
+  "reason": "the fused boundary is consistently about 63% faster locally and reduces the S2 union in both profile orders; the full-graph gain is small but positive in pooled short screening and output is byte-identical"
+}

@@ -24,12 +24,12 @@ the historical compiler environment:
 python \
   /workspace/katago/python/sm120_historical_ffn/generate.py \
   --all-batches \
-  --space /workspace/results/rebuild/cross-batch-search/space-5090d-b1-32-s2.json \
-  --output-dir /workspace/results/rebuild/cross-batch-search/historical-ffn-b1-b32
+  --space /workspace/results/sm120/cross-batch-search/space-5090d-b1-32-s2.json \
+  --output-dir /workspace/results/sm120/cross-batch-search/historical-ffn-b1-b32
 
 python \
   /workspace/katago/python/sm120_historical_ffn/verify.py \
-  --artifact-root /workspace/results/rebuild/cross-batch-search/historical-ffn-b1-b32
+  --artifact-root /workspace/results/sm120/cross-batch-search/historical-ffn-b1-b32
 ```
 
 `freeze_device_sources.py` is a maintainer-only provenance tool. Run it only in

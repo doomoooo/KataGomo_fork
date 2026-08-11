@@ -28,13 +28,13 @@ SM120 records for every exact batch B4-B32.
 
 ## Audited evidence
 
-- `/workspace/results/4090/HISTORY.md`
-- `/workspace/results/4090/INTRINSIC-S2-AUDIT.md`
-- `/workspace/results/4090/stage*/`
-- `/workspace/cuda-optimization-history.md`
-- `/workspace/results/rebuild/HISTORY.md`
-- `/workspace/results/rebuild/stage*/`
-- `/workspace/SM89_SM120_AUTOTUNE_HANDOVER_20260807.md`
+- `/workspace/results/sm89/HISTORY.md`
+- `/workspace/results/sm89/INTRINSIC-S2-AUDIT.md`
+- `/workspace/results/sm89/stage*/`
+- `/workspace/results/docs/cuda-optimization-history.md`
+- `/workspace/results/sm120/HISTORY.md`
+- `/workspace/results/sm120/stage*/`
+- `/workspace/results/docs/SM89_SM120_AUTOTUNE_HANDOVER_20260807.md`
 - frozen SM89 implementation `/workspace/katago-4090`
 - frozen SM120 implementation `/workspace/katago-packed-qkv-b1b32`
 - retained SM120 line

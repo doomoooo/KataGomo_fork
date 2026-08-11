@@ -4,7 +4,7 @@ Read-only observation captured 2026-08-07. Nothing here opens a freeze gate.
 
 ## RTX 4090 / SM89
 
-Primary history: `/workspace/results/4090/HISTORY.md`.
+Primary history: `/workspace/results/sm89/HISTORY.md`.
 
 The latest recorded stage is Stage 72. Its M64xN128 retile for the already
 accepted both16 FlashAttention was rejected: against M64xN96 it was 2.817%
@@ -47,6 +47,6 @@ for the complete freeze tuple in `FREEZE-GATES.md`.
 
 ## SM120
 
-Primary history: `/workspace/results/rebuild/HISTORY.md`; recent evidence lives
+Primary history: `/workspace/results/sm120/HISTORY.md`; recent evidence lives
 under Stages 55–57 and `cross-batch-search/`. These are observation-only until
 their owner freezes source, schema, assets, and validation commands.

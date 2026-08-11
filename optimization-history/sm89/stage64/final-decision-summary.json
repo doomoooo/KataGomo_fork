@@ -1,0 +1,65 @@
+{
+  "stage": 64,
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment with S1 attribution",
+  "strategy": "split the AOT fused QKV+RoPE kernel into a plain AOT QKV kernel followed by the existing standalone fused QK RoPE kernel",
+  "status": "intrinsic-accepted-s2-regressed-default-off",
+  "correctness": {
+    "smokeRows": 26,
+    "smokeAllTensorRmseVsControl": 0.0,
+    "fullRows": 8192,
+    "allTensorRmseVsStage62": 0.0,
+    "policyTop1VsStage62": 1.0,
+    "fp32Report": "replay-split-aot-qkv-rope-vs-fp32.json",
+    "stage62Report": "replay-split-aot-qkv-rope-vs-stage62.json"
+  },
+  "ncu": {
+    "controlFusedQkvRopeMeanUs": 30.005,
+    "candidatePlainQkvMeanUs": 23.445,
+    "standaloneRopeMeanUs": 7.093,
+    "isolatedReplaySumUs": 30.538,
+    "isolatedReplaySumPredictionPercent": 1.776,
+    "controlRegistersPerThread": 240,
+    "plainRegistersPerThread": 168,
+    "dynamicSharedKiB": 49.152,
+    "wavesPerSm": 1.30,
+    "spills": 0,
+    "sassMechanism": "plain QKV preserves 64 HMMA per launch, removes 64 SIN, 64 COS, 192 FFMA and 256 FMUL, and reduces F2F from 128 to 64"
+  },
+  "naturalS1Nsys": {
+    "controlLaunchToCompletionUs": 28.940793,
+    "candidateLaunchToCompletionUs": 25.948253,
+    "boundaryChangePercent": -10.3402,
+    "controlRawKernelSumMs": 5.730277,
+    "candidateRawKernelSumMs": 5.001657,
+    "rawKernelSumChangePercent": -12.7135,
+    "controlNNEvalsPerSec": 2569.974530,
+    "candidateNNEvalsPerSec": 2846.741823,
+    "throughputChangePercent": 10.7692
+  },
+  "naturalS2Nsys": {
+    "controlLaunchToCompletionUsMean": 29.633541,
+    "candidateLaunchToCompletionUsMean": 38.742648,
+    "boundaryChangePercent": 30.7392,
+    "controlNNEvalsPerSecMean": 3326.961020,
+    "candidateNNEvalsPerSecMean": 3203.497375,
+    "throughputChangePercent": -3.7110,
+    "mechanism": "plain QKV falls to about 25.10 us, but the added RoPE is about 8.87 us and the launch gap raises the complete boundary to about 38.74 us under dual-stream contention"
+  },
+  "lockedS2Abba": {
+    "status": "contaminated-but-directionally-consistent-with-nsys",
+    "forwardControlMeanNNEvalsPerSec": 3490.346861,
+    "forwardCandidateMeanNNEvalsPerSec": 3139.913723,
+    "forwardChangePercent": -10.0401,
+    "contamination": "reverse control A3 entered an anomalous 1491.570 nnEval/s phase; it is excluded from acceptance authority"
+  },
+  "decision": "Retain and commit the exact-shape implementation default-off as a strict S1 intrinsic win and a reusable phase-control/plain-QKV test path. Do not enable it in the S2 deployment configuration. Reuse the clean Stage62 deployed full-graph checkpoint because deployed code and configuration are unchanged.",
+  "workflowLesson": "independent NCU replay durations are not additive; complete cross-kernel boundaries require natural Nsys/NVTX or CUDA-event measurement",
+  "artifacts": {
+    "hypothesis": "hypothesis-split-aot-qkv-rope-boundary.md",
+    "historicalAudit": "historical-measurement-gate-audit.md",
+    "ncu": "ncu-split-aot-qkv-rope-s1",
+    "s1Nsys": "nsys-split-aot-qkv-rope-s1-short",
+    "s2Nsys": "nsys-split-aot-qkv-rope-s2-short",
+    "s2Abba": "abba-split-aot-qkv-rope-s2-100-locked2400"
+  }
+}

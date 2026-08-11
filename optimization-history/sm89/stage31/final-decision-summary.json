@@ -1,0 +1,45 @@
+{
+  "createdUtc": "2026-08-06T05:10:51Z",
+  "stage": 31,
+  "candidate": "CUTLASS Ampere Stream-K swizzle for exact B13 linear2 beta=1 GEMM",
+  "target": "RTX 4090, FP16, B13, 19x19, S2",
+  "candidateBinarySha256": "e9ec4590198d17912e638163ae9723ef6df478cb90f8f463cd3273376b54f967",
+  "preImplementationEvidence": {
+    "linear2AvgUs": 22.24,
+    "gridCtas": 111,
+    "wavesPerSm": 0.87,
+    "registersPerThread": 162,
+    "dynamicSharedBytes": 65536,
+    "achievedOccupancyPct": 8.31,
+    "localSpills": 0
+  },
+  "postImplementationS2Nsys": {
+    "streamKExecuted": true,
+    "candidateGridCtas": 111,
+    "candidateRegistersPerThread": 168,
+    "candidateDynamicSharedBytes": 65536,
+    "forwardOrder": {
+      "controlLinear2AvgUs": 28.927,
+      "candidateLinear2AvgUs": 28.616,
+      "controlNNEvalsPerSec": 3170.675984,
+      "candidateNNEvalsPerSec": 3194.141580
+    },
+    "reverseOrder": {
+      "controlLinear2AvgUs": 28.322,
+      "candidateLinear2AvgUs": 28.943,
+      "controlNNEvalsPerSec": 3158.417857,
+      "candidateNNEvalsPerSec": 3137.575075
+    }
+  },
+  "accuracySmoke": {
+    "rows": 26,
+    "byteExact": true,
+    "candidateKrnnSha256": "0ee632cfec280a4da9b7b224e779509d635a02ced97edcf6e0d054d4f3f0b95d"
+  },
+  "invalidArtifact": {
+    "path": "/workspace/results/4090/stage31/ncu-streamk-linear2/streamk-window.ncu-rep",
+    "reason": "kernel-name filter matched Kernel but Stream-K specialization is named Kernel2; report excludes candidate launch"
+  },
+  "decision": "rejected and reverted: Stream-K heuristic retained the 111-CTA grid, increased registers, and S2 kernel/full-graph signs reversed with run order; no ABBA or 8192-row replay"
+}
+

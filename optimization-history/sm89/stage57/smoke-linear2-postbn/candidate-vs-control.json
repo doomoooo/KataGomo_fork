@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-06T11:25:14+00:00",
+  "reference": "/workspace/results/4090/stage57/smoke-linear2-postbn/control.krnn",
+  "candidate": "/workspace/results/4090/stage57/smoke-linear2-postbn/candidate.krnn",
+  "referenceRevision": "91f6aae65f31f890bce9032acdee7de18b49e42b-cuda",
+  "candidateRevision": "91f6aae65f31f890bce9032acdee7de18b49e42b-cuda",
+  "corpus": "/workspace/results/4090/stage30/smoke/corpus-first26.npz",
+  "numRows": 26,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.6217881441116333,
+    "p0lossCandidateWeighted": 1.62183678150177,
+    "p0lossReferenceUnweighted": 1.6217881441116333,
+    "p0lossCandidateUnweighted": 1.62183678150177,
+    "top1VsReference": 1.0,
+    "optimisticTop1VsReference": 1.0,
+    "top1VsTarget": 0.4230769230769231,
+    "optimisticTop1VsTarget": 0.038461538461538464,
+    "probabilityRmse": 0.00011258460290264338,
+    "optimisticProbabilityRmse": 0.0001335598062723875,
+    "totalVariation": 0.0020874065812677145,
+    "jsd": 5.255473297438584e-06
+  },
+  "value": {
+    "outcomeRmse": 0.0013712628278881311,
+    "rawLogitsRmse": 0.004582231864333153
+  },
+  "score": {
+    "meanRmse": 0.0022767826449126005,
+    "all6Rmse": 0.005106228403747082
+  },
+  "ownership": {
+    "rawLogitsRmse": 0.002890833653509617,
+    "sigmoidRmse": 0.00031354892416857183
+  },
+  "maxPolicyAbsError": {
+    "row": 8,
+    "move": 325,
+    "value": 0.0029545724391937256
+  }
+}

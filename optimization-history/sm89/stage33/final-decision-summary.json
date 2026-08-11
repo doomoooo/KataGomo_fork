@@ -1,0 +1,62 @@
+{
+  "stage": 33,
+  "candidate": "TileLang fused FFN M128-N64-K32-S2-T128 for SM89",
+  "target": "RTX 4090 exact 19x19 B13 FP16 S2 only",
+  "decision": "reject-and-revert",
+  "control": {
+    "kernel": "CUTLASS DualGemm fused linear1/linearGate/SwiGLU",
+    "ncuDurationUs": [41.02, 41.47, 41.34],
+    "ncuMedianDurationUs": 41.34,
+    "registersPerThread": 168,
+    "dynamicSharedMemoryBytes": 49152,
+    "residentBlocksPerSm": 2,
+    "theoreticalOccupancyPct": 16.67,
+    "achievedOccupancyPctRange": [15.30, 15.33],
+    "noEligiblePctRange": [78.23, 78.51],
+    "spills": 0
+  },
+  "candidateProfile": {
+    "ncuDurationUs": [47.78, 48.22, 48.00],
+    "ncuMedianDurationUs": 48.00,
+    "medianDurationDeltaPct": 16.11,
+    "registersPerThread": 167,
+    "dynamicSharedMemoryBytes": 32768,
+    "residentBlocksPerSm": 3,
+    "theoreticalOccupancyPct": 25.0,
+    "achievedOccupancyPctRange": [21.72, 21.80],
+    "noEligiblePctRange": [82.22, 82.37],
+    "spills": 0
+  },
+  "nsysS2": {
+    "iterationsPerRun": 20,
+    "forwardOrder": {
+      "controlFfnAverageUs": 43.283809,
+      "candidateFfnAverageUs": 49.612064,
+      "controlNNEvalsPerSec": 3207.668397,
+      "candidateNNEvalsPerSec": 3099.213926,
+      "throughputDeltaPct": -3.3811
+    },
+    "reverseOrder": {
+      "controlFfnAverageUs": 43.122262,
+      "candidateFfnAverageUs": 49.442573,
+      "controlNNEvalsPerSec": 3203.611734,
+      "candidateNNEvalsPerSec": 3108.368577,
+      "throughputDeltaPct": -2.9730
+    }
+  },
+  "smoke": {
+    "rows": 26,
+    "finite": true,
+    "policyTop1VsControl": 1.0,
+    "policyProbabilityRmse": 0.00009731970203574747,
+    "valueOutcomeRmse": 0.0009720537345856428
+  },
+  "longTests": {
+    "abba100": "skipped: single-kernel and both full-network order gates failed",
+    "fp32Reference8192": "skipped: performance gate failed"
+  },
+  "mechanismConclusion": "Reducing shared memory did enable three CTAs per SM, but the generated instruction/dependency schedule increased no-eligible cycles and kernel latency. Higher occupancy did not improve latency hiding on SM89.",
+  "sourceState": "candidate implementation and runtime switch removed; accepted S2 path rebuilt",
+  "candidateBinarySha256": "d657be0ce9e633ef4be560aea205d014506f6fad4b977f53c5be2caa6df571fa",
+  "postRevertBinarySha256": "6f803b69ff12a7fe43618a9f6a43c048966fcbc91e5197654378bf29de1a300c"
+}

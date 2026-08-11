@@ -1,0 +1,94 @@
+{
+   "candidate" : {
+      "c768CompleteCapture" : {
+         "averageUs" : 14.6597468553459,
+         "calls" : 1272,
+         "maxUs" : 26.816,
+         "minUs" : 11.392,
+         "summedMs" : 18.647198
+      },
+      "c768SteadyState" : {
+         "averageUs" : 14.7364347222222,
+         "calls" : 720,
+         "maxUs" : 17.793,
+         "minUs" : 11.52,
+         "summedMs" : 10.610233
+      },
+      "deviceSynchronize" : {
+         "averageUs" : 2307.6946875,
+         "calls" : 48,
+         "summedMs" : 110.769345
+      },
+      "memcpy" : {
+         "bytes" : 1484391248,
+         "calls" : 4238
+      },
+      "memset" : {
+         "bytes" : 59242880,
+         "calls" : 228
+      },
+      "steadyState" : {
+         "forwardGroupsPerStream" : 30,
+         "kernelUnionMs" : 249.735404,
+         "kernelsPerForwardPerStream" : 311,
+         "selectedKernels" : 18660,
+         "summedKernelMs" : 386.019355
+      },
+      "streamSetAttribute" : {
+         "averageUs" : 12.7305204402516,
+         "calls" : 2544,
+         "summedMs" : 32.386444
+      }
+   },
+   "changes" : {
+      "steadyStateC768AveragePercent" : 0.28220171780271,
+      "steadyStateKernelUnionPercent" : 0.676240408611628
+   },
+   "control" : {
+      "c768CompleteCapture" : {
+         "averageUs" : 14.704123427673,
+         "calls" : 1272,
+         "maxUs" : 25.984,
+         "minUs" : 11.36,
+         "summedMs" : 18.703645
+      },
+      "c768SteadyState" : {
+         "averageUs" : 14.6949652777778,
+         "calls" : 720,
+         "maxUs" : 18.144,
+         "minUs" : 11.36,
+         "summedMs" : 10.580375
+      },
+      "deviceSynchronize" : {
+         "averageUs" : 2217.48052083333,
+         "calls" : 48,
+         "summedMs" : 106.439065
+      },
+      "memcpy" : {
+         "bytes" : 1484391248,
+         "calls" : 4238
+      },
+      "memset" : {
+         "bytes" : 59242880,
+         "calls" : 228
+      },
+      "steadyState" : {
+         "forwardGroupsPerStream" : 30,
+         "kernelUnionMs" : 248.057936,
+         "kernelsPerForwardPerStream" : 311,
+         "selectedKernels" : 18660,
+         "summedKernelMs" : 391.612295
+      },
+      "streamSetAttribute" : {
+         "averageUs" : 44.3024905660377,
+         "calls" : 212,
+         "summedMs" : 9.392128
+      }
+   },
+   "profileProtocol" : "40 timed plus 10 benchmark warmup forwards per server; last 30 complete steady-state forwards on each timed stream",
+   "regime" : "L2400-EXACT19-B13-S2-NSYS",
+   "reports" : {
+      "candidate" : "results/4090/stage21/nsys-paired/candidate.sqlite",
+      "control" : "results/4090/stage21/nsys-paired/control.sqlite"
+   }
+}

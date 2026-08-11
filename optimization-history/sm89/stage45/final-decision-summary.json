@@ -1,0 +1,29 @@
+{
+  "stage": 45,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "replace second full warp transform with B-only transform",
+  "decision": "reject-and-revert-static-no-op",
+  "preImplementationEvidence": {
+    "dualFfnHotspotRank": 1,
+    "controlNcuMedianUs": 41.28,
+    "controlNoEligiblePctRange": [78.28, 78.57]
+  },
+  "sass": {
+    "controlFunctionSha256": "732cc554304981029fb336c439b145cdcb9832fd514e80438e30c418b33af8e3",
+    "candidateFunctionSha256": "732cc554304981029fb336c439b145cdcb9832fd514e80438e30c418b33af8e3",
+    "controlHmmaInstructions": 64,
+    "candidateHmmaInstructions": 64,
+    "controlMoveLikeInstructions": 97,
+    "candidateMoveLikeInstructions": 97,
+    "machineCodeChanged": false
+  },
+  "smokeRun": false,
+  "ncuRun": false,
+  "nsysRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "The repeated transformed-A write is already removed by nvcc. A B-only source helper produces identical target machine code.",
+  "controlBinarySha256": "01b60fda8db532e5cfe19b6dfc809f2697f0258ffda19f8f5c014efd57773e54",
+  "candidateBinarySha256": "a73434764939e41011d2d8dfc757cb185a8dc7dbc16f962fc2ee4bb9ff08f60a",
+  "sourceState": "B-only helper and calls removed; pristine pinned CUTLASS restored; accepted binary rebuilt"
+}

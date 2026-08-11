@@ -1,0 +1,31 @@
+{
+  "createdUtc": "2026-08-05T18:35:00Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "change": "precompute model-lifetime float2 learnable-RoPE cos/sin tables on GPU",
+  "testedBinarySha256": "6fb3d030d1c9a3ad7bd3bc5ee7ad8f9b377a8c1eebfa7e59e4448f3068056fd3",
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage13": true
+  },
+  "locked2400WarmAbba500": {
+    "roundImprovementPercent": [0.140144, 1.216675, 1.436565],
+    "pooledControlMedianNNEvalsPerSec": 2962.647134,
+    "pooledCandidateMedianNNEvalsPerSec": 3003.9057595,
+    "pooledImprovementPercent": 1.392627,
+    "forwardImprovementPercent": 0.026920,
+    "reverseImprovementPercent": 1.479790,
+    "adjacentPairMedianImprovementPercent": 0.381378,
+    "adjacentPairMeanImprovementPercent": 0.797521,
+    "positiveAdjacentPairs": 6,
+    "totalAdjacentPairs": 12
+  },
+  "nsys": {
+    "controlKernelAverageUs": 8.773,
+    "candidateKernelAverageUs": 8.459,
+    "controlLast30KernelUnionMs": 259.534586,
+    "candidateLast30KernelUnionMs": 265.927779,
+    "kernelUnionChangePercent": 2.463365
+  },
+  "decision": "rejected; experimental switch remains disabled"
+}

@@ -1,0 +1,383 @@
+{
+  "nsys": {
+    "streams": [
+      114,
+      99
+    ],
+    "kernelLaunches": 19596,
+    "spanMs": 265.661233,
+    "busyUnionMs": 261.562547,
+    "uncoveredGapMs": 4.098686,
+    "busyPct": 98.45717572198424,
+    "benchmark": {
+      "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "modelName": "b11c768h12nbt3tflrs-fson-silu",
+      "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+      "batchSize": 13,
+      "numServerThreads": 2,
+      "numIterations": 20,
+      "gpuIdxs": [
+        0
+      ],
+      "perServerMedianMs": [
+        8.080656052,
+        8.086224079
+      ],
+      "perServerNNEvalsPerSec": [
+        1608.780267,
+        1607.67249
+      ],
+      "combinedPerBatchMs": 8.086224079,
+      "combinedNNEvalsPerSec": 3216.452757,
+      "actualWallSeconds": 0.295977031,
+      "actualWallPerForwardMs": 9.865901033
+    },
+    "families": [
+      {
+        "id": "ffn_dual",
+        "label": "FFN dual projection + SwiGLU",
+        "launches": 2112,
+        "rawDurationMs": 91.330956,
+        "unionMs": 90.710569,
+        "exclusiveMs": 47.213642,
+        "unionBusyPct": 34.68025909688056,
+        "exclusiveBusyPct": 18.0506125748959
+      },
+      {
+        "id": "flash",
+        "label": "FlashAttention",
+        "launches": 2112,
+        "rawDurationMs": 70.619448,
+        "unionMs": 69.063404,
+        "exclusiveMs": 27.459697,
+        "unionBusyPct": 26.40416404876192,
+        "exclusiveBusyPct": 10.498329105198689
+      },
+      {
+        "id": "qkv",
+        "label": "QKV + RoPE",
+        "launches": 2112,
+        "rawDurationMs": 63.405014,
+        "unionMs": 62.755026,
+        "exclusiveMs": 27.577246,
+        "unionBusyPct": 23.992359273057545,
+        "exclusiveBusyPct": 10.543270172392074
+      },
+      {
+        "id": "ffn_linear2",
+        "label": "FFN linear2 + residual",
+        "launches": 2112,
+        "rawDurationMs": 58.898464,
+        "unionMs": 56.022574,
+        "exclusiveMs": 7.756472,
+        "unionBusyPct": 21.418423487059865,
+        "exclusiveBusyPct": 2.965436790917929
+      },
+      {
+        "id": "attention_outproj",
+        "label": "attention out-projection",
+        "launches": 2112,
+        "rawDurationMs": 44.129056,
+        "unionMs": 42.708153,
+        "exclusiveMs": 5.551193,
+        "unionBusyPct": 16.328084234475664,
+        "exclusiveBusyPct": 2.1223195230622984
+      },
+      {
+        "id": "rmsnorm",
+        "label": "RMSNorm",
+        "launches": 4224,
+        "rawDurationMs": 23.983481,
+        "unionMs": 23.983481,
+        "exclusiveMs": 3.118202,
+        "unionBusyPct": 9.169310084750016,
+        "exclusiveBusyPct": 1.1921439195956445
+      },
+      {
+        "id": "outer_postconv",
+        "label": "outer postConv",
+        "launches": 704,
+        "rawDurationMs": 15.791804,
+        "unionMs": 15.737276,
+        "exclusiveMs": 1.865416,
+        "unionBusyPct": 6.016639683509428,
+        "exclusiveBusyPct": 0.7131816161738171
+      },
+      {
+        "id": "outer_preconv",
+        "label": "outer preConv",
+        "launches": 704,
+        "rawDurationMs": 11.788419,
+        "unionMs": 11.636035,
+        "exclusiveMs": 1.786253,
+        "unionBusyPct": 4.448662522008551,
+        "exclusiveBusyPct": 0.6829161974783798
+      },
+      {
+        "id": "other",
+        "label": "heads/frontend/other",
+        "launches": 1932,
+        "rawDurationMs": 11.005409,
+        "unionMs": 8.371312,
+        "exclusiveMs": 5.959108,
+        "unionBusyPct": 3.2005010258597917,
+        "exclusiveBusyPct": 2.2782726611084727
+      },
+      {
+        "id": "outer_c768_pointwise",
+        "label": "outer C768 BN + SiLU",
+        "launches": 768,
+        "rawDurationMs": 6.875658,
+        "unionMs": 6.875658,
+        "exclusiveMs": 0.328386,
+        "unionBusyPct": 2.6286859792659842,
+        "exclusiveBusyPct": 0.1255477910604686
+      },
+      {
+        "id": "outer_c384_pointwise",
+        "label": "outer/trunk C384 BN + SiLU",
+        "launches": 704,
+        "rawDurationMs": 5.766207,
+        "unionMs": 5.766207,
+        "exclusiveMs": 0.879784,
+        "unionBusyPct": 2.204523188100015,
+        "exclusiveBusyPct": 0.3363570243869815
+      },
+      {
+        "id": "rmsnorm_inv",
+        "label": "RMSNorm inverse-only",
+        "launches": 0,
+        "rawDurationMs": 0.0,
+        "unionMs": 0.0,
+        "exclusiveMs": 0.0,
+        "unionBusyPct": 0.0,
+        "exclusiveBusyPct": 0.0
+      }
+    ]
+  },
+  "ncu": {
+    "profiledLaunchGeometries": 77,
+    "families": [
+      {
+        "id": "ffn_dual",
+        "label": "FFN dual projection + SwiGLU",
+        "launchGeometries": 1,
+        "medianDurationUs": 42.016,
+        "maxDurationUs": 42.016,
+        "representative": {
+          "durationUs": 42.016,
+          "smThroughputPct": 66.956765,
+          "dramThroughputPct": 14.608041,
+          "l2ThroughputPct": 72.305222,
+          "issueActivePct": 21.725503,
+          "activeWarpsPct": 15.280574,
+          "registersPerThread": 168,
+          "sharedBytesPerBlock": 49152,
+          "wavesPerSm": 2.6,
+          "grid": "(74, 9, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "qkv",
+        "label": "QKV + RoPE",
+        "launchGeometries": 1,
+        "medianDurationUs": 30.784,
+        "maxDurationUs": 30.784,
+        "representative": {
+          "durationUs": 30.784,
+          "smThroughputPct": 45.446714,
+          "dramThroughputPct": 15.004321,
+          "l2ThroughputPct": 53.177782,
+          "issueActivePct": 20.760451,
+          "activeWarpsPct": 14.929931,
+          "registersPerThread": 240,
+          "sharedBytesPerBlock": 49152,
+          "wavesPerSm": 1.3,
+          "grid": "(37, 3, 3)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "flash",
+        "label": "FlashAttention",
+        "launchGeometries": 1,
+        "medianDurationUs": 29.856,
+        "maxDurationUs": 29.856,
+        "representative": {
+          "durationUs": 29.856,
+          "smThroughputPct": 32.989047,
+          "dramThroughputPct": 36.961854,
+          "l2ThroughputPct": 38.845364,
+          "issueActivePct": 25.794823,
+          "activeWarpsPct": 22.525617,
+          "registersPerThread": 168,
+          "sharedBytesPerBlock": 16768,
+          "wavesPerSm": 2.44,
+          "grid": "(6, 12, 13)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "ffn_linear2",
+        "label": "FFN linear2 + residual",
+        "launchGeometries": 1,
+        "medianDurationUs": 23.136,
+        "maxDurationUs": 23.136,
+        "representative": {
+          "durationUs": 23.136,
+          "smThroughputPct": 61.500337,
+          "dramThroughputPct": 51.688199,
+          "l2ThroughputPct": 67.956007,
+          "issueActivePct": 15.390648,
+          "activeWarpsPct": 8.344416,
+          "registersPerThread": 162,
+          "sharedBytesPerBlock": 65536,
+          "wavesPerSm": 0.87,
+          "grid": "(37, 3, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "other",
+        "label": "heads/frontend/other",
+        "launchGeometries": 42,
+        "medianDurationUs": 7.568,
+        "maxDurationUs": 22.304,
+        "representative": {
+          "durationUs": 22.304,
+          "smThroughputPct": 30.905302,
+          "dramThroughputPct": 2.702639,
+          "l2ThroughputPct": 39.348649,
+          "issueActivePct": 14.514205,
+          "activeWarpsPct": 12.695843,
+          "registersPerThread": 244,
+          "sharedBytesPerBlock": 49152,
+          "wavesPerSm": 1.16,
+          "grid": "(148, 2, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "outer_postconv",
+        "label": "outer postConv",
+        "launchGeometries": 10,
+        "medianDurationUs": 20.4,
+        "maxDurationUs": 20.576,
+        "representative": {
+          "durationUs": 20.576,
+          "smThroughputPct": 46.218421,
+          "dramThroughputPct": 37.223631,
+          "l2ThroughputPct": 72.850833,
+          "issueActivePct": 14.979484,
+          "activeWarpsPct": 13.491362,
+          "registersPerThread": 186,
+          "sharedBytesPerBlock": 40960,
+          "wavesPerSm": 0.87,
+          "grid": "(3, 74, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "outer_preconv",
+        "label": "outer preConv",
+        "launchGeometries": 1,
+        "medianDurationUs": 16.608,
+        "maxDurationUs": 16.608,
+        "representative": {
+          "durationUs": 16.608,
+          "smThroughputPct": 57.484327,
+          "dramThroughputPct": 48.274019,
+          "l2ThroughputPct": 61.903323,
+          "issueActivePct": 15.340976,
+          "activeWarpsPct": 8.347666,
+          "registersPerThread": 162,
+          "sharedBytesPerBlock": 81920,
+          "wavesPerSm": 0.87,
+          "grid": "(37, 3, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "attention_outproj",
+        "label": "attention out-projection",
+        "launchGeometries": 17,
+        "medianDurationUs": 12.832,
+        "maxDurationUs": 15.808,
+        "representative": {
+          "durationUs": 15.808,
+          "smThroughputPct": 29.583629,
+          "dramThroughputPct": 49.444499,
+          "l2ThroughputPct": 39.55418,
+          "issueActivePct": 14.583607,
+          "activeWarpsPct": 8.309066,
+          "registersPerThread": 186,
+          "sharedBytesPerBlock": 32768,
+          "wavesPerSm": 0.43,
+          "grid": "(3, 37, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "outer_c768_pointwise",
+        "label": "outer C768 BN + SiLU",
+        "launchGeometries": 1,
+        "medianDurationUs": 8.48,
+        "maxDurationUs": 8.48,
+        "representative": {
+          "durationUs": 8.48,
+          "smThroughputPct": 29.451459,
+          "dramThroughputPct": 72.022929,
+          "l2ThroughputPct": 43.088111,
+          "issueActivePct": 57.304808,
+          "activeWarpsPct": 77.457709,
+          "registersPerThread": 31,
+          "sharedBytesPerBlock": 0,
+          "wavesPerSm": 2.29,
+          "grid": "(1760, 1, 1)",
+          "block": "(256, 1, 1)"
+        }
+      },
+      {
+        "id": "rmsnorm",
+        "label": "RMSNorm",
+        "launchGeometries": 1,
+        "medianDurationUs": 7.616,
+        "maxDurationUs": 7.616,
+        "representative": {
+          "durationUs": 7.616,
+          "smThroughputPct": 22.489085,
+          "dramThroughputPct": 56.595884,
+          "l2ThroughputPct": 28.971504,
+          "issueActivePct": 34.237218,
+          "activeWarpsPct": 55.567834,
+          "registersPerThread": 40,
+          "sharedBytesPerBlock": 0,
+          "wavesPerSm": 0.76,
+          "grid": "(1174, 1, 1)",
+          "block": "(128, 1, 1)"
+        }
+      },
+      {
+        "id": "outer_c384_pointwise",
+        "label": "outer/trunk C384 BN + SiLU",
+        "launchGeometries": 1,
+        "medianDurationUs": 7.168,
+        "maxDurationUs": 7.168,
+        "representative": {
+          "durationUs": 7.168,
+          "smThroughputPct": 33.014162,
+          "dramThroughputPct": 17.535945,
+          "l2ThroughputPct": 31.324751,
+          "issueActivePct": 45.00767,
+          "activeWarpsPct": 62.871881,
+          "registersPerThread": 16,
+          "sharedBytesPerBlock": 0,
+          "wavesPerSm": 9.17,
+          "grid": "(1, 361, 13)",
+          "block": "(384, 1, 1)"
+        }
+      }
+    ]
+  }
+}

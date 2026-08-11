@@ -1,0 +1,69 @@
+{
+  "runs": [
+    {
+      "sequence": "01",
+      "mode": "control",
+      "medianUs": 11.80287
+    },
+    {
+      "sequence": "02",
+      "mode": "fixed-s361",
+      "medianUs": 11.831218
+    },
+    {
+      "sequence": "03",
+      "mode": "fixed-s361",
+      "medianUs": 11.835783
+    },
+    {
+      "sequence": "04",
+      "mode": "control",
+      "medianUs": 11.806683
+    },
+    {
+      "sequence": "05",
+      "mode": "fixed-s361",
+      "medianUs": 11.835251
+    },
+    {
+      "sequence": "06",
+      "mode": "control",
+      "medianUs": 11.810848
+    },
+    {
+      "sequence": "07",
+      "mode": "control",
+      "medianUs": 11.808216
+    },
+    {
+      "sequence": "08",
+      "mode": "fixed-s361",
+      "medianUs": 11.838039
+    }
+  ],
+  "control": {
+    "values": [
+      11.80287,
+      11.806683,
+      11.810848,
+      11.808216
+    ],
+    "meanUs": 11.80715425,
+    "medianUs": 11.8074495,
+    "minUs": 11.80287,
+    "maxUs": 11.810848
+  },
+  "fixed-s361": {
+    "values": [
+      11.831218,
+      11.835783,
+      11.835251,
+      11.838039
+    ],
+    "meanUs": 11.83507275,
+    "medianUs": 11.835517,
+    "minUs": 11.831218,
+    "maxUs": 11.838039
+  },
+  "meanDeltaPct": 0.23645409731138933
+}

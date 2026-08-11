@@ -1,0 +1,99 @@
+{
+  "runs": {
+    "A1": {
+      "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "modelName": "b11c768h12nbt3tflrs-fson-silu",
+      "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+      "batchSize": 13,
+      "numServerThreads": 2,
+      "numIterations": 100,
+      "gpuIdxs": [
+        0
+      ],
+      "perServerMedianMs": [
+        8.194047928,
+        8.189951897
+      ],
+      "perServerNNEvalsPerSec": [
+        1586.517447,
+        1587.31091
+      ],
+      "combinedPerBatchMs": 8.194047928,
+      "combinedNNEvalsPerSec": 3173.828357,
+      "actualWallSeconds": 0.935676974,
+      "actualWallPerForwardMs": 8.506154309
+    },
+    "B1": {
+      "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "modelName": "b11c768h12nbt3tflrs-fson-silu",
+      "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+      "batchSize": 13,
+      "numServerThreads": 2,
+      "numIterations": 100,
+      "gpuIdxs": [
+        0
+      ],
+      "perServerMedianMs": [
+        8.036352158,
+        8.03788805
+      ],
+      "perServerNNEvalsPerSec": [
+        1617.649369,
+        1617.340266
+      ],
+      "combinedPerBatchMs": 8.03788805,
+      "combinedNNEvalsPerSec": 3234.989636,
+      "actualWallSeconds": 0.926732575,
+      "actualWallPerForwardMs": 8.424841591
+    },
+    "B2": {
+      "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "modelName": "b11c768h12nbt3tflrs-fson-silu",
+      "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+      "batchSize": 13,
+      "numServerThreads": 2,
+      "numIterations": 100,
+      "gpuIdxs": [
+        0
+      ],
+      "perServerMedianMs": [
+        7.948800087,
+        7.948288202
+      ],
+      "perServerNNEvalsPerSec": [
+        1635.466971,
+        1635.572298
+      ],
+      "combinedPerBatchMs": 7.948800087,
+      "combinedNNEvalsPerSec": 3271.039269,
+      "actualWallSeconds": 0.911398973,
+      "actualWallPerForwardMs": 8.285445209
+    },
+    "A2": {
+      "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "modelName": "b11c768h12nbt3tflrs-fson-silu",
+      "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+      "batchSize": 13,
+      "numServerThreads": 2,
+      "numIterations": 100,
+      "gpuIdxs": [
+        0
+      ],
+      "perServerMedianMs": [
+        7.965695858,
+        7.966207981
+      ],
+      "perServerNNEvalsPerSec": [
+        1631.998037,
+        1631.89312
+      ],
+      "combinedPerBatchMs": 7.966207981,
+      "combinedNNEvalsPerSec": 3263.891157,
+      "actualWallSeconds": 0.913546311,
+      "actualWallPerForwardMs": 8.304966464
+    }
+  },
+  "controlMean": 3218.859757,
+  "candidateMean": 3253.0144524999996,
+  "candidatePct": 1.0610805713334948
+}

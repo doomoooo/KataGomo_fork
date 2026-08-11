@@ -1,0 +1,76 @@
+{
+  "stage": 62,
+  "candidate": "SM89 dual-FFN half2 tanh SwiGLU epilogue",
+  "status": "accepted-and-deployed",
+  "scope": "RTX 4090, exact 19x19, batch 13, FP16 NHWC, two NN server streams",
+  "mechanism": {
+    "unchanged": "CUTLASS dual-GEMM tensor-core mainloop, tile, stages, launch geometry, output type",
+    "changed": "SwiGLU epilogue sigmoid from FP32 exp/reciprocal to sigmoid(x)=0.5*tanh(0.5*x)+0.5 in packed FP16x2",
+    "sassPerLaunch": {
+      "hmmaControl": 64,
+      "hmmaCandidate": 64,
+      "controlMufuEx2": 64,
+      "controlMufuRcp": 64,
+      "candidateMufuTanh": 64,
+      "controlF2F": 96,
+      "candidateF2F": 64
+    }
+  },
+  "localProfile": {
+    "ncuThreeLaunchMeanUs": {
+      "control": 41.536,
+      "candidate": 41.024,
+      "changePercent": -1.2327
+    },
+    "nsysComplete198LaunchBoundaryMs": {
+      "control": 7.997869,
+      "candidate": 7.900141,
+      "changePercent": -1.2219
+    },
+    "resources": {
+      "registersPerThread": 168,
+      "dynamicSharedKiB": 49.152,
+      "wavesPerSm": 2.60,
+      "spills": 0
+    }
+  },
+  "s2Locked100TimedAbbaBaab": {
+    "controlMeanNNEvalsPerSec": 3389.123567,
+    "candidateMeanNNEvalsPerSec": 3424.123769,
+    "meanChangePercent": 1.0327,
+    "controlMedianNNEvalsPerSec": 3404.203052,
+    "candidateMedianNNEvalsPerSec": 3439.299238,
+    "medianChangePercent": 1.0310,
+    "forwardChangePercent": 1.7552,
+    "reverseChangePercent": 0.3267
+  },
+  "accuracy8192VsFp32": {
+    "policyTop1": 0.9976806640625,
+    "optimisticPolicyTop1": 0.9967041015625,
+    "policyProbabilityRmse": 0.00013426074292510748,
+    "policyTotalVariation": 0.0022340863943099976,
+    "outcomeRmse": 0.0026673784013837576,
+    "scoreMeanRmse": 0.0025299747940152884,
+    "ownershipSigmoidRmse": 0.00031758443219587207,
+    "result": "passed accepted both16 all-head envelope"
+  },
+  "acceptedFullGraph": {
+    "profiledNNEvalsPerSec": 3418.728,
+    "dualFfnRawMs": 91.252,
+    "dualFfnUnionMs": 90.842,
+    "dualFfnUnionBusyPercent": 36.69,
+    "qkvUnionBusyPercent": 25.34,
+    "flashUnionBusyPercent": 22.89
+  },
+  "tensorrtBaselineNNEvalsPerSec": 2432.198,
+  "candidateMeanVsTensorRTPercent": 40.783,
+  "artifacts": {
+    "hypothesis": "stage62/hypothesis-dual-ffn-half2-tanh-swiglu.md",
+    "smoke": "stage62/smoke-dual-ffn-half2-tanh",
+    "targetedNcu": "stage62/ncu-dual-ffn-half2-tanh-s1",
+    "shortNsys": "stage62/nsys-dual-ffn-half2-tanh-s1-short",
+    "s2Abba": "stage62/abba-dual-ffn-half2-tanh-s2-100-locked2400",
+    "fullAccuracy": "stage62/replay-dual-ffn-half2-tanh-vs-fp32.json",
+    "fullGraph": "stage62/post-stage62-current-best-checkpoint.md"
+  }
+}

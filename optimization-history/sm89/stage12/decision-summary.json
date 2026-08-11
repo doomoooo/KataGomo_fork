@@ -1,0 +1,46 @@
+{
+  "createdUtc": "2026-08-05T17:56:38Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "change": "replace 11 nested postConv cuBLAS beta=1 GEMMs per forward with fixed CUTLASS",
+  "shape": {
+    "m": 4693,
+    "n": 768,
+    "k": 384,
+    "beta": 1
+  },
+  "sweep": {
+    "candidateCount": 25,
+    "dimensionsCovered": "threadblock M/N in 64,128,256; stages 2-6; swizzles 1,2,4; four/eight/sixteen warps",
+    "m256n256": "compiled and executed; rejected by CUTLASS can_implement with Error Internal",
+    "implementableCorrectness": "bit-exact against cuBLAS on all 3604224 fixed-random output elements"
+  },
+  "microWinner": {
+    "threadblock": "128x128x32",
+    "warp": "64x64x32",
+    "stages": 3,
+    "swizzle": 1,
+    "iterations": 10000,
+    "controlMedianPairUs": 26.775851,
+    "candidateMedianPairUs": 23.138238,
+    "throughputRatioImprovementPercent": 15.721219
+  },
+  "locked2400WarmAbba500": {
+    "rawDirectories": [
+      "integrated-abba-500-locked2400-warm-r1",
+      "integrated-abba-500-locked2400-warm-r2",
+      "integrated-abba-500-locked2400-warm-r3"
+    ],
+    "roundChangePercent": [-0.126022, -0.162781, -0.088559],
+    "controlSamples": 12,
+    "candidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 2905.853920,
+    "candidateMedianNNEvalsPerSec": 2900.915541,
+    "combinedChangePercent": -0.169946,
+    "forwardChangePercent": -0.276627,
+    "reverseChangePercent": -0.164830,
+    "actualWallChangePercent": -0.220341
+  },
+  "accuracy": "not run because the whole-network performance gate failed; isolated exact-boundary comparison was bit-exact",
+  "runtimeSwitch": "cudaUsePostConvGemmSm89",
+  "decision": "rejected and disabled"
+}

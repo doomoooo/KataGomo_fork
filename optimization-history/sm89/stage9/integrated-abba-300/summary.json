@@ -1,0 +1,37 @@
+{
+  "createdUtc": "2026-08-05T17:06:47.482116956+00:00",
+  "regime": "L1-EXACT19-B13-S2",
+  "protocol": "same binary, 10 warmup and 300 timed forwards per server; forward A-B-B-A plus reverse B-A-A-B",
+  "binarySha256": "62a618afcfa8c6fcec6d64e95decbdd138f514140bf5a1eb1d8bfb58567e9d52",
+  "aotObjectSha256": "f4362303ca232c3febff043e95d3d54b12bf67673e636d492531b72295399878",
+  "testedConfigSha256BeforeAcceptingDefault": "dac2d9b1e32e71eea3df6661746d497a7689dd87ad930f5c2eb4014df1b31b4d",
+  "controlOverride": "cudaUseLinear2GemmSm89=false",
+  "candidateOverride": "cudaUseLinear2GemmSm89=true",
+  "forward": {
+    "order": ["A1", "B1", "B2", "A2"],
+    "controlNNEvalsPerSec": [2992.677552, 2913.114340],
+    "candidateNNEvalsPerSec": [3025.484765, 2968.189059],
+    "controlMedianNNEvalsPerSec": 2952.895946,
+    "candidateMedianNNEvalsPerSec": 2996.836912,
+    "improvementPercent": 1.488063
+  },
+  "reverse": {
+    "order": ["R-B1", "R-A1", "R-A2", "R-B2"],
+    "controlNNEvalsPerSec": [2980.125302, 2916.535207],
+    "candidateNNEvalsPerSec": [3018.830215, 3018.291794],
+    "controlMedianNNEvalsPerSec": 2948.330255,
+    "candidateMedianNNEvalsPerSec": 3018.561005,
+    "improvementPercent": 2.382052
+  },
+  "combined": {
+    "controlNNEvalsPerSec": [2992.677552, 2913.114340, 2980.125302, 2916.535207],
+    "candidateNNEvalsPerSec": [3025.484765, 2968.189059, 3018.830215, 3018.291794],
+    "controlMedianNNEvalsPerSec": 2948.330255,
+    "candidateMedianNNEvalsPerSec": 3018.561005,
+    "improvementPercent": 2.382052,
+    "controlRangeNNEvalsPerSec": [2913.114340, 2992.677552],
+    "candidateRangeNNEvalsPerSec": [2968.189059, 3025.484765]
+  },
+  "gpuObservation": "unlocked clocks; P2 under load, sampled 2415-2790 MHz SM, 46-69 C, up to 453.20 W",
+  "decision": "accepted after exact beta=1 NCU, Nsys S2 union analysis, extended tile/stage ablation, and full all-head accuracy regression"
+}

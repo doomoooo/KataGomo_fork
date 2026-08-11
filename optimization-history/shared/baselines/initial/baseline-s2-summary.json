@@ -1,0 +1,31 @@
+{
+  "createdUtc": "2026-08-05T11:30:00Z",
+  "model": {
+    "file": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+    "sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
+  },
+  "revision": "e1a88a4d394ee4f1fd790ea2bc66b8b8266b5799-cuda",
+  "protocol": {
+    "command": "benchmarknn",
+    "serverThreadsPerModel": 2,
+    "fp16": true,
+    "iterations": 300,
+    "warmup": 10,
+    "clocks": "unlocked"
+  },
+  "gpu0_rtx4090": {
+    "cudaDevice": 0,
+    "chosenBatch": 24,
+    "chosenMedianNNEvalsPerSec": 1642.076,
+    "b28MedianNNEvalsPerSec": 1650.951,
+    "abbaB24VsB28": "1652.349 vs 1658.498"
+  },
+  "gpu2_rtx5090d": {
+    "cudaDevice": 2,
+    "chosenBatch": 19,
+    "chosenMedianNNEvalsPerSec": 2143.655,
+    "b36MedianNNEvalsPerSec": 2153.062,
+    "b38MedianNNEvalsPerSec": 2184.79,
+    "abbaB19VsB36": "2159.232 vs 2162.107"
+  }
+}

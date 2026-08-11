@@ -1,0 +1,95 @@
+{
+  "stage": "60",
+  "optimization": "reopened attention RMSNorm-to-QKV folding with FP32 and half2 epilogue scaling",
+  "status": "rejected-and-reverted",
+  "target": "RTX 4090 SM89, exact 19x19 B13 FP16; S2 deployment topology",
+  "controlRevision": "7d299d0faab1080579bc5b3a8d06cd8017375a2d",
+  "candidateBinarySha256": "6e308bc706391c8513a87a55c816a5bf900979c7c9ea77e17f0633f61fef362c",
+  "stage60A_fp32Scale": {
+    "s2SourceNcuMedianUs": {
+      "controlRms": 4.48,
+      "controlQkv": 30.112,
+      "controlBoundary": 34.592,
+      "candidateInvRms": 2.88,
+      "candidateQkv": 32.32,
+      "candidateBoundary": 35.2,
+      "boundaryChangePercent": 1.757631822,
+      "spills": 0
+    },
+    "s1IntrinsicNcuMedianUs": {
+      "controlRms": 4.64,
+      "controlQkv": 30.304,
+      "controlBoundary": 34.944,
+      "candidateInvRms": 2.816,
+      "candidateQkv": 32.448,
+      "candidateBoundary": 35.264,
+      "boundaryChangePercent": 0.915751488,
+      "spills": 0
+    },
+    "conclusion": "The reduction-only kernel saved time, but scalar FP32 scaling in the QKV epilogue cost more than the deleted materialization."
+  },
+  "stage60B_half2Scale": {
+    "smoke26Rows": {
+      "policyTop1VsControl": 1.0,
+      "optimisticPolicyTop1VsControl": 1.0,
+      "policyProbabilityRmse": 0.00019254321523476392,
+      "policyTotalVariation": 0.003097705077379942,
+      "policyJsd": 0.000011164052921230905,
+      "valueOutcomeRmse": 0.0022713246289640665,
+      "scoreMeanRmse": 0.002722953911870718,
+      "ownershipSigmoidRmse": 0.00039423996349796653,
+      "fallbackByteIdenticalToControl": true,
+      "finite": true
+    },
+    "s1NcuFirstThreeLaunches": {
+      "controlRmsMedianUs": 4.64,
+      "controlQkvMedianUs": 30.24,
+      "candidateInvRmsMedianUs": 2.816,
+      "candidateQkvMedianUs": 32.96,
+      "qkvRegistersPerThread": 240,
+      "qkvSharedMemoryKiB": 50.176,
+      "qkvSpills": 0,
+      "note": "The candidate launch samples 32.992/27.712/32.960 us exposed strong block-ordinal cache variation, so the final decision used the complete sequence instead of a three-launch median."
+    },
+    "shortS1NsysCompleteSequence": {
+      "control": {
+        "qkvLaunches": 198,
+        "qkvTotalMs": 5.750018,
+        "fullRmsLaunches": 396,
+        "fullRmsTotalMs": 1.515273,
+        "relevantBoundaryTotalMs": 7.265291,
+        "nnEvalsPerSec": 2562.598428
+      },
+      "candidate": {
+        "qkvLaunches": 198,
+        "qkvTotalMs": 6.341889,
+        "fullRmsLaunches": 198,
+        "fullRmsTotalMs": 0.764806,
+        "invRmsLaunches": 198,
+        "invRmsTotalMs": 0.417924,
+        "relevantBoundaryTotalMs": 7.524619,
+        "nnEvalsPerSec": 2538.451669
+      },
+      "boundaryChangePercent": 3.569409677,
+      "throughputChangePercent": -0.942276353
+    }
+  },
+  "decision": "Reject and fully revert. Both FP32 and half2 epilogue scaling make the complete RMS-to-QKV boundary slower. The half2 candidate also reduces short S1 whole-model throughput. Per the rejected-candidate workflow, no S2 ABBA, 8192-row replay, or new whole-graph S2 Nsys/NCU checkpoint is run; Stage59 remains the valid checkpoint.",
+  "restoration": {
+    "sourceWorktreeCleanAtRevision": "7d299d0",
+    "rebuilt": true,
+    "restoredReplayVsStage59AllHeadRmse": 0.0,
+    "restoredReplayVsStage59PolicyTotalVariation": 0.0,
+    "note": "KRNN files differ only in embedded revision metadata; every compared output is numerically identical."
+  },
+  "reopenCondition": "A QKV mainloop or epilogue design that applies row scaling without per-output fragment conversion/multiply overhead, or a fused normalization primitive whose complete all-block boundary is strictly faster before S2 testing.",
+  "artifacts": {
+    "hypothesisA": "hypothesis-attention-folded-rms-reopen.md",
+    "hypothesisB": "hypothesis-attention-folded-rms-half2-scale.md",
+    "fp32ScaleS2Ncu": "ncu-attention-folded-rms-s2-fp32-scale",
+    "fp32ScaleS1Ncu": "ncu-attention-folded-rms-s1-local-fp32-scale",
+    "half2S1Ncu": "ncu-attention-folded-rms-s1-local",
+    "half2ShortS1Nsys": "nsys-attention-folded-rms-s1-short",
+    "smoke": "smoke-attention-folded-rms/candidate-vs-control.json"
+  }
+}

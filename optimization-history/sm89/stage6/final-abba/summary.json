@@ -1,0 +1,48 @@
+{
+  "stage": "stage6-exact-19x19",
+  "status": "accepted",
+  "artifact_time_utc": "2026-08-05T15:14:33.894278171Z",
+  "regime": "L1-EXACT19-B13-S2",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "compute_capability": "8.9",
+    "board": "19x19 exact",
+    "batch_size_per_server": 13,
+    "servers": 2,
+    "precision": "FP16"
+  },
+  "control": {
+    "requireMaxBoardSize": false,
+    "runs_nn_eval_per_sec": [2017.651078, 2055.297030, 2052.016403, 2047.053207],
+    "median_nn_eval_per_sec": 2049.534805,
+    "median_forward_nn_eval_per_sec": 2036.474054
+  },
+  "candidate": {
+    "requireMaxBoardSize": true,
+    "runs_nn_eval_per_sec": [2439.529998, 2391.281323, 2441.171717, 2443.286070],
+    "median_nn_eval_per_sec": 2440.3508575,
+    "median_forward_nn_eval_per_sec": 2415.4056605
+  },
+  "relative_change_percent": {
+    "nn_eval_per_sec": 19.068523,
+    "forward_nn_eval_per_sec": 18.607253
+  },
+  "order": ["A1", "B1", "B2", "A2", "R-B1", "R-A1", "R-A2", "R-B2"],
+  "binary_sha256": "d86bce1ade43dec01a3fd5709f84284866debe4bd729969951887e5ad8767df2",
+  "source_revision": "0f81e92960227d2653c9c3732a1a67336952194d",
+  "dirty_diff_sha256": "db999fafac0f55c711c63a254d4b8c505bbc831eda799966ea15530f94c7c2f8",
+  "model_sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+  "config_sha256": "5b3b6f4e63a31be9f5364c9ff8a9bd48375a232d69e7f6d809d8288e3e9b6d49",
+  "accuracy": {
+    "dataset_sha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "fp32_reference_sha256": "4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3",
+    "result": "passed all 8192 rows and all output heads",
+    "comparison": "../../replay-sm89-exact19-vs-fp32.json"
+  },
+  "profile": {
+    "nsys_report": "../../exact19-current.nsys-rep",
+    "critical_path": "../../exact19-current-critical-path.json",
+    "mask_zero_kernel_instances_in_timed_window": 0,
+    "attention_bias_kernel_instances_in_timed_window": 0
+  }
+}

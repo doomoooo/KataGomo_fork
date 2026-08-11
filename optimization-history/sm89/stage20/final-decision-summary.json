@@ -1,0 +1,94 @@
+{
+  "createdUtc": "2026-08-06T01:35:14Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090 (SM89)",
+    "board": "19x19 exact",
+    "batchSize": 13,
+    "serverThreads": 2,
+    "precision": "FP16",
+    "modelSha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "corpusSha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "fp32ReferenceSha256": "4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3"
+  },
+  "change": "mark each stream's long-lived 7,208,448-byte C768 trunk scratch allocation as persisting for exactly the trunk lifetime",
+  "testedBinarySha256": "f2ae0ab6e7cf28ba78bb475b52f5bebb59917a75800bb541930809bf907e17d8",
+  "implementation": {
+    "windowBytesPerStream": 7208448,
+    "requestedPersistingL2SetAsideBytes": 14416896,
+    "deviceMaxPersistingL2Bytes": 51904512,
+    "hitRatioPerStream": 1.0,
+    "installCallsPerForwardPerStream": 1,
+    "clearCallsPerForwardPerStream": 1,
+    "arithmeticChanged": false
+  },
+  "ncu": {
+    "kernel": "applyCScaleBiasNHWCSiluHalfKernel C768 grid(3,361,13)",
+    "controlMedianDurationUs": 13.728,
+    "candidateMedianDurationUs": 12.704,
+    "durationChangePercent": -7.459207459,
+    "controlMedianL2HitRatePercent": 51.952979,
+    "candidateMedianL2HitRatePercent": 82.636421,
+    "controlMedianDramBytes": 7218304,
+    "candidateMedianDramBytes": 2686976,
+    "dramBytesChangePercent": -62.775521785,
+    "controlMedianEvictLastSectors": 0,
+    "candidateMedianEvictLastSectors": 225264,
+    "report": "ncu-paired/summary.json"
+  },
+  "nsys": {
+    "kernelsPerForwardPerStream": 311,
+    "forwardGroupsPerStream": 30,
+    "controlKernelUnionMs": 255.150329,
+    "candidateKernelUnionMs": 251.585792,
+    "kernelUnionChangePercent": -1.39703406,
+    "controlSummedKernelMs": 393.068158,
+    "candidateSummedKernelMs": 388.758654,
+    "controlStreamSetAttributeCalls": 0,
+    "candidateStreamSetAttributeCalls": 212,
+    "memcpyAndMemsetUnchanged": true,
+    "newSynchronizations": 0,
+    "report": "nsys-paired/summary.json"
+  },
+  "locked2400WarmAbba500": {
+    "rawDirectories": [
+      "abba-500-locked2400-warm-r1",
+      "abba-500-locked2400-warm-r2",
+      "abba-500-locked2400-warm-r3"
+    ],
+    "controlSamples": 12,
+    "candidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 3082.6977005,
+    "candidateMedianNNEvalsPerSec": 3113.885787,
+    "improvementPercent": 1.011714074,
+    "forwardImprovementPercent": 0.918148376,
+    "reverseImprovementPercent": 1.154285497,
+    "actualWallImprovementPercent": 1.087812598,
+    "perRoundImprovementPercent": [1.063393606, 2.273801624, 0.358601314],
+    "positiveAdjacentPairs": 10,
+    "totalAdjacentPairs": 12,
+    "adjacentPairMedianImprovementPercent": 1.181736227,
+    "report": "abba-pooled-3r-summary.json"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage16": true,
+    "policyTop1VsFp32": 0.9969482421875,
+    "p0lossFp32Weighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915454626083374,
+    "policyProbabilityRmse": 0.00012512259127106518,
+    "valueOutcomeRmse": 0.002610212890431285,
+    "scoreMeanRmse": 0.002347242087125778,
+    "ownershipSigmoidRmse": 0.0002988878113683313,
+    "report": "replay-persisting-l2-trunk-vs-fp32.json"
+  },
+  "finalDefaultConfigSmoke": {
+    "clockMHz": 2400,
+    "iterations": 300,
+    "combinedNNEvalsPerSec": 3110.833659,
+    "actualWallPerForwardMs": 8.473792729,
+    "raw": "final-default-config-300.raw"
+  },
+  "decision": "accepted and enabled in bench-cuda-gpu0-4090-s2.cfg"
+}

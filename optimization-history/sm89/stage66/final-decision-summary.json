@@ -1,0 +1,36 @@
+{
+  "stage": 66,
+  "target": "RTX4090 exact19 B13 FP16 NHWC; retained default-off split-QKV path",
+  "strategy": "change native-half plain QKV from a three-stage to a two-stage CUTLASS mainloop",
+  "status": "mechanism-rejected-and-reverted",
+  "correctness": {
+    "smokeRows": 26,
+    "allTensorRmseVsStage3": 0.0,
+    "policyTop1VsStage3": 1.0
+  },
+  "ncu": {
+    "controlStage3MeanUs": 23.53,
+    "candidateStage2MeanUs": 25.26,
+    "changePercent": 7.35232,
+    "controlRegistersPerThread": 168,
+    "candidateRegistersPerThread": 206,
+    "controlDynamicSharedKiB": 49.15,
+    "candidateDynamicSharedKiB": 32.77,
+    "controlTheoreticalOccupancyPercent": 16.67,
+    "candidateTheoreticalOccupancyPercent": 16.67,
+    "controlAchievedOccupancyPercentApprox": 14.74,
+    "candidateAchievedOccupancyPercentApprox": 14.54,
+    "wavesPerSm": 1.30,
+    "spills": 0
+  },
+  "naturalS1Nsys": {
+    "controlLaunchToCompletionUsMean": 29.577935,
+    "candidateLaunchToCompletionUsMean": 33.288596,
+    "boundaryChangePercent": 12.5454,
+    "controlNNEvalsPerSecMean": 2565.378009,
+    "candidateNNEvalsPerSecMean": 2500.134130,
+    "throughputChangePercent": -2.54325
+  },
+  "mechanismConclusion": "reducing shared memory did not create a third resident CTA because ptxas raised registers from 168 to 206; prefetch depth fell while occupancy stayed fixed",
+  "decision": "Fully revert. Do not run S2, ABBA, 8192-row accuracy, or a new deployed full-graph checkpoint. Reuse Stage62 for deployed profiling and Stage65 variant 1 for the retained split-path control."
+}

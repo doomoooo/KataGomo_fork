@@ -1,0 +1,36 @@
+{
+  "createdUtc": "2026-08-05T15:49:35.965345496+00:00",
+  "regime": "L1-EXACT19-B13-S2",
+  "protocol": "same binary, 10 warmup and 300 timed forwards per server; forward A-B-B-A plus reverse B-A-A-B",
+  "binarySha256": "e5e6fbba0c4bf4b716440025642c76f34cd3272fde9b997c583089d8cb728a58",
+  "aotObjectSha256": "476df761d874c62f48916f2cb24780ff9d2b478b37396932eb35b744eccf185d",
+  "testedConfigSha256": "5b3b6f4e63a31be9f5364c9ff8a9bd48375a232d69e7f6d809d8288e3e9b6d49",
+  "controlOverride": "cudaUseFlashAttentionSm89=false",
+  "candidateOverride": "cudaUseFlashAttentionSm89=true",
+  "forward": {
+    "order": ["A1", "B1", "B2", "A2"],
+    "controlNNEvalsPerSec": [2436.603404, 2451.838363],
+    "candidateNNEvalsPerSec": [2649.548914, 2722.490429],
+    "controlMedianNNEvalsPerSec": 2444.2208835,
+    "candidateMedianNNEvalsPerSec": 2686.0196715,
+    "improvementPercent": 9.892673
+  },
+  "reverse": {
+    "order": ["R-B1", "R-A1", "R-A2", "R-B2"],
+    "controlNNEvalsPerSec": [2403.562678, 2443.991259],
+    "candidateNNEvalsPerSec": [2715.575194, 2644.651123],
+    "controlMedianNNEvalsPerSec": 2423.7769685,
+    "candidateMedianNNEvalsPerSec": 2680.1131585,
+    "improvementPercent": 10.575898
+  },
+  "combined": {
+    "controlNNEvalsPerSec": [2436.603404, 2451.838363, 2403.562678, 2443.991259],
+    "candidateNNEvalsPerSec": [2649.548914, 2722.490429, 2715.575194, 2644.651123],
+    "controlMedianNNEvalsPerSec": 2440.2973315,
+    "candidateMedianNNEvalsPerSec": 2682.562054,
+    "improvementPercent": 9.927672,
+    "controlRangeNNEvalsPerSec": [2403.562678, 2451.838363],
+    "candidateRangeNNEvalsPerSec": [2644.651123, 2722.490429]
+  },
+  "decision": "accepted"
+}

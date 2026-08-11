@@ -1,0 +1,144 @@
+{
+  "forward": {
+    "control": {
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.02875185,
+          8.026991844
+        ],
+        "perServerNNEvalsPerSec": [
+          1619.180695,
+          1619.535718
+        ],
+        "combinedPerBatchMs": 8.02875185,
+        "combinedNNEvalsPerSec": 3238.716413,
+        "actualWallSeconds": 0.288610663,
+        "actualWallPerForwardMs": 9.620355433
+      },
+      "streams": [
+        114,
+        113
+      ],
+      "kernelLaunches": 19596,
+      "spanMs": 263.008142,
+      "busyUnionMs": 259.491958,
+      "busyPercent": 98.66308929706062
+    },
+    "candidate": {
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.306128025,
+          8.30739212
+        ],
+        "perServerNNEvalsPerSec": [
+          1565.109514,
+          1564.871359
+        ],
+        "combinedPerBatchMs": 8.30739212,
+        "combinedNNEvalsPerSec": 3129.980874,
+        "actualWallSeconds": 0.289138218,
+        "actualWallPerForwardMs": 9.6379406
+      },
+      "streams": [
+        114,
+        107
+      ],
+      "kernelLaunches": 19084,
+      "spanMs": 276.125499,
+      "busyUnionMs": 269.805749,
+      "busyPercent": 97.71127620488248
+    },
+    "throughputChangePercent": -3.357365237769594,
+    "busyUnionChangePercent": 3.97460910908074,
+    "launchChange": -512
+  },
+  "reverse": {
+    "control": {
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.104320049,
+          8.097936153
+        ],
+        "perServerNNEvalsPerSec": [
+          1604.082751,
+          1605.347307
+        ],
+        "combinedPerBatchMs": 8.104320049,
+        "combinedNNEvalsPerSec": 3209.430059,
+        "actualWallSeconds": 0.280793644,
+        "actualWallPerForwardMs": 9.359788133
+      },
+      "streams": [
+        114,
+        99
+      ],
+      "kernelLaunches": 19596,
+      "spanMs": 263.580103,
+      "busyUnionMs": 260.365751,
+      "busyPercent": 98.7805027908347
+    },
+    "candidate": {
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.294575691,
+          8.294480324
+        ],
+        "perServerNNEvalsPerSec": [
+          1567.289333,
+          1567.307353
+        ],
+        "combinedPerBatchMs": 8.294575691,
+        "combinedNNEvalsPerSec": 3134.596686,
+        "actualWallSeconds": 0.285874167,
+        "actualWallPerForwardMs": 9.5291389
+      },
+      "streams": [
+        114,
+        99
+      ],
+      "kernelLaunches": 19084,
+      "spanMs": 267.38141,
+      "busyUnionMs": 265.663735,
+      "busyPercent": 99.35759370855288
+    },
+    "throughputChangePercent": -2.331671718165329,
+    "busyUnionChangePercent": 2.0348236969155,
+    "launchChange": -512
+  }
+}

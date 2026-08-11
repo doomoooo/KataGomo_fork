@@ -1,0 +1,42 @@
+{
+  "stage": 41,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "CUTLASS dual-FFN operand-A cp.async cache policy Global to Always",
+  "decision": "reject-and-revert",
+  "preImplementationNsys": {
+    "sourceStage": 40,
+    "iterations": 20,
+    "launches": 2178,
+    "averageUs": 43.233,
+    "totalMs": 94.161,
+    "hotspotRankBySummedKernelTime": 1
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "replaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncu": {
+    "controlDurationUs": [41.38, 41.25, 41.28],
+    "controlMedianDurationUs": 41.28,
+    "candidateDurationUs": [42.78, 42.59, 42.62],
+    "candidateMedianDurationUs": 42.62,
+    "medianDeltaPct": 3.2461,
+    "controlL1HitPct": [0.0, 0.0, 0.0],
+    "candidateL1HitPctRange": [2.02, 2.24],
+    "controlL2ThroughputPctRange": [72.72, 73.77],
+    "candidateL2ThroughputPctRange": [69.47, 69.87],
+    "controlNoEligiblePctRange": [78.28, 78.57],
+    "candidateNoEligiblePctRange": [79.03, 79.14],
+    "registersPerThread": 168,
+    "dynamicSharedMemoryKiB": 49.15,
+    "spills": 0
+  },
+  "nsysComparisonRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "Caching A at all levels creates only about 2% L1 hits. The reduced L2 throughput does not offset the extra L1 path cost and worsened scheduler eligibility.",
+  "controlBinarySha256": "6a89e1138c9622a759e632c14cccb41e2e7297a13e7b7629b127d98c42520e13",
+  "candidateBinarySha256": "4aceac24780884e5d711ef04abe0335f0127cb8f89aebada8c04c5fd23e67338",
+  "sourceState": "pristine CUTLASS operand-A Global cache policy restored; accepted binary rebuilt"
+}

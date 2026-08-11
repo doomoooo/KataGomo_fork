@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-05T17:03:54+00:00",
+  "reference": "/workspace/trainingdata/accuracy/replay-fixed-fp32-full19.krnn",
+  "candidate": "/workspace/results/4090/stage9/replay-sm89-linear2-gemm-full19.krnn",
+  "referenceRevision": "847e78a44d402df200eabbbe0506776a45607c29-dirty-cuda",
+  "candidateRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "corpus": "/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.npz",
+  "numRows": 8192,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915454626083374,
+    "p0lossReferenceUnweighted": 1.5915189981460571,
+    "p0lossCandidateUnweighted": 1.5915367603302002,
+    "top1VsReference": 0.9969482421875,
+    "optimisticTop1VsReference": 0.9962158203125,
+    "top1VsTarget": 0.5673828125,
+    "optimisticTop1VsTarget": 0.0311279296875,
+    "probabilityRmse": 0.00012512259127106518,
+    "optimisticProbabilityRmse": 0.00014916338841430843,
+    "totalVariation": 0.002104985062032938,
+    "jsd": 5.573187081608921e-06
+  },
+  "value": {
+    "outcomeRmse": 0.002610212890431285,
+    "rawLogitsRmse": 0.010911837220191956
+  },
+  "score": {
+    "meanRmse": 0.002347242087125778,
+    "all6Rmse": 0.008307368494570255
+  },
+  "ownership": {
+    "rawLogitsRmse": 0.003750527510419488,
+    "sigmoidRmse": 0.0002988878113683313
+  },
+  "maxPolicyAbsError": {
+    "row": 1553,
+    "move": 308,
+    "value": 0.010844558477401733
+  }
+}

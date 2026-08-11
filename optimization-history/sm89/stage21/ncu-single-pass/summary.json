@@ -1,0 +1,28 @@
+{
+  "regime": "L2400-EXACT19-B13-S2-NCU-REPLAY",
+  "protocol": "same-binary control/candidate, cache-control none, split metric groups; duration and DRAM groups are one pass, L2 group is four passes",
+  "c384": {
+    "shape": "grid(1,361,13), block(384,1,1)",
+    "controlMedianDurationUs": 6.62,
+    "candidateMedianDurationUs": 6.59,
+    "durationChangePercent": -0.453172205,
+    "controlMedianL2HitRatePercent": 52.51,
+    "candidateMedianL2HitRatePercent": 97.99,
+    "controlEvictLastSectors": 0,
+    "candidateEvictLastSectors": 112632
+  },
+  "c768Guard": {
+    "shape": "grid(3,361,13), block(256,1,1)",
+    "controlMedianDurationUs": 11.36,
+    "candidateMedianDurationUs": 11.30,
+    "controlMedianL2HitRatePercent": 82.50,
+    "candidateMedianL2HitRatePercent": 82.97,
+    "controlEvictLastSectors": 225264,
+    "candidateEvictLastSectors": 225264
+  },
+  "contaminatedReport": {
+    "path": "../ncu-paired/candidate.ncu-rep",
+    "reason": "all samples completed, then the application exited 6 during teardown after 12 kernels x 4 replay passes",
+    "usedForDecision": false
+  }
+}

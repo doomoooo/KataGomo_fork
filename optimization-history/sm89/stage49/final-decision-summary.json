@@ -1,0 +1,45 @@
+{
+  "stage": "49",
+  "scope": "RTX 4090, exact 19x19, B13, S2",
+  "hypothesis": "Fold FFN RMS gamma into both dual-GEMM weights and apply one inv-RMS scalar per token in the SwiGLU epilogue.",
+  "decision": "rejected",
+  "candidateBinary": "/workspace/results/4090/stage49/binaries/ffn-folded-rms-katago",
+  "candidateSha256": "3eab181247a3311095e23fda24c3ed9ad3949e88fe5409def9f8e5cec6362fa2",
+  "smoke": {
+    "rows": 26,
+    "policyTop1VsControl": 1.0,
+    "policyTotalVariation": 0.0022955513559281826,
+    "valueOutcomeRmse": 0.001195841352455318
+  },
+  "ncuBoundaryMedianUs": {
+    "controlRmsNorm": 4.576,
+    "controlDualGemm": 41.376,
+    "controlTotal": 45.952,
+    "candidateInvRms": 2.88,
+    "candidateDualGemm": 43.744,
+    "candidateTotal": 46.624,
+    "candidatePct": 1.4623955431754896
+  },
+  "nsys": {
+    "forward": {
+      "controlThroughput": 3200.4913,
+      "candidateThroughput": 3153.106079,
+      "throughputPct": -1.4805608438929307,
+      "ffnBoundaryPct": 1.683604470596678
+    },
+    "reverse": {
+      "controlThroughput": 3173.55716,
+      "candidateThroughput": 3153.885404,
+      "throughputPct": -0.6198645560239302,
+      "ffnBoundaryPct": 1.945568812279208
+    }
+  },
+  "rollback": {
+    "sourceRestored": true,
+    "cutlassSubmoduleClean": true,
+    "rollbackReplayByteIdenticalToFrozenControl": true
+  },
+  "longAbbaRun": false,
+  "full8192AccuracyRun": false,
+  "nextCheckpoint": "/workspace/results/4090/stage49/post-ffn-reject-checkpoint-summary.json"
+}

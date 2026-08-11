@@ -1,0 +1,39 @@
+{
+  "order": [
+    "A",
+    "B",
+    "B",
+    "A",
+    "B",
+    "A",
+    "A",
+    "B"
+  ],
+  "A": "cudaUseFusedQKRoPEHalf2Sm120=false",
+  "B": "cudaUseFusedQKRoPEHalf2Sm120=true",
+  "iterations": 400,
+  "warmup": 25,
+  "control_nneval_per_sec": [
+    3871.061469,
+    3885.370842,
+    3863.050674,
+    3891.73549
+  ],
+  "candidate_nneval_per_sec": [
+    3925.187132,
+    3913.050837,
+    3886.755571,
+    3908.519027
+  ],
+  "control_mean_nneval_per_sec": 3877.80461875,
+  "candidate_mean_nneval_per_sec": 3908.37814175,
+  "candidate_mean_delta_percent": 0.7884235026223596,
+  "adjacent_candidate_delta_percent": [
+    1.3982124394935402,
+    0.7124157802592679,
+    0.61363153115086,
+    0.4312609899394637
+  ],
+  "positive_adjacent_comparisons": 4,
+  "advance": true
+}

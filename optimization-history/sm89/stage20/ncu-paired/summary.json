@@ -1,0 +1,32 @@
+{
+  "regime": "L2400-EXACT19-B13-S2-NCU-REPLAY",
+  "kernel": "applyCScaleBiasNHWCSiluHalfKernel",
+  "shape": {
+    "grid": [3, 361, 13],
+    "block": [256, 1, 1],
+    "channels": 768
+  },
+  "protocol": "paired same-binary runs, cache-control none, skip 500, five matching C768 samples from each count-8 capture",
+  "controlMedian": {
+    "durationUs": 13.728,
+    "l2HitRatePercent": 51.952979,
+    "dramBytes": 7218304,
+    "evictLastSectors": 0
+  },
+  "candidateMedian": {
+    "durationUs": 12.704,
+    "l2HitRatePercent": 82.636421,
+    "dramBytes": 2686976,
+    "evictLastSectors": 225264
+  },
+  "change": {
+    "durationPercent": -7.459207459,
+    "l2HitRatePercentagePoints": 30.683442,
+    "dramBytesPercent": -62.775521785
+  },
+  "reports": {
+    "control": "control.ncu-rep",
+    "candidate": "candidate.ncu-rep"
+  },
+  "note": "NCU replay proves the cache mechanism; concurrent Nsys and locked ABBA decide complete-graph value."
+}

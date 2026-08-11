@@ -1,0 +1,73 @@
+{
+   "adjacentPairs" : {
+      "maxImprovementPercent" : 30.25872680396,
+      "medianImprovementPercent" : 28.5637548316773,
+      "minImprovementPercent" : 27.0675064663877,
+      "positivePairs" : 4,
+      "samples" : [
+         {
+            "candidateLabel" : "B1",
+            "candidateNNEvalsPerSec" : 3128.658054,
+            "controlLabel" : "A1",
+            "controlNNEvalsPerSec" : 2432.576515,
+            "improvementPercent" : 28.6149905134639,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "B2",
+            "candidateNNEvalsPerSec" : 3125.192313,
+            "controlLabel" : "A2",
+            "controlNNEvalsPerSec" : 2431.819354,
+            "improvementPercent" : 28.5125191498908,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B1",
+            "candidateNNEvalsPerSec" : 3165.913499,
+            "controlLabel" : "R-A1",
+            "controlNNEvalsPerSec" : 2430.480918,
+            "improvementPercent" : 30.25872680396,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B2",
+            "candidateNNEvalsPerSec" : 3162.364592,
+            "controlLabel" : "R-A2",
+            "controlNNEvalsPerSec" : 2488.727984,
+            "improvementPercent" : 27.0675064663877,
+            "round" : 1
+         }
+      ],
+      "totalPairs" : 4
+   },
+   "direction" : {
+      "forwardCandidateMedianNNEvalsPerSec" : 3126.9251835,
+      "forwardControlMedianNNEvalsPerSec" : 2432.1979345,
+      "forwardImprovementPercent" : 28.5637628066985,
+      "reverseCandidateMedianNNEvalsPerSec" : 3164.1390455,
+      "reverseControlMedianNNEvalsPerSec" : 2459.604451,
+      "reverseImprovementPercent" : 28.6442234324937
+   },
+   "pooled" : {
+      "actualWallImprovementPercent" : 28.8564351449155,
+      "candidateMedianActualWallPerForwardMs" : 8.33172387,
+      "candidateMedianNNEvalsPerSec" : 3145.511323,
+      "candidateSamples" : 4,
+      "controlMedianActualWallPerForwardMs" : 10.735962365,
+      "controlMedianNNEvalsPerSec" : 2432.1979345,
+      "controlSamples" : 4,
+      "improvementPercent" : 29.3279333224432
+   },
+   "rawDirectories" : [
+      "results/4090/tensorrt-baseline/cross-backend-abba-r1"
+   ],
+   "regime" : "L1K-EXACT19-B13-S2",
+   "rounds" : [
+      {
+         "candidateMedianNNEvalsPerSec" : 3145.511323,
+         "controlMedianNNEvalsPerSec" : 2432.1979345,
+         "improvementPercent" : 29.3279333224432,
+         "round" : 1
+      }
+   ]
+}

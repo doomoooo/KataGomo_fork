@@ -1,0 +1,942 @@
+{
+  "traces": [
+    {
+      "file": "outer-post-01-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.370746,
+          "duration_median_us": 17.824,
+          "duration_sum_us": 10685.373,
+          "active_span_us": 10834.59
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.364478,
+          "duration_median_us": 17.4085,
+          "duration_sum_us": 10682.239,
+          "active_span_us": 10881.567
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21367.612,
+      "two_stream_union_us": 10885.759,
+      "two_stream_completion_span_us": 10887.423,
+      "overlap_us": 10481.853,
+      "overlap_pair_count": 986,
+      "overlap_fraction_of_union": 0.9628959266873353,
+      "overlap_fraction_of_kernel_work": 0.4905486396888899,
+      "union_per_iteration_us": 21.771518,
+      "completion_span_per_iteration_us": 21.774846
+    },
+    {
+      "file": "outer-post-02-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.370172,
+          "duration_median_us": 17.5205,
+          "duration_sum_us": 10685.086,
+          "active_span_us": 10832.99
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.159862,
+          "duration_median_us": 17.2485,
+          "duration_sum_us": 10579.931,
+          "active_span_us": 10782.109
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21265.017,
+      "two_stream_union_us": 10831.102,
+      "two_stream_completion_span_us": 10832.99,
+      "overlap_us": 10433.915,
+      "overlap_pair_count": 990,
+      "overlap_fraction_of_union": 0.9633290315242161,
+      "overlap_fraction_of_kernel_work": 0.49066102321949706,
+      "union_per_iteration_us": 21.662204000000003,
+      "completion_span_per_iteration_us": 21.66598
+    },
+    {
+      "file": "outer-post-03-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.482490000000002,
+          "duration_median_us": 17.168,
+          "duration_sum_us": 10741.245,
+          "active_span_us": 10927.582
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 20.90181,
+          "duration_median_us": 16.5285,
+          "duration_sum_us": 10450.905,
+          "active_span_us": 10612.795
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21192.15,
+      "two_stream_union_us": 10922.27,
+      "two_stream_completion_span_us": 10927.582,
+      "overlap_us": 10269.88,
+      "overlap_pair_count": 975,
+      "overlap_fraction_of_union": 0.9402697424619607,
+      "overlap_fraction_of_kernel_work": 0.4846077439051724,
+      "union_per_iteration_us": 21.844540000000002,
+      "completion_span_per_iteration_us": 21.855164000000002
+    },
+    {
+      "file": "outer-post-04-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.203702,
+          "duration_median_us": 16.288,
+          "duration_sum_us": 10601.851,
+          "active_span_us": 10813.341
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.325498,
+          "duration_median_us": 16.736,
+          "duration_sum_us": 10662.749,
+          "active_span_us": 10799.133
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21264.6,
+      "two_stream_union_us": 10812.093,
+      "two_stream_completion_span_us": 10813.341,
+      "overlap_us": 10452.507,
+      "overlap_pair_count": 987,
+      "overlap_fraction_of_union": 0.9667422394535452,
+      "overlap_fraction_of_kernel_work": 0.4915449620496036,
+      "union_per_iteration_us": 21.624186,
+      "completion_span_per_iteration_us": 21.626682000000002
+    },
+    {
+      "file": "outer-pre-01-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.633878,
+          "duration_median_us": 14.624,
+          "duration_sum_us": 10816.939,
+          "active_span_us": 10993.069
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.91222,
+          "duration_median_us": 14.512,
+          "duration_sum_us": 10956.11,
+          "active_span_us": 11129.103
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 21773.049,
+      "two_stream_union_us": 11146.447,
+      "two_stream_completion_span_us": 11148.719,
+      "overlap_us": 10626.602,
+      "overlap_pair_count": 987,
+      "overlap_fraction_of_union": 0.9533622687121734,
+      "overlap_fraction_of_kernel_work": 0.4880621910142213,
+      "union_per_iteration_us": 22.292894,
+      "completion_span_per_iteration_us": 22.297438
+    },
+    {
+      "file": "outer-pre-02-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.65827,
+          "duration_median_us": 14.4485,
+          "duration_sum_us": 10829.135,
+          "active_span_us": 11013.556
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 22.672686000000002,
+          "duration_median_us": 14.1605,
+          "duration_sum_us": 11336.343,
+          "active_span_us": 11500.123
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 22165.478,
+      "two_stream_union_us": 11498.139,
+      "two_stream_completion_span_us": 11505.595,
+      "overlap_us": 10667.339,
+      "overlap_pair_count": 963,
+      "overlap_fraction_of_union": 0.9277448289675398,
+      "overlap_fraction_of_kernel_work": 0.48125914541522635,
+      "union_per_iteration_us": 22.996277999999997,
+      "completion_span_per_iteration_us": 23.01119
+    },
+    {
+      "file": "outer-pre-03-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.511740000000003,
+          "duration_median_us": 13.9205,
+          "duration_sum_us": 10755.87,
+          "active_span_us": 10951.681
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.589502,
+          "duration_median_us": 14.048,
+          "duration_sum_us": 10794.751,
+          "active_span_us": 10948.001
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 21550.621,
+      "two_stream_union_us": 10953.185,
+      "two_stream_completion_span_us": 10953.473,
+      "overlap_us": 10597.436,
+      "overlap_pair_count": 991,
+      "overlap_fraction_of_union": 0.9675209539508371,
+      "overlap_fraction_of_kernel_work": 0.4917462007243318,
+      "union_per_iteration_us": 21.90637,
+      "completion_span_per_iteration_us": 21.906946
+    },
+    {
+      "file": "outer-pre-04-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 22.068736,
+          "duration_median_us": 14.8805,
+          "duration_sum_us": 11034.368,
+          "active_span_us": 11228.644
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 22.481932,
+          "duration_median_us": 14.704,
+          "duration_sum_us": 11240.966,
+          "active_span_us": 11394.886
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 22275.334,
+      "two_stream_union_us": 11395.11,
+      "two_stream_completion_span_us": 11400.326,
+      "overlap_us": 10880.224,
+      "overlap_pair_count": 973,
+      "overlap_fraction_of_union": 0.95481517949366,
+      "overlap_fraction_of_kernel_work": 0.48844268732401497,
+      "union_per_iteration_us": 22.79022,
+      "completion_span_per_iteration_us": 22.800652
+    },
+    {
+      "file": "outproj-01-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.341706,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5670.853,
+          "active_span_us": 5840.294
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.339522,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5669.761,
+          "active_span_us": 5840.07
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11340.614,
+      "two_stream_union_us": 5845.126,
+      "two_stream_completion_span_us": 5845.126,
+      "overlap_us": 5495.488,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9401829832239715,
+      "overlap_fraction_of_kernel_work": 0.48458469708959323,
+      "union_per_iteration_us": 11.690252000000001,
+      "completion_span_per_iteration_us": 11.690252000000001
+    },
+    {
+      "file": "outproj-02-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.299402,
+          "duration_median_us": 11.296,
+          "duration_sum_us": 5649.701,
+          "active_span_us": 5820.294
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.298438,
+          "duration_median_us": 11.296,
+          "duration_sum_us": 5649.219,
+          "active_span_us": 5819.942
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11298.92,
+      "two_stream_union_us": 5825.062,
+      "two_stream_completion_span_us": 5825.062,
+      "overlap_us": 5473.858,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9397081095445851,
+      "overlap_fraction_of_kernel_work": 0.48445851461909634,
+      "union_per_iteration_us": 11.650124,
+      "completion_span_per_iteration_us": 11.650124
+    },
+    {
+      "file": "outproj-03-shared.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.283524,
+          "duration_median_us": 11.296,
+          "duration_sum_us": 5641.762,
+          "active_span_us": 5826.085
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.340484,
+          "duration_median_us": 11.328,
+          "duration_sum_us": 5670.242,
+          "active_span_us": 5825.925
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11312.004,
+      "two_stream_union_us": 5830.949,
+      "two_stream_completion_span_us": 5830.949,
+      "overlap_us": 5481.055,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9399936442592792,
+      "overlap_fraction_of_kernel_work": 0.484534393728998,
+      "union_per_iteration_us": 11.661897999999999,
+      "completion_span_per_iteration_us": 11.661897999999999
+    },
+    {
+      "file": "outproj-04-private.sqlite",
+      "gpu": {
+        "device_id": 2,
+        "name": "NVIDIA GeForce RTX 5090 D",
+        "chip": "GB202",
+        "compute_capability": "12.0",
+        "l2_bytes": 100663296,
+        "total_memory_bytes": 33667612672,
+        "sm_count": 170,
+        "pci_bus": "0000:21:00.0",
+        "cuda_device": 2
+      },
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.350406000000001,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5675.203,
+          "active_span_us": 5836.838
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.32423,
+          "duration_median_us": 11.328,
+          "duration_sum_us": 5662.115,
+          "active_span_us": 5836.582
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11337.318,
+      "two_stream_union_us": 5842.022,
+      "two_stream_completion_span_us": 5842.022,
+      "overlap_us": 5495.296,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.940649658628468,
+      "overlap_fraction_of_kernel_work": 0.48470864096781974,
+      "union_per_iteration_us": 11.684044,
+      "completion_span_per_iteration_us": 11.684044
+    }
+  ],
+  "aggregate": {
+    "outproj": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 11.687148,
+          "completion_span_per_iteration_us_mean": 11.687148,
+          "overlap_fraction_of_union_mean": 0.9404163209262197,
+          "overlap_fraction_of_kernel_work_mean": 0.48464666902870646,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 11.656011,
+          "completion_span_per_iteration_us_mean": 11.656011,
+          "overlap_fraction_of_union_mean": 0.9398508769019321,
+          "overlap_fraction_of_kernel_work_mean": 0.4844964541740472,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": -0.2664208581939831,
+        "completion_span_per_iteration": -0.2664208581939831,
+        "overlap_fraction_of_union": -0.06012698968587138
+      },
+      "signature_equal": true
+    },
+    "outer-pre": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 22.541557,
+          "completion_span_per_iteration_us_mean": 22.549045,
+          "overlap_fraction_of_union_mean": 0.9540887241029168,
+          "overlap_fraction_of_kernel_work_mean": 0.48825243916911815,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 22.451324,
+          "completion_span_per_iteration_us_mean": 22.459068000000002,
+          "overlap_fraction_of_union_mean": 0.9476328914591885,
+          "overlap_fraction_of_kernel_work_mean": 0.48650267306977907,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": -0.40029621733761456,
+        "completion_span_per_iteration": -0.3990279854423906,
+        "overlap_fraction_of_union": -0.6766490873056252
+      },
+      "signature_equal": true
+    },
+    "outer-post": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 21.697852,
+          "completion_span_per_iteration_us_mean": 21.700764,
+          "overlap_fraction_of_union_mean": 0.9648190830704402,
+          "overlap_fraction_of_kernel_work_mean": 0.49104680086924674,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                256,
+                1,
+                1
+              ],
+              "registers_per_thread": 154,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 73728
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 21.753372000000002,
+          "completion_span_per_iteration_us_mean": 21.760572000000003,
+          "overlap_fraction_of_union_mean": 0.9517993869930884,
+          "overlap_fraction_of_kernel_work_mean": 0.48763438356233474,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                256,
+                1,
+                1
+              ],
+              "registers_per_thread": 154,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 73728
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": 0.2558778629331737,
+        "completion_span_per_iteration": 0.27560319996109417,
+        "overlap_fraction_of_union": -1.3494442953924435
+      },
+      "signature_equal": true
+    }
+  }
+}

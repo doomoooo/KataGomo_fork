@@ -1,0 +1,810 @@
+{
+  "traces": [
+    {
+      "file": "outer-post-01-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.41019,
+          "duration_median_us": 17.648,
+          "duration_sum_us": 10705.095,
+          "active_span_us": 10852.94
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.550674,
+          "duration_median_us": 17.248,
+          "duration_sum_us": 10775.337,
+          "active_span_us": 10976.013
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21480.432,
+      "two_stream_union_us": 10979.085,
+      "two_stream_completion_span_us": 10980.973,
+      "overlap_us": 10501.347,
+      "overlap_pair_count": 989,
+      "overlap_fraction_of_union": 0.9564865378125773,
+      "overlap_fraction_of_kernel_work": 0.488879692922377,
+      "union_per_iteration_us": 21.95817,
+      "completion_span_per_iteration_us": 21.961946
+    },
+    {
+      "file": "outer-post-02-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.229744,
+          "duration_median_us": 17.009,
+          "duration_sum_us": 10614.872,
+          "active_span_us": 10765.146
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 20.488934,
+          "duration_median_us": 16.6725,
+          "duration_sum_us": 10244.467,
+          "active_span_us": 10444.15
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 20859.339,
+      "two_stream_union_us": 10759.994,
+      "two_stream_completion_span_us": 10765.146,
+      "overlap_us": 10099.345,
+      "overlap_pair_count": 972,
+      "overlap_fraction_of_union": 0.9386013598148847,
+      "overlap_fraction_of_kernel_work": 0.48416419139647715,
+      "union_per_iteration_us": 21.519988,
+      "completion_span_per_iteration_us": 21.530292000000003
+    },
+    {
+      "file": "outer-post-03-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.35538,
+          "duration_median_us": 17.12,
+          "duration_sum_us": 10677.69,
+          "active_span_us": 10871.387
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.37746,
+          "duration_median_us": 17.12,
+          "duration_sum_us": 10688.73,
+          "active_span_us": 10844.123
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21366.42,
+      "two_stream_union_us": 10869.563,
+      "two_stream_completion_span_us": 10871.387,
+      "overlap_us": 10496.857,
+      "overlap_pair_count": 982,
+      "overlap_fraction_of_union": 0.9657110410050523,
+      "overlap_fraction_of_kernel_work": 0.49127823004508947,
+      "union_per_iteration_us": 21.739126,
+      "completion_span_per_iteration_us": 21.742774
+    },
+    {
+      "file": "outer-post-04-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.716047999999997,
+          "duration_median_us": 16.96,
+          "duration_sum_us": 10858.024,
+          "active_span_us": 11015.753
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.198666,
+          "duration_median_us": 16.864,
+          "duration_sum_us": 10599.333,
+          "active_span_us": 10789.83
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            256,
+            1,
+            1
+          ],
+          "registers_per_thread": 154,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 73728
+        }
+      ],
+      "combined_kernel_work_us": 21457.357,
+      "two_stream_union_us": 11011.753,
+      "two_stream_completion_span_us": 11015.753,
+      "overlap_us": 10445.604,
+      "overlap_pair_count": 979,
+      "overlap_fraction_of_union": 0.9485868417135764,
+      "overlap_fraction_of_kernel_work": 0.486807578398402,
+      "union_per_iteration_us": 22.023506,
+      "completion_span_per_iteration_us": 22.031506
+    },
+    {
+      "file": "outer-pre-01-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.192798,
+          "duration_median_us": 14.5605,
+          "duration_sum_us": 10596.399,
+          "active_span_us": 10787.122
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.687656,
+          "duration_median_us": 14.912,
+          "duration_sum_us": 10843.828,
+          "active_span_us": 11001.525
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 21440.227,
+      "two_stream_union_us": 11001.621,
+      "two_stream_completion_span_us": 11006.549,
+      "overlap_us": 10438.606,
+      "overlap_pair_count": 977,
+      "overlap_fraction_of_union": 0.9488243596102792,
+      "overlap_fraction_of_kernel_work": 0.48687012502246363,
+      "union_per_iteration_us": 22.003241999999997,
+      "completion_span_per_iteration_us": 22.013098000000003
+    },
+    {
+      "file": "outer-pre-02-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.283868,
+          "duration_median_us": 14.24,
+          "duration_sum_us": 10641.934,
+          "active_span_us": 10828.848
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 20.43201,
+          "duration_median_us": 14.3685,
+          "duration_sum_us": 10216.005,
+          "active_span_us": 10376.618
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 20857.939,
+      "two_stream_union_us": 10822.192,
+      "two_stream_completion_span_us": 10828.848,
+      "overlap_us": 10035.747,
+      "overlap_pair_count": 965,
+      "overlap_fraction_of_union": 0.9273303412099878,
+      "overlap_fraction_of_kernel_work": 0.48114758605823904,
+      "union_per_iteration_us": 21.644384,
+      "completion_span_per_iteration_us": 21.657696
+    },
+    {
+      "file": "outer-pre-03-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.328662,
+          "duration_median_us": 14.592,
+          "duration_sum_us": 10664.331,
+          "active_span_us": 10827.246
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.577754000000002,
+          "duration_median_us": 14.272,
+          "duration_sum_us": 10788.877,
+          "active_span_us": 10974.48
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 21453.208,
+      "two_stream_union_us": 10975.504,
+      "two_stream_completion_span_us": 10979.76,
+      "overlap_us": 10477.704,
+      "overlap_pair_count": 978,
+      "overlap_fraction_of_union": 0.9546444518629851,
+      "overlap_fraction_of_kernel_work": 0.4883980055570244,
+      "union_per_iteration_us": 21.951008,
+      "completion_span_per_iteration_us": 21.95952
+    },
+    {
+      "file": "outer-pre-04-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.612184000000003,
+          "duration_median_us": 14.832,
+          "duration_sum_us": 10806.092,
+          "active_span_us": 11000.591
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 21.701716,
+          "duration_median_us": 14.768,
+          "duration_sum_us": 10850.858,
+          "active_span_us": 11004.911
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 21656.95,
+      "two_stream_union_us": 11008.719,
+      "two_stream_completion_span_us": 11010.191,
+      "overlap_us": 10648.231,
+      "overlap_pair_count": 986,
+      "overlap_fraction_of_union": 0.9672543190538336,
+      "overlap_fraction_of_kernel_work": 0.49167731374916596,
+      "union_per_iteration_us": 22.017438,
+      "completion_span_per_iteration_us": 22.020382
+    },
+    {
+      "file": "outproj-01-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.353188,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5676.594,
+          "active_span_us": 5856.084
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.384804,
+          "duration_median_us": 11.392,
+          "duration_sum_us": 5692.402,
+          "active_span_us": 5855.508
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11368.996,
+      "two_stream_union_us": 5861.236,
+      "two_stream_completion_span_us": 5861.236,
+      "overlap_us": 5507.76,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9396925836120572,
+      "overlap_fraction_of_kernel_work": 0.4844543880567818,
+      "union_per_iteration_us": 11.722472,
+      "completion_span_per_iteration_us": 11.722472
+    },
+    {
+      "file": "outproj-02-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.297056000000001,
+          "duration_median_us": 11.296,
+          "duration_sum_us": 5648.528,
+          "active_span_us": 5827.538
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.328802,
+          "duration_median_us": 11.328,
+          "duration_sum_us": 5664.401,
+          "active_span_us": 5827.73
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11312.929,
+      "two_stream_union_us": 5832.658,
+      "two_stream_completion_span_us": 5832.658,
+      "overlap_us": 5480.271,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9395838055308574,
+      "overlap_fraction_of_kernel_work": 0.48442547460520613,
+      "union_per_iteration_us": 11.665316,
+      "completion_span_per_iteration_us": 11.665316
+    },
+    {
+      "file": "outproj-03-shared.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.345494,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5672.747,
+          "active_span_us": 5828.657
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.290398,
+          "duration_median_us": 11.296,
+          "duration_sum_us": 5645.199,
+          "active_span_us": 5827.953
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11317.946,
+      "two_stream_union_us": 5833.393,
+      "two_stream_completion_span_us": 5833.393,
+      "overlap_us": 5484.553,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9401994688168618,
+      "overlap_fraction_of_kernel_work": 0.4845890764985095,
+      "union_per_iteration_us": 11.666786,
+      "completion_span_per_iteration_us": 11.666786
+    },
+    {
+      "file": "outproj-04-private.sqlite",
+      "captured_kernel_count": 1200,
+      "timed_kernel_count": 1000,
+      "stream_ids": [
+        15,
+        16
+      ],
+      "streams": {
+        "15": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.306324,
+          "duration_median_us": 11.297,
+          "duration_sum_us": 5653.162,
+          "active_span_us": 5840.048
+        },
+        "16": {
+          "kernel_count": 500,
+          "duration_mean_us": 11.368343999999999,
+          "duration_median_us": 11.36,
+          "duration_sum_us": 5684.172,
+          "active_span_us": 5839.6
+        }
+      },
+      "kernel_signatures": [
+        {
+          "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+          "grid": [
+            148,
+            1,
+            1
+          ],
+          "block": [
+            128,
+            1,
+            1
+          ],
+          "registers_per_thread": 164,
+          "static_shared_memory": 0,
+          "dynamic_shared_memory": 81920
+        }
+      ],
+      "combined_kernel_work_us": 11337.334,
+      "two_stream_union_us": 5844.912,
+      "two_stream_completion_span_us": 5844.912,
+      "overlap_us": 5492.422,
+      "overlap_pair_count": 999,
+      "overlap_fraction_of_union": 0.9396928473858973,
+      "overlap_fraction_of_kernel_work": 0.4844544581645032,
+      "union_per_iteration_us": 11.689824,
+      "completion_span_per_iteration_us": 11.689824
+    }
+  ],
+  "aggregate": {
+    "outproj": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 11.706147999999999,
+          "completion_span_per_iteration_us_mean": 11.706147999999999,
+          "overlap_fraction_of_union_mean": 0.9396927154989773,
+          "overlap_fraction_of_kernel_work_mean": 0.4844544231106425,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 11.666051,
+          "completion_span_per_iteration_us_mean": 11.666051,
+          "overlap_fraction_of_union_mean": 0.9398916371738596,
+          "overlap_fraction_of_kernel_work_mean": 0.4845072755518578,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": -0.3425294127496037,
+        "completion_span_per_iteration": -0.3425294127496037,
+        "overlap_fraction_of_union": 0.02116880035369917
+      },
+      "signature_equal": true
+    },
+    "outer-pre": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 22.01034,
+          "completion_span_per_iteration_us_mean": 22.016740000000002,
+          "overlap_fraction_of_union_mean": 0.9580393393320564,
+          "overlap_fraction_of_kernel_work_mean": 0.48927371938581476,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 21.797696000000002,
+          "completion_span_per_iteration_us_mean": 21.808608,
+          "overlap_fraction_of_union_mean": 0.9409873965364864,
+          "overlap_fraction_of_kernel_work_mean": 0.4847727958076317,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_128x128_32x5_nn_align8>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                128,
+                1,
+                1
+              ],
+              "registers_per_thread": 164,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 81920
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": -0.9661095648681339,
+        "completion_span_per_iteration": -0.9453352312831176,
+        "overlap_fraction_of_union": -1.7798791861155294
+      },
+      "signature_equal": true
+    },
+    "outer-post": {
+      "modes": {
+        "private": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 21.990838,
+          "completion_span_per_iteration_us_mean": 21.996726000000002,
+          "overlap_fraction_of_union_mean": 0.9525366897630769,
+          "overlap_fraction_of_kernel_work_mean": 0.48784363566038946,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                256,
+                1,
+                1
+              ],
+              "registers_per_thread": 154,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 73728
+            }
+          ]
+        },
+        "shared": {
+          "trace_count": 2,
+          "union_per_iteration_us_mean": 21.629557,
+          "completion_span_per_iteration_us_mean": 21.636533,
+          "overlap_fraction_of_union_mean": 0.9521562004099685,
+          "overlap_fraction_of_kernel_work_mean": 0.48772121072078334,
+          "kernel_signatures": [
+            {
+              "name": "void cutlass::Kernel2<cutlass_80_tensorop_h16816gemm_256x128_32x3_nn_align2>(T1::Params)",
+              "grid": [
+                148,
+                1,
+                1
+              ],
+              "block": [
+                256,
+                1,
+                1
+              ],
+              "registers_per_thread": 154,
+              "static_shared_memory": 0,
+              "dynamic_shared_memory": 73728
+            }
+          ]
+        }
+      },
+      "shared_change_pct": {
+        "union_per_iteration": -1.642870544542241,
+        "completion_span_per_iteration": -1.637484596571337,
+        "overlap_fraction_of_union": -0.039944850124673525
+      },
+      "signature_equal": true
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "createdUtc": "2026-08-05T18:52:00Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "change": "share one learnable-RoPE frequency load and sincos evaluation across fixed groups of B13 rows",
+  "testedBinarySha256": "4489abad8581007c700c5b1f3a68726424435d776c5e52a73211a418fc3c7b69",
+  "groupSweepNsysAverageUs": {
+    "1": 8.860,
+    "2": 8.457,
+    "3": 8.562,
+    "4": 8.683,
+    "7": 8.821,
+    "13": 9.645
+  },
+  "winner": {
+    "batchGroup": 2,
+    "kernelImprovementPercent": 4.548533,
+    "controlLast20KernelUnionMs": 177.291436,
+    "candidateLast20KernelUnionMs": 177.256590,
+    "kernelUnionReductionPercent": 0.019655
+  },
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage13": true
+  },
+  "locked2400WarmAbba500": {
+    "rawDirectories": [
+      "integrated-abba-500-locked2400-warm-r1",
+      "integrated-abba-500-locked2400-warm-r2",
+      "integrated-abba-500-locked2400-warm-r3b"
+    ],
+    "roundImprovementPercent": [2.849806, -1.167141, 0.312373],
+    "controlMedianNNEvalsPerSec": 2963.8142595,
+    "candidateMedianNNEvalsPerSec": 2969.056319,
+    "pooledImprovementPercent": 0.176869,
+    "forwardImprovementPercent": 0.176869,
+    "reverseImprovementPercent": 1.364595,
+    "adjacentPairMedianImprovementPercent": 0.263993,
+    "positiveAdjacentPairs": 8,
+    "totalAdjacentPairs": 12
+  },
+  "stability": {
+    "incompleteRound": "r3 candidate prime timed out before timed benchmark",
+    "replacementRound": "r3b completed"
+  },
+  "decision": "rejected; production cudaRoPEBatchGroupSm89 remains 1"
+}

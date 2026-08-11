@@ -1,0 +1,72 @@
+{
+  "stage": 28,
+  "strategy": "one no-split C768-to-C384 policy/value head projection",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S1 only",
+  "binarySha256": "20edbda5b55f922fe83bb5bc2123404087e6b11d8ee38df684eec7bf18807fb2",
+  "switch": "cudaUseWideHeadProjection",
+  "decision": "accepted-for-s1",
+  "enabledIn": "/workspace/bench-cuda-gpu0-4090-s1.cfg",
+  "s2Tested": false,
+  "s2ConfigEnabled": false,
+  "baselineNcu": {
+    "policyC96DurationsUs": [9.60, 9.50],
+    "valueC192DurationUs": 16.064,
+    "summedProjectionUs": 35.164,
+    "policyWavesPerSm": 0.58,
+    "valueWavesPerSm": 0.29,
+    "achievedOccupancyPercent": 8.3,
+    "spillRequests": 0
+  },
+  "candidateNcu": {
+    "wideC384ProjectionUs": 15.94,
+    "changeVsSummedProjectionPercent": -54.669548,
+    "registersPerThread": 162,
+    "wavesPerSm": 0.87,
+    "achievedOccupancyPercent": 8.32,
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0,
+    "policyStridedBnUs": 3.20,
+    "valueStridedBnUs": 4.45
+  },
+  "nsysS1": {
+    "kernelsRemovedPerForward": 2,
+    "forward": {
+      "baselineProjectionAndFirstBnUs": 40.103,
+      "candidateProjectionAndFirstBnUs": 21.778,
+      "boundaryChangePercent": -45.694836,
+      "baselineNNEvalsPerSec": 2431.622845,
+      "candidateNNEvalsPerSec": 2439.302665,
+      "throughputChangePercent": 0.315831
+    },
+    "reverse": {
+      "baselineProjectionAndFirstBnUs": 40.267,
+      "candidateProjectionAndFirstBnUs": 21.781,
+      "boundaryChangePercent": -45.908560,
+      "baselineNNEvalsPerSec": 2427.104756,
+      "candidateNNEvalsPerSec": 2436.186847,
+      "throughputChangePercent": 0.374194
+    }
+  },
+  "fullGraphLocked2400S1Abba100": {
+    "controlRunsNNEvalsPerSec": [2456.924457, 2464.152216, 2457.474246, 2461.517015],
+    "candidateRunsNNEvalsPerSec": [2474.237388, 2467.984519, 2474.237388, 2474.237388],
+    "controlPooledMedianNNEvalsPerSec": 2459.495631,
+    "candidatePooledMedianNNEvalsPerSec": 2474.237388,
+    "changePercent": 0.599381,
+    "forwardChangePercent": 0.429687,
+    "reverseChangePercent": 0.599381,
+    "adjacentPairChangesPercent": [0.704659, 0.155522, 0.682129, 0.516770],
+    "positivePairs": 4,
+    "totalPairs": 4
+  },
+  "accuracy": {
+    "rows": 8192,
+    "byteIdenticalToStage27": true,
+    "policyTop1VsFp32": 0.9970703125,
+    "policyProbabilityRmse": 0.00012730756134260446,
+    "valueOutcomeRmse": 0.002648415043950081,
+    "ownershipSigmoidRmse": 0.0003015638794749975,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "reason": "profiler mechanism, local boundary, both short whole-graph orders and all four locked ABBA pairs agree; no S2 phase tuning was performed"
+}

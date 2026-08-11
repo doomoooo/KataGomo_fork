@@ -1,0 +1,40 @@
+{
+  "order": [
+    "A",
+    "B",
+    "B",
+    "A",
+    "B",
+    "A",
+    "A",
+    "B"
+  ],
+  "A": "cudaUseFusedFFNAReuseSm120=false",
+  "B": "cudaUseFusedFFNAReuseSm120=true",
+  "iterations": 1000,
+  "warmup": 30,
+  "control_nneval_per_sec": [
+    3812.119918,
+    3824.955912,
+    3845.744673,
+    3816.914907
+  ],
+  "candidate_nneval_per_sec": [
+    3849.192167,
+    3859.023734,
+    3870.194763,
+    3860.490255
+  ],
+  "control_mean_nneval_per_sec": 3824.9338525,
+  "candidate_mean_nneval_per_sec": 3859.72522975,
+  "candidate_mean_delta_percent": 0.9095942202310248,
+  "control_median_nneval_per_sec": 3820.9354095,
+  "candidate_median_nneval_per_sec": 3859.7569945,
+  "adjacent_candidate_delta_percent": [
+    0.9724838094665733,
+    0.8906722792050736,
+    0.6357699764016456,
+    1.1416379212459082
+  ],
+  "positive_adjacent_comparisons": 4
+}

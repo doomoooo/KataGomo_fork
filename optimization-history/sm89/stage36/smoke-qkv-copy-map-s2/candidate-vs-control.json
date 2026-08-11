@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-06T06:42:05+00:00",
+  "reference": "/workspace/results/4090/stage36/smoke-qkv-copy-map-s2/control.krnn",
+  "candidate": "/workspace/results/4090/stage36/smoke-qkv-copy-map-s2/candidate.krnn",
+  "referenceRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "candidateRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "corpus": "/workspace/results/4090/stage30/smoke/corpus-first26.npz",
+  "numRows": 26,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.6224147081375122,
+    "p0lossCandidateWeighted": 5.26794958114624,
+    "p0lossReferenceUnweighted": 1.6224147081375122,
+    "p0lossCandidateUnweighted": 5.26794958114624,
+    "top1VsReference": 0.0,
+    "optimisticTop1VsReference": 0.038461538461538464,
+    "top1VsTarget": 0.0,
+    "optimisticTop1VsTarget": 0.0,
+    "probabilityRmse": 0.02990839071571827,
+    "optimisticProbabilityRmse": 0.032413117587566376,
+    "totalVariation": 0.9159818291664124,
+    "jsd": 0.5697572231292725
+  },
+  "value": {
+    "outcomeRmse": 0.41120222210884094,
+    "rawLogitsRmse": 7.023793697357178
+  },
+  "score": {
+    "meanRmse": 1.2316412925720215,
+    "all6Rmse": 3.0001580715179443
+  },
+  "ownership": {
+    "rawLogitsRmse": 1.7274792194366455,
+    "sigmoidRmse": 0.2589418888092041
+  },
+  "maxPolicyAbsError": {
+    "row": 12,
+    "move": 197,
+    "value": 0.9907089471817017
+  }
+}

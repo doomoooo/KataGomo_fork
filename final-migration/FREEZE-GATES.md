@@ -11,7 +11,8 @@ snapshot is:
 - integration merge `89c45b6`;
 - supported domain SM89, exact B4-B32, two streams;
 - discovery 100/50/1 and long gate at least 1000/50/2;
-- handover `/workspace/SM89_SM120_AUTOTUNE_HANDOVER_20260807.md`.
+- handover
+  `/workspace/results/docs/SM89_SM120_AUTOTUNE_HANDOVER_20260807.md`.
 
 The immutable 8192-row FP32 golden was subsequently recovered and bound to the
 model and corpus hashes. Candidate output is never promoted to its own

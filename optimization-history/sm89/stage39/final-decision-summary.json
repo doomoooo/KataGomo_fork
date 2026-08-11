@@ -1,0 +1,44 @@
+{
+  "stage": 39,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2",
+  "strategy": "C384 RMSNorm eight rows/warps per CTA",
+  "decision": "reject-and-revert-at-ncu-gate",
+  "control": {
+    "binarySha256": "b76ec8a7a99fad7678967628e2aaece7bdb999acf03f5a80cc41e6fe8e062239",
+    "durationUs": [4.7, 4.54, 4.61],
+    "medianDurationUs": 4.61,
+    "gridCtas": 1174,
+    "threadsPerCta": 128,
+    "registersPerThread": 40,
+    "wavesPerSm": 0.76,
+    "theoreticalOccupancyPct": 100.0,
+    "achievedOccupancyPctApprox": 54.7,
+    "noEligiblePctApprox": 66.5,
+    "spills": 0
+  },
+  "candidate": {
+    "binarySha256": "f2ffb76f45400e1e795dbc8d492f2bde060690b24388066f66060331a779d372",
+    "durationUs": [4.58, 4.61, 4.58],
+    "medianDurationUs": 4.58,
+    "medianDurationDeltaPct": -0.6508,
+    "gridCtas": 587,
+    "threadsPerCta": 256,
+    "registersPerThread": 40,
+    "wavesPerSm": 0.76,
+    "theoreticalOccupancyPct": 100.0,
+    "achievedOccupancyPct": [58.78, 60.07, 60.07],
+    "noEligiblePct": [66.08, 66.14, 65.98],
+    "spills": 0
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "controlReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "nsysRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "Larger CTAs improve achieved occupancy slightly while preserving total warps, but only save about 0.03 us per launch and fail the frozen 3% local gate.",
+  "postRevertBinarySha256": "69e3fe558dc3a6ad2a5b281e33945626f185e8b3ba01d533dcf43dc05a726bac"
+}

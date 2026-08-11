@@ -1,0 +1,1592 @@
+{
+  "schema": 1,
+  "kind": "sm120-cute-qkv-correctness-replay",
+  "started_utc": "2026-08-06T23:59:51.046838+00:00",
+  "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+  "regime": {
+    "artifact_root": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated",
+    "batches": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32
+    ],
+    "device": 2,
+    "warmup": 10,
+    "iterations": 100,
+    "nvcc": "nvcc",
+    "runner": [],
+    "generator": "/workspace/katago/python/sm120_generate_cute_qkv_aot.py",
+    "generator_sha256": "707fe1a498992893bdaf3124125a9b97a29aa15e8cfd17da9366614e0265ba3b"
+  },
+  "rows": [
+    {
+      "batch": 4,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b4/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-06T23:59:51.046876+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b4/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "4",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-06T23:59:54.252452+00:00",
+      "measurement": {
+        "batch": 4,
+        "s1_us_samples": [
+          6.9219203,
+          7.84768009,
+          7.85055971,
+          6.90912008,
+          7.85536003
+        ],
+        "s1_us_median": 7.84768009,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13651011e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13651011e-05
+      },
+      "metadata_sha256": "f11518f9c0e9ebf1edfeee5b0e3d0fa5a6c78d202f87413ce33c8155e6cbbef6",
+      "artifact_sha256": {
+        "cu": "5956c6808291087ed922a62d7aa4ec0afbc775cf2a4e0f03f46a2c1108c6508d",
+        "h": "3572c8dfa1e41a004ffe7fcf4acce26af51953aa5fc81cb6714b405c6be6e620",
+        "o": "279dddbd4e06d4ca80a4e136990cebbc6b6a70f69be7eec986c932e02026f533"
+      }
+    },
+    {
+      "batch": 5,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b5/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-06T23:59:54.252802+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b5/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "5",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-06T23:59:57.430794+00:00",
+      "measurement": {
+        "batch": 5,
+        "s1_us_samples": [
+          7.40576029,
+          7.64896011,
+          7.68096018,
+          7.40479994,
+          7.64191961
+        ],
+        "s1_us_median": 7.64191961,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13675312e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13675312e-05
+      },
+      "metadata_sha256": "b635a0d1c05343bf1bae630254448ccfde1d15f01a4705566863ed7d8088063d",
+      "artifact_sha256": {
+        "cu": "1e819d830cb747f564d345efa367eadd5acc4d1146e55fb7c0cc48351bb93860",
+        "h": "dc089f1fe550c12b7b9a6c3131b2bb617133a245840d68cda3d145b761b0ecba",
+        "o": "b248c2048344a68757abcb47bd8ca8d1bea1bfa3f6360102a32edd40e4efea3f"
+      }
+    },
+    {
+      "batch": 6,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b6/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-06T23:59:57.431180+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b6/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "6",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:00.566503+00:00",
+      "measurement": {
+        "batch": 6,
+        "s1_us_samples": [
+          7.82527971,
+          7.75103998,
+          7.71968031,
+          7.73599958,
+          7.7343998
+        ],
+        "s1_us_median": 7.73599958,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13679615e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13679615e-05
+      },
+      "metadata_sha256": "e34522e21d90e0cfb7e2d5706be8c24675f2a7db206a63ce4b78d9b69ed1a7c6",
+      "artifact_sha256": {
+        "cu": "e2f2080ea85ceb1f900be05fb59ddf044c5193dbe036582411f2eecf0f0c887b",
+        "h": "ad55a951c1c387fed8b4a693d4f2c6f51943d2f27db6e2133e10659d59070dfb",
+        "o": "93ca282b2d2a898c0d15f7129b65d59d0206931f28e790c590503c2a6a43d8b5"
+      }
+    },
+    {
+      "batch": 7,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b7/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:00.566899+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b7/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "7",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:03.698678+00:00",
+      "measurement": {
+        "batch": 7,
+        "s1_us_samples": [
+          14.2579203,
+          14.2441587,
+          16.3065605,
+          14.25984,
+          16.2831993
+        ],
+        "s1_us_median": 14.25984,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13620878e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13620878e-05
+      },
+      "metadata_sha256": "1d9c619bc143cc2b9ec3e6359b397bdb4673099bd22ef8e04ef1fe499a21ee33",
+      "artifact_sha256": {
+        "cu": "d9abd8b9dacc3bdb6167d9634272f63b6aca7ef29f298037ee61177359d0e0b1",
+        "h": "8a133729004fdafb5b8b96241eb14784d71d80ef611e9a45d29fefb32ab74423",
+        "o": "40cdd9e9fbe57b68e299169632b774368a0271b3bc9df0034bd4f148535fa14e"
+      }
+    },
+    {
+      "batch": 8,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b8/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:03.699158+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b8/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "8",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:06.831078+00:00",
+      "measurement": {
+        "batch": 8,
+        "s1_us_samples": [
+          14.44384,
+          16.0275192,
+          14.4844799,
+          14.9251194,
+          15.5948801
+        ],
+        "s1_us_median": 14.9251194,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13649674e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13649674e-05
+      },
+      "metadata_sha256": "d457dd9c73c740fdc7dbbb4bf3c1a1579acdc68b31f9263f1a63eb82587248b0",
+      "artifact_sha256": {
+        "cu": "61fb48d5e800527df93f7643329923a8f72b2da3d65c324d86e9a71a9f1ee184",
+        "h": "f6c872c3608c8f384da1308ce266ff48aad44b24bb9578c6bb796ed010014f17",
+        "o": "379ac7393f909f375d7b491e8c84de1a9eda9e745d0995aa7e9315aea3b9aa71"
+      }
+    },
+    {
+      "batch": 9,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b9/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:06.832050+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b9/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "9",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:10.027220+00:00",
+      "measurement": {
+        "batch": 9,
+        "s1_us_samples": [
+          14.4617605,
+          16.021759,
+          14.4809608,
+          14.4278393,
+          16.1065598
+        ],
+        "s1_us_median": 14.4809608,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13651654e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13651654e-05
+      },
+      "metadata_sha256": "546199ddc210f720c2b979d663356baea80b166c45876c662e0367c929109677",
+      "artifact_sha256": {
+        "cu": "febfeeec6c4f0a7d0cc14d8c5a1beda5f23e5c4bb7274971724b9becc69c0ead",
+        "h": "0011e81e9c36fbdfd52853cf2c83c9a95435b0b8ac0c6db705a525267be78ccf",
+        "o": "d9de8d92c785f8032a866be5c6e372995dcab926cffce41f5f942649d97098e5"
+      }
+    },
+    {
+      "batch": 10,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b10/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:10.027720+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b10/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "10",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:13.209643+00:00",
+      "measurement": {
+        "batch": 10,
+        "s1_us_samples": [
+          14.5833597,
+          15.8809605,
+          14.6105604,
+          14.5312004,
+          15.9686403
+        ],
+        "s1_us_median": 14.6105604,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13627497e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13627497e-05
+      },
+      "metadata_sha256": "5ee950b0e3f3f64052281f259c3d98f688eb3196c3462960fccdc85d365155f2",
+      "artifact_sha256": {
+        "cu": "4dcf05b1152d2085845dad37cd56ec0c6912af095f1dda79368ecba8e864d266",
+        "h": "492eb8b5474f750f023991694cb150c481e15b87606cae4d360aab35c41e128f",
+        "o": "04811943725d276d7f7980a37c843d0d89cb243f5dcf3a3b602ca14b8b121785"
+      }
+    },
+    {
+      "batch": 11,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b11/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:13.210287+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b11/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "11",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:16.312200+00:00",
+      "measurement": {
+        "batch": 11,
+        "s1_us_samples": [
+          14.7347202,
+          15.6879997,
+          14.7724791,
+          14.6889601,
+          15.7772799
+        ],
+        "s1_us_median": 14.7724791,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13617503e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13617503e-05
+      },
+      "metadata_sha256": "ec60096644e1071225ee540bea571bf37c951a01684e9a04a6f3cb40f55c06ec",
+      "artifact_sha256": {
+        "cu": "3a9b930773f4966e5bfa0319dff1ceb396f5345e1dd5b594d3f01c32180b658c",
+        "h": "29e829409b4d26976633c9fa84d79eee0be2303c8f1be0835babd2f1b79009fc",
+        "o": "d1465d04d11368dfe5b967443e9b33c6c819e811e5ec05829766cef7a3891819"
+      }
+    },
+    {
+      "batch": 12,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b12/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:16.312918+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b12/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "12",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:19.403171+00:00",
+      "measurement": {
+        "batch": 12,
+        "s1_us_samples": [
+          14.83424,
+          15.5824013,
+          14.8816004,
+          14.7676811,
+          15.6867199
+        ],
+        "s1_us_median": 14.8816004,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.1359024e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.1359024e-05
+      },
+      "metadata_sha256": "5c901df8b48ee0d8a4ce7d6150a4b4d8361d3a9cc508b2399b32cc987f52d901",
+      "artifact_sha256": {
+        "cu": "adde91641fa981779acc08f31b9551cdcd7309d7ab77d96c2c01f27d008d7ebe",
+        "h": "9377ffac4ca533e8fb15facfb7d3032a0a4958af1297660a4adbcc192967a7e9",
+        "o": "1a4a0475d74848ecf917972b78ef95c4959ea017a73067600d7be0c1c31000f2"
+      }
+    },
+    {
+      "batch": 13,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b13/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:19.403729+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b13/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "13",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:22.566406+00:00",
+      "measurement": {
+        "batch": 13,
+        "s1_us_samples": [
+          14.9721594,
+          15.4416008,
+          14.9446402,
+          14.9414396,
+          15.4748793
+        ],
+        "s1_us_median": 14.9721594,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13581399e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13581399e-05
+      },
+      "metadata_sha256": "848ab43c990ba5a7c08a5bdab122a71cf063ed805fc97a197e284e98724dab04",
+      "artifact_sha256": {
+        "cu": "2c0dab8ef4a4ebc1466ba2b1e4c2b9ad985c32a8b3ec5e15111769128a6896ff",
+        "h": "d9139dffa115a39037cee4064450f34ac5070523e65c646d24fc3b2af9ccab89",
+        "o": "534e0c8f810c3506c200fd1ea2e301eb210af31d9100f41a85854c0863702f6e"
+      }
+    },
+    {
+      "batch": 14,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b14/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:22.566970+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b14/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "14",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:25.713200+00:00",
+      "measurement": {
+        "batch": 14,
+        "s1_us_samples": [
+          22.4345589,
+          22.4009628,
+          22.3500805,
+          22.4403191,
+          24.4016018
+        ],
+        "s1_us_median": 22.4345589,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13607593e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13607593e-05
+      },
+      "metadata_sha256": "945a96c1b4f5b8b6cb9be28d904c0a425aa7db8165d654d7d5b110b23773cf60",
+      "artifact_sha256": {
+        "cu": "3872fca5837efc6c96e78dd7f9eb677f332d7a0820f12667672c455840510f15",
+        "h": "db558421e73d0cb8648f1efcd2e42e470692babab58bc12d4300f05ae32ffe1d",
+        "o": "685e8ed9a7031fd511378fdb7a9904f0fec6a7745fe6ce79ff5811b5fa19d468"
+      }
+    },
+    {
+      "batch": 15,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b15/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:25.713787+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b15/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "15",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:28.904321+00:00",
+      "measurement": {
+        "batch": 15,
+        "s1_us_samples": [
+          22.5148811,
+          22.4694386,
+          22.4713631,
+          22.462719,
+          24.1574421
+        ],
+        "s1_us_median": 22.4713631,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13576927e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13576927e-05
+      },
+      "metadata_sha256": "b61817f29afbc5c749e2fe50cc3043337237bfd6873a76e7f42768f2ca43afb0",
+      "artifact_sha256": {
+        "cu": "823dd43a4c7fb93496f3b9f79f5c2c13c99b8d61a4a2c8f8422812a678c468ef",
+        "h": "535827d3017c4d9650227b0a8e9ee316af6d4d39a9ae23ea3bd5a6cdc6ab2e75",
+        "o": "81e37f7d438b922155d8af1e49e4b3390b2ab308fdaf53b0a5255518e44836fa"
+      }
+    },
+    {
+      "batch": 16,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b16/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:28.905047+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b16/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "16",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:32.048980+00:00",
+      "measurement": {
+        "batch": 16,
+        "s1_us_samples": [
+          22.5552006,
+          22.549118,
+          22.5206394,
+          22.5283203,
+          23.8892803
+        ],
+        "s1_us_median": 22.549118,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13590157e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13590157e-05
+      },
+      "metadata_sha256": "25348cda85fe6cea661833ae364c1e1e70cbdc3cf21ad5befb5d7e069a60ec62",
+      "artifact_sha256": {
+        "cu": "6117e4fc8348a17e626a7b53e733d1fe67434fc926530565b74e29f388719c31",
+        "h": "92d6aee75ce24d0bdacc8830a46bc8e2efbb286dfc251a846887600a76b54270",
+        "o": "48c70c8221651aeb20ce9419571e03e1c8de595155de1128f7cea34f43f3e4cc"
+      }
+    },
+    {
+      "batch": 17,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b17/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:32.049621+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b17/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "17",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:35.233519+00:00",
+      "measurement": {
+        "batch": 17,
+        "s1_us_samples": [
+          22.5996799,
+          22.5663986,
+          22.5628815,
+          22.5599995,
+          23.7609596
+        ],
+        "s1_us_median": 22.5663986,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13609478e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13609478e-05
+      },
+      "metadata_sha256": "bd52dc6513f5769a53ee9f1bd15353965d090be78850beb4b664d5c75e4a673d",
+      "artifact_sha256": {
+        "cu": "3d866b8549116253dd9704493c2cbc95c18393f2dfd85c2517f6039a7ebc7f15",
+        "h": "caaa15ea151ff08d07f65c2d58c87fc306a131aac100ff2aa3243a7740e38205",
+        "o": "4999452c09f275753a4df4dd6b53225d9f43c3a690984ca151b304badffe8bec"
+      }
+    },
+    {
+      "batch": 18,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b18/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:35.234182+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b18/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "18",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:38.388952+00:00",
+      "measurement": {
+        "batch": 18,
+        "s1_us_samples": [
+          22.6003189,
+          22.5673599,
+          22.5750389,
+          22.5849609,
+          23.7263985
+        ],
+        "s1_us_median": 22.5849609,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13589642e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13589642e-05
+      },
+      "metadata_sha256": "91777f4e79853f3e1aadb46a0619ec5e777d5afcb6c66797601e104b8df74807",
+      "artifact_sha256": {
+        "cu": "944b69b8a828c6be8ac55af90eb5b2ac799218cc4d5f1d476629a87d4b5b2270",
+        "h": "849be1011ad316397f4e0e903f9267a6b37af01efb99c825fe555e730f2daa84",
+        "o": "f1a93baa818857c268d7f12285df1e1c365eaff04acebc3061f65ed6fcca9648"
+      }
+    },
+    {
+      "batch": 19,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b19/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:38.390009+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b19/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "19",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:41.564350+00:00",
+      "measurement": {
+        "batch": 19,
+        "s1_us_samples": [
+          22.6364803,
+          22.6348801,
+          22.6121578,
+          22.6121578,
+          23.5664005
+        ],
+        "s1_us_median": 22.6348801,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13594545e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13594545e-05
+      },
+      "metadata_sha256": "3ff0ba6f0a8a8de1f125e146c72a27f66fc3269d83bbeadb9125cafb8db1a2c2",
+      "artifact_sha256": {
+        "cu": "c19ea5ef24ec3de8d7505ed85bcbe3de4d23d73009f71a4a466b9864fe5ed4f1",
+        "h": "92ecd112496319bdcd749ba05ac0171c03c95e89b5bbb9a75e900dd386e87cb4",
+        "o": "54c007f62ca7234bae1e1926d9e27d19b6a50773a05d6bce813df4c664ec2371"
+      }
+    },
+    {
+      "batch": 20,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b20/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:41.565131+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b20/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "20",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:44.772292+00:00",
+      "measurement": {
+        "batch": 20,
+        "s1_us_samples": [
+          30.1363201,
+          30.3564816,
+          28.7094402,
+          30.5919991,
+          30.566721
+        ],
+        "s1_us_median": 30.3564816,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13613527e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13613527e-05
+      },
+      "metadata_sha256": "8c32117e05cbed5cc7efb6cebcc584dd5eb713c977fd293c167d964ad6b89af6",
+      "artifact_sha256": {
+        "cu": "f8d713205a0f4ac717b050f0a7f73872c4c3553c56d9a11039f2e03ed1368956",
+        "h": "7d73fb8933a92a3ef075ab28dbd9c8deb55426f81e5bfa38515a6d151e652c20",
+        "o": "e7fd76746cbffddba67943e53a7ba3aae9db141a236607a28e8c550027561bb5"
+      }
+    },
+    {
+      "batch": 21,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b21/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:44.773040+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b21/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "21",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:47.948805+00:00",
+      "measurement": {
+        "batch": 21,
+        "s1_us_samples": [
+          30.5673599,
+          30.4911995,
+          30.2972794,
+          28.8544025,
+          30.5868797
+        ],
+        "s1_us_median": 30.4911995,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13615794e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13615794e-05
+      },
+      "metadata_sha256": "df9d12bee5fb0adba8b9165ef86aabad3bc90aea3283efedac96126036070cec",
+      "artifact_sha256": {
+        "cu": "cd48fc386bcb28cd6b183d50b629943ecbd33dbb49e138fde71f1f27a723c281",
+        "h": "fd7ed2d74af9f5f68799510d3c6f1446649145b127a1770090f379d4fa8910a9",
+        "o": "eec039ecbc175989af82589d0a81b120ed51e0a05678441d3eefa3ab74033f08"
+      }
+    },
+    {
+      "batch": 22,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b22/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:47.949608+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b22/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "22",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:51.126864+00:00",
+      "measurement": {
+        "batch": 22,
+        "s1_us_samples": [
+          30.5644798,
+          30.5100803,
+          30.2086411,
+          28.9887981,
+          30.5657597
+        ],
+        "s1_us_median": 30.5100803,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13611811e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13611811e-05
+      },
+      "metadata_sha256": "991346d74ea792f673c5315ab5df891d0446ad4bb2b4ea1a427be9d68db50fc2",
+      "artifact_sha256": {
+        "cu": "91860e398bd7956c0d15512b5173986f9b5edfdc10c80d15de8557ae6fa53f2c",
+        "h": "84702b7ec75b5a67b660ab79049ec7d0a5d0e7215f465d2097c945ec97f48b1b",
+        "o": "7d859fd40ec495108d3214329f331f9b2843ca50c7a8530f8cc7ef0861767de7"
+      }
+    },
+    {
+      "batch": 23,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b23/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:51.127808+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b23/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "23",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:54.360916+00:00",
+      "measurement": {
+        "batch": 23,
+        "s1_us_samples": [
+          30.57728,
+          30.4911995,
+          30.34688,
+          28.9542389,
+          30.5734406
+        ],
+        "s1_us_median": 30.4911995,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13621191e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13621191e-05
+      },
+      "metadata_sha256": "701599d2f755da74c16b11aaa0f8c735ecebd81efa2b809a069c4fd63a89cf22",
+      "artifact_sha256": {
+        "cu": "da311d4233cd121aeb4bc451120c737dadc7981348513c913e32be946e529a10",
+        "h": "8109dce03ce39f6a9faececbcfd26ffb0e8f07be965cf815ab055a74adb97b6d",
+        "o": "df499a14dbbce762747aaa51369bd59ed2c6b1fe908afe104949f692255b9965"
+      }
+    },
+    {
+      "batch": 24,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b24/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:54.361775+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b24/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "24",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:00:57.562466+00:00",
+      "measurement": {
+        "batch": 24,
+        "s1_us_samples": [
+          30.537281,
+          30.5369587,
+          30.3657589,
+          29.0319996,
+          30.5558395
+        ],
+        "s1_us_median": 30.5369587,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13607997e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13607997e-05
+      },
+      "metadata_sha256": "e2807b639f91ad7d56e84147099602919aa56675a7cebb2a2e8bd331bc672f93",
+      "artifact_sha256": {
+        "cu": "13f87f16ddd4ce4a1f6c874a0a039fafe29b053f51616d2db4d20c0f80bcd7d6",
+        "h": "ff2e81521315fa495295c6b61fe36dad0b3b2bbe5b65238d56175f773bdefc4a",
+        "o": "a56fb1b4079c89415017e50dfc76fb3e1fe2d421a6b3246bfb3cb423f4f63403"
+      }
+    },
+    {
+      "batch": 25,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b25/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:00:57.563584+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b25/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "25",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:00.761092+00:00",
+      "measurement": {
+        "batch": 25,
+        "s1_us_samples": [
+          30.5145607,
+          30.5193577,
+          30.465601,
+          29.1286392,
+          30.5446415
+        ],
+        "s1_us_median": 30.5145607,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13607364e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13607364e-05
+      },
+      "metadata_sha256": "cb6d068e84a95e9f95873b776122f96c093d102f8ea87b48efb951e68604dd34",
+      "artifact_sha256": {
+        "cu": "b2f181d113feafb8076c37f2535b7d4f2887b6462ff45a46c6c406ff071c6421",
+        "h": "dd006ceb21b7c39f3a2265bb1c9a109fe24abee13ea29fe3666d698ec9c180f4",
+        "o": "c6647fb17f2fcc751b0a46ffdf54283583e04266abd45aff3d78866189a2c55b"
+      }
+    },
+    {
+      "batch": 26,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b26/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:00.762014+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b26/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "26",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:03.927182+00:00",
+      "measurement": {
+        "batch": 26,
+        "s1_us_samples": [
+          30.5184002,
+          30.5187206,
+          30.4268799,
+          29.2355194,
+          30.5468807
+        ],
+        "s1_us_median": 30.5184002,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13603846e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13603846e-05
+      },
+      "metadata_sha256": "7983241625da1ffcf8f8498def7a589621552e9caf95a5f9b21b7b767f3b129f",
+      "artifact_sha256": {
+        "cu": "c7c0a98d8f0dc509deb647138d58c585249baea29d3da195bb12dd58ab087f0c",
+        "h": "31bb614b54c2925e33b2528e8fd69956ac0f4c46f03039dfa32b6bcf29441c33",
+        "o": "3946518caab1e17ef0a9ad98bcdd74a7327beb1f48a2c913402bbbb8ae5d9ce9"
+      }
+    },
+    {
+      "batch": 27,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b27/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:03.928038+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b27/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "27",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:07.123395+00:00",
+      "measurement": {
+        "batch": 27,
+        "s1_us_samples": [
+          36.8508797,
+          38.4963226,
+          38.7312012,
+          36.5279999,
+          38.9046402
+        ],
+        "s1_us_median": 38.4963226,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13595783e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13595783e-05
+      },
+      "metadata_sha256": "2f91c878bfda6db42d02b36129cdc26e36fd650f49d018361b52297e3e999905",
+      "artifact_sha256": {
+        "cu": "b55b9503c671de3f24286fb77fa9f8c43f11d6f19577a3484dd30d5c1f35608d",
+        "h": "586361b78807bdda851e0cebbbfecf47bb3e057efd40e2dd3c9c02379467c222",
+        "o": "ba677ae0025d668b2b4d77791200fe8bba7651f9eb8ad803abaf19af2b91aedb"
+      }
+    },
+    {
+      "batch": 28,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b28/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:07.124242+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b28/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "28",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:10.315093+00:00",
+      "measurement": {
+        "batch": 28,
+        "s1_us_samples": [
+          36.7673607,
+          38.6847992,
+          38.6806412,
+          36.7158394,
+          38.7596817
+        ],
+        "s1_us_median": 38.6806412,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13607568e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13607568e-05
+      },
+      "metadata_sha256": "e269ed71cba0299e22a23d726932317e551d7dc15a7e608f832c97ed36d71141",
+      "artifact_sha256": {
+        "cu": "dfe5b63e4e32dc63df9de57c59b3cf7e7003adc3faec7caa8ae4b0bb95fcaee6",
+        "h": "07f80c74cc1f102d652dfdc5836564a57c1dcf9e7923fd881c0d9baafd16f0b8",
+        "o": "e16b23dcc2af51a3a9d7df50c6f61adf353cbb9f863d52a872e277601d3c76cf"
+      }
+    },
+    {
+      "batch": 29,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b29/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:10.315994+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b29/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "29",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:13.996687+00:00",
+      "measurement": {
+        "batch": 29,
+        "s1_us_samples": [
+          37.5507202,
+          37.9286385,
+          38.6937599,
+          36.7561607,
+          38.7132797
+        ],
+        "s1_us_median": 37.9286385,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13590112e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13590112e-05
+      },
+      "metadata_sha256": "502f8bca54cd247dd117db965a050fe3c986c56b0a0ee22cc45caa886a59242d",
+      "artifact_sha256": {
+        "cu": "cfb51e4a62c730fb6e713424b3f9d7e93a0233dec8843c9db8e30819eac45607",
+        "h": "7e864b83e6930cd0ca780baba0d3b375095c5add237cce466897c0af1ebbefda",
+        "o": "2d5d3a262404240d81a6737c1c6e59b51447de6569f447ba69db36f54817ef50"
+      }
+    },
+    {
+      "batch": 30,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b30/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:13.997610+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b30/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "30",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:17.181070+00:00",
+      "measurement": {
+        "batch": 30,
+        "s1_us_samples": [
+          37.7308807,
+          37.8067207,
+          38.6425591,
+          36.8787193,
+          38.6416016
+        ],
+        "s1_us_median": 37.8067207,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13588795e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13588795e-05
+      },
+      "metadata_sha256": "fca060432ee7854e5feafb901c7318875d178116692065946135fbfe2c98919b",
+      "artifact_sha256": {
+        "cu": "9b2894ecbfaa3427dc79efe1dc1e0b1b9acdc49425a2b2c132f6051854ef5f4f",
+        "h": "e612ca065589995efa92ec0b6e9e4e9c29814ac57a77f1144aa82ca8445f4847",
+        "o": "fcbc7bace941597a401c2b9d74be428f357855b3af8c0ba5a929a4c06b40cadb"
+      }
+    },
+    {
+      "batch": 31,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b31/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:17.182016+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b31/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "31",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:20.358516+00:00",
+      "measurement": {
+        "batch": 31,
+        "s1_us_samples": [
+          37.7881584,
+          37.7772789,
+          38.6188812,
+          36.945919,
+          38.6556778
+        ],
+        "s1_us_median": 37.7881584,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13593023e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13593023e-05
+      },
+      "metadata_sha256": "21108724c2247a9029607702f25d2bbf216d6bcb1603f9b3643fb6f5a4f86db1",
+      "artifact_sha256": {
+        "cu": "079c28fb3db4555a5c1a32acf0da4525de2993b7405c09720e7aac4846f3cd83",
+        "h": "e30cc70dd3ece2c4017140d31ccc97a955ec96b0156308791582233ca6bc7e9a",
+        "o": "e973232fc7cc1768e8be2181b62c45a775430b6bc329a9933c9a67deeac1869c"
+      }
+    },
+    {
+      "batch": 32,
+      "candidate_id": "qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "artifact_dir": "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b32/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+      "started_utc": "2026-08-07T00:01:20.359507+00:00",
+      "command": [
+        "/workspace/venv/bin/python3",
+        "/workspace/katago/python/sm120_measure_cute_qkv_local.py",
+        "--repo",
+        "/workspace/katago",
+        "--artifact-dir",
+        "/workspace/results/rebuild/cross-batch-search/s2-5090d-b4-32-qkv-cute-generated/b32/qkv-m128-n128-k64-s2-cute-atom4x2-packed",
+        "--artifact-stem",
+        "sm120_qkv_cute_active",
+        "--device",
+        "2",
+        "--batch",
+        "32",
+        "--warmup",
+        "10",
+        "--iterations",
+        "100",
+        "--nvcc",
+        "nvcc"
+      ],
+      "status": "correct",
+      "finished_utc": "2026-08-07T00:01:23.568518+00:00",
+      "measurement": {
+        "batch": 32,
+        "s1_us_samples": [
+          37.832962,
+          37.7622375,
+          38.6297607,
+          36.982399,
+          38.6188812
+        ],
+        "s1_us_median": 37.832962,
+        "correctness_against_cublas": {
+          "max_abs": 0.000122070312,
+          "rmse": 2.13586672e-05
+        }
+      },
+      "correctness": {
+        "max_abs": 0.000122070312,
+        "rmse": 2.13586672e-05
+      },
+      "metadata_sha256": "0bab6509c57ac5a2c03b7694e28cf9282a124cad5cd07c83179f1f0ebb7fa9b5",
+      "artifact_sha256": {
+        "cu": "f8d901a4bd014435715ecd167a3ede790e072a362a8804c289f174f9beec25f4",
+        "h": "52977fb5607f96a4689fa5df6191e42981593e7eff973e5dad5bd944412db52e",
+        "o": "7f9ca54a8970bfee5a623b28dc029feeea192244f533cfbdee5815ab468be8d2"
+      }
+    }
+  ],
+  "acceptance": {
+    "reference": "cuBLAS FP16 GEMM with matching row-major storage",
+    "metric": "max_abs and rmse",
+    "timing_is_not_an_acceptance_gate": true
+  },
+  "finished_utc": "2026-08-07T00:01:23.568631+00:00"
+}

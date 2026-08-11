@@ -1,0 +1,52 @@
+{
+  "stage": 69,
+  "target": "RTX4090 exact19 B13 FP16 NHWC; half2-tanh dual FFN",
+  "strategy": "increase dual-GEMM output tile from M128xN64/4-warps to M128xN128/8-warps, with swizzle-2 and swizzle-1 variants",
+  "status": "mechanism-rejected-and-reverted",
+  "correctness": {
+    "smokeRows": 26,
+    "swizzle2AllReportedErrors": 0.0,
+    "swizzle1AllReportedErrors": 0.0,
+    "policyTop1VsControl": 1.0
+  },
+  "controlN64": {
+    "ncuDurationUs": [41.06, 40.77, 40.96],
+    "medianUs": 40.96,
+    "gridCtas": 666,
+    "threadsPerCta": 128,
+    "registersPerThread": 168,
+    "dynamicSharedKiB": 49.15,
+    "wavesPerSm": 2.60,
+    "achievedOccupancyPercent": 15.30,
+    "l2ThroughputPercentApprox": 74.1
+  },
+  "candidateN128Swizzle2": {
+    "ncuDurationUs": [45.09, 44.32, 44.45],
+    "medianUs": 44.45,
+    "changePercent": 8.5205,
+    "gridCtas": 370,
+    "threadsPerCta": 256,
+    "registersPerThread": 156,
+    "dynamicSharedKiB": 73.73,
+    "wavesPerSm": 2.89,
+    "achievedOccupancyPercent": 16.65,
+    "l2ThroughputPercentApprox": 51.9
+  },
+  "candidateN128Swizzle1": {
+    "ncuDurationUs": [44.67, 44.19, 44.22],
+    "medianUs": 44.22,
+    "changePercent": 7.9580,
+    "gridCtas": 333,
+    "threadsPerCta": 256,
+    "registersPerThread": 156,
+    "dynamicSharedKiB": 73.73,
+    "wavesPerSm": 2.60,
+    "achievedOccupancyPercent": 16.65,
+    "l2ThroughputPercentApprox": 52.1
+  },
+  "mechanismConclusion": "N128 removes CTA and repeated A-tile traffic and lowers L2 pressure, but one 8-warp CTA has higher synchronization/scheduling cost than two resident 4-warp CTAs. Removing swizzle padding restores waves but not latency.",
+  "naturalNsysRun": false,
+  "s2Run": false,
+  "fullGraphReprofile": "reused the clean post-Stage68 checkpoint because both candidates failed the predeclared same-kernel NCU gate and were fully reverted",
+  "decision": "Fully revert both N128 variants. Do not run natural Nsys, S2, long accuracy, or a new full-graph checkpoint."
+}

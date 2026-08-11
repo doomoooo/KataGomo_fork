@@ -1,0 +1,84 @@
+{
+  "stage": 35,
+  "candidate": "exact C384 affine plus SiLU flat vec4",
+  "target": "RTX 4090 exact 19x19 B13 FP16 S2 only",
+  "decision": "reject-and-revert",
+  "controlNcu": {
+    "source": "stage34 accepted-source control",
+    "kernel": "applyCScaleBiasNHWCSiluHalfKernel C384",
+    "durationUs": [6.85, 6.85, 6.91],
+    "medianDurationUs": 6.85,
+    "gridCtas": 4693,
+    "threadsPerCta": 384,
+    "wavesPerSm": 9.17,
+    "registersPerThread": 16,
+    "spills": 0
+  },
+  "candidateNcu": {
+    "durationUs": [4.32, 4.10, 4.38],
+    "medianDurationUs": 4.32,
+    "medianDurationDeltaPct": -36.93,
+    "gridCtas": 1760,
+    "threadsPerCta": 256,
+    "wavesPerSm": 2.29,
+    "registersPerThread": 23,
+    "theoreticalOccupancyPct": 100.0,
+    "achievedOccupancyPct": [71.10, 70.51, 70.67],
+    "noEligiblePct": [44.79, 45.23, 44.70],
+    "spills": 0
+  },
+  "nsysS2": {
+    "iterationsPerRun": 20,
+    "forwardOrder": {
+      "controlTargetAverageUs": 9.629798,
+      "candidateTargetAverageUs": 6.208558,
+      "targetDeltaPct": -35.5276,
+      "controlNNEvalsPerSec": 3106.673623,
+      "candidateNNEvalsPerSec": 3133.551203,
+      "throughputDeltaPct": 0.8652,
+      "controlSummedKernelMs": 415.538949,
+      "candidateSummedKernelMs": 412.283684,
+      "summedKernelTimeDeltaPct": -0.7834,
+      "controlGpuBusyUnionMs": 278.120823,
+      "candidateGpuBusyUnionMs": 277.188800,
+      "gpuBusyUnionDeltaPct": -0.3351
+    },
+    "reverseOrder": {
+      "controlTargetAverageUs": 8.747510,
+      "candidateTargetAverageUs": 5.677253,
+      "targetDeltaPct": -35.0986,
+      "controlNNEvalsPerSec": 3135.648645,
+      "candidateNNEvalsPerSec": 3186.546350,
+      "throughputDeltaPct": 1.6232,
+      "controlSummedKernelMs": 414.795034,
+      "candidateSummedKernelMs": 414.876313,
+      "summedKernelTimeDeltaPct": 0.0196,
+      "controlGpuBusyUnionMs": 276.337212,
+      "candidateGpuBusyUnionMs": 272.399687,
+      "gpuBusyUnionDeltaPct": -1.4249
+    }
+  },
+  "abbaS2Locked2400": {
+    "iterationsPerSegment": 100,
+    "order": ["A-control", "B-candidate", "B-candidate", "A-control"],
+    "controlRunsNNEvalsPerSec": [3238.496799, 3263.471676],
+    "candidateRunsNNEvalsPerSec": [3240.204898, 3208.520178],
+    "controlMedianNNEvalsPerSec": 3250.984238,
+    "candidateMedianNNEvalsPerSec": 3224.362538,
+    "medianDeltaPct": -0.8189,
+    "adjacentPairDeltaPct": [0.0527, -1.6838],
+    "conclusion": "short Nsys gain did not survive the 100-iteration drift-controlled gate"
+  },
+  "smoke": {
+    "rows": 26,
+    "finite": true,
+    "byteIdentical": true,
+    "controlReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "accuracy8192": "skipped: locked 100-iteration S2 ABBA performance gate failed",
+  "mechanismConclusion": "The vec4 launch retained enough work to make both short S2 orders positive, unlike vec8, but the gain was smaller than uncontrolled dual-stream phase drift and reversed in the 100-iteration ABBA. Reopen this locally valid kernel after the common phase-control interface exists.",
+  "sourceState": "candidate kernel and runtime switch removed; accepted S2 path rebuilt",
+  "candidateBinarySha256": "29505be546f3c620a8747e45ada786885dbf533b74cc728c7e5854ee934d396a",
+  "postRevertBinarySha256": "e89023f65a39aba9055ca276dcc6f29067994f857c4aefe2b170dc34f735d345"
+}

@@ -1,0 +1,39 @@
+{
+  "s2": {
+    "records": [
+      {
+        "run": "s2-01-control",
+        "mode": "control",
+        "throughput": 3930.178652,
+        "legacy_throughput": 3930.769987
+      },
+      {
+        "run": "s2-02-candidate",
+        "mode": "candidate",
+        "throughput": 3943.017018,
+        "legacy_throughput": 3944.749227
+      },
+      {
+        "run": "s2-03-candidate",
+        "mode": "candidate",
+        "throughput": 3946.0622,
+        "legacy_throughput": 3945.884365
+      },
+      {
+        "run": "s2-04-control",
+        "mode": "control",
+        "throughput": 3923.620686,
+        "legacy_throughput": 3925.367345
+      }
+    ],
+    "mean": {
+      "control": 3926.8996690000004,
+      "candidate": 3944.539609
+    },
+    "candidate_delta_percent": 0.4492078098978114,
+    "adjacent_pair_deltas_percent": [
+      0.3266611301108835,
+      0.5719593150294466
+    ]
+  }
+}

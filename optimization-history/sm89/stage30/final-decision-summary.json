@@ -1,0 +1,48 @@
+{
+  "createdUtc": "2026-08-06T04:56:05Z",
+  "regime": "L1S1-EXACT19-B13",
+  "change": "consume the existing model-lifetime float2 RoPE table inside the fused QKV epilogue",
+  "controlBinarySha256": "2911970dc5def0257c3d7962e88197a7f110db987ec7005720b0ce8f29b84889",
+  "candidateBinarySha256": "498095b4cf33cb926087ec4d96ebf0dd419ede028f28499eb536cf3bc1d2e35d",
+  "preImplementation": {
+    "fullGraphNsysMsPerForward": 5.311504,
+    "qkvKernelSharePercent": 18.67,
+    "qkvNcuAverageUs": 29.728,
+    "qkvRegistersPerThread": 240,
+    "qkvL2HitPercent": 99.45,
+    "qkvDramThroughputPercent": 1.78,
+    "qkvMathPipeStallCyclesPerIssue": 2.876
+  },
+  "candidateNcu": {
+    "averageUs": 29.515,
+    "improvementPercent": 0.72,
+    "registersPerThread": 255,
+    "l2HitPercent": 99.43,
+    "l2ThroughputPercent": 67.32,
+    "dramThroughputPercent": 1.56,
+    "mathPipeStallCyclesPerIssue": 2.585,
+    "longScoreboardStallCyclesPerIssue": 2.379,
+    "localSpillRequests": 0,
+    "report": "ncu-candidate-qkv/precomputed-qkv-rope.ncu-rep"
+  },
+  "nsysForward": {
+    "controlQkvUsPerForward": 968.397,
+    "candidateQkvUsPerForward": 957.269,
+    "controlNNEvalsPerSec": 2439.060975,
+    "candidateNNEvalsPerSec": 2430.633408,
+    "improvementPercent": -0.345515
+  },
+  "nsysReverse": {
+    "controlQkvUsPerForward": 969.747,
+    "candidateQkvUsPerForward": 955.235,
+    "controlNNEvalsPerSec": 2429.3617,
+    "candidateNNEvalsPerSec": 2442.264881,
+    "improvementPercent": 0.531136
+  },
+  "accuracySmoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "controlAndCandidateKrnnSha256": "0ee632cfec280a4da9b7b224e779509d635a02ced97edcf6e0d054d4f3f0b95d"
+  },
+  "decision": "rejected and reverted: local gain missed the 5% gate and whole-graph directions conflicted; no ABBA or 8192-row replay"
+}

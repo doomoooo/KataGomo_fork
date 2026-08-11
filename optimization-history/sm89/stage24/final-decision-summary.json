@@ -1,0 +1,87 @@
+{
+  "stage": 24,
+  "strategy": "cuDNN frontend fixed plan for the initial 3x3 convolution",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "binarySha256": "55960003a70713af8dfc77f6c219d46c39843dbd6e3bc889789d466c2c27d608",
+  "switch": "cudaUseInitialConvFrontend",
+  "decision": "accepted",
+  "enabledInTargetConfig": true,
+  "dispatch": "maxBatchSize=13, 19x19, FP16, NHWC input/output/filter, 3x3, dilation1",
+  "frontendPlan": {
+    "tag": "eng45_k14=2_k2=0",
+    "engineId": 45,
+    "tileSizeKnob": 0,
+    "stagesKnob": 2,
+    "workspaceBytes": 557056,
+    "heuristicFallbackUsed": false,
+    "evidence": "cudnn-frontend-plan.log"
+  },
+  "ncuInitialConv": {
+    "controlDurationsUs": [30.78, 31.23, 31.17, 31.58],
+    "candidateDurationsUs": [22.08, 22.02],
+    "controlMedianUs": 31.200,
+    "candidateMedianUs": 22.048,
+    "changePercent": -29.333333,
+    "controlRegistersPerThread": 254,
+    "candidateRegistersPerThread": 244,
+    "controlAchievedOccupancyPercent": 8.32,
+    "candidateAchievedOccupancyPercent": 12.70,
+    "controlWavesPerSm": 1.78,
+    "candidateWavesPerSm": 1.16,
+    "spillRequests": 0,
+    "discardedSamples": {
+      "count": 2,
+      "reason": "generic kernel-name filter also matched later grid-111 CUTLASS GEMMs; only candidate grid-296 samples are the initial convolution"
+    }
+  },
+  "nsys": {
+    "initialConv": {
+      "forwardControlMeanUs": 33.041212,
+      "forwardCandidateMeanUs": 24.327909,
+      "forwardChangePercent": -26.371000,
+      "reverseControlMeanUs": 32.533470,
+      "reverseCandidateMeanUs": 23.866742,
+      "reverseChangePercent": -26.639400
+    },
+    "steadyStateLast20PerStream": {
+      "kernelsPerForwardPerStream": 311,
+      "forwardControlUnionMs": 164.069459,
+      "forwardCandidateUnionMs": 166.035763,
+      "forwardUnionChangePercent": 1.198460,
+      "reverseControlUnionMs": 164.479807,
+      "reverseCandidateUnionMs": 161.778457,
+      "reverseUnionChangePercent": -1.642360,
+      "equalOrderControlUnionMs": 164.274633,
+      "equalOrderCandidateUnionMs": 163.907110,
+      "equalOrderChangePercent": -0.223725,
+      "equalOrderSummedKernelChangePercent": -0.038727
+    }
+  },
+  "fullGraphLocked2400Abba300": {
+    "controlRunsNNEvalsPerSec": [3254.582487, 3251.873142, 3151.375313, 3251.977245],
+    "candidateRunsNNEvalsPerSec": [3255.625716, 3258.654935, 3165.814979, 3261.585169],
+    "controlPooledMedianNNEvalsPerSec": 3251.925194,
+    "candidatePooledMedianNNEvalsPerSec": 3257.140326,
+    "changePercent": 0.160371,
+    "adjacentPairChangesPercent": [0.032054, 0.208550, 0.458202, 0.295449],
+    "positivePairs": 4,
+    "totalPairs": 4
+  },
+  "accuracy": {
+    "rows": 8192,
+    "comparison": "full output replay against FP32 reference and Stage22",
+    "stage22ByteIdentical": true,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "policyTop1VsFp32": 0.9969482421875,
+    "policyProbabilityRmseVsFp32": 0.00012512259127106518,
+    "outcomeRmseVsFp32": 0.002610212890431285,
+    "scoreMeanRmseVsFp32": 0.002347242087125778,
+    "ownershipRawLogitsRmseVsFp32": 0.003750527510419488
+  },
+  "diagnosticOnlyFailure": {
+    "artifact": "cudnn-plan-probe.raw",
+    "status": "contaminated",
+    "reason": "cuDNN library-wide debug logging crashed during concurrent model construction; normal execution and the narrower frontend logger are unaffected"
+  },
+  "reason": "the fixed frontend plan reduced the isolated and Nsys-observed initial-convolution time by about 26-29%, all four short full-graph pairs were positive, the measured 0.16% throughput gain matches the operator's small critical-path share, and output is byte-identical"
+}

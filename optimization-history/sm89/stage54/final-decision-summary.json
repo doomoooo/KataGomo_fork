@@ -1,0 +1,73 @@
+{
+  "stage": 54,
+  "strategy": "restore exact B13 C384 affine plus SiLU vec4 and reclassify it under split intrinsic/deployment gates",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment with S1 attribution",
+  "switch": "cudaUseScaleBiasSiluVec4C384Sm89",
+  "implementationStatus": "intrinsic-accepted",
+  "deploymentStatus": "S2-disabled-bundle-regressed",
+  "sourceRetained": true,
+  "binarySha256": "2df4d497b70b46d79988f96bfcfc764a8986bc574059bfe04e0922884345df03",
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "replaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncuFromS2Invocation": {
+    "controlDurationUs": [6.880, 6.816, 6.816],
+    "candidateDurationUs": [4.224, 4.128, 4.352],
+    "controlMedianUs": 6.816,
+    "candidateMedianUs": 4.224,
+    "medianChangePercent": -38.028169,
+    "controlGridCtas": 4693,
+    "candidateGridCtas": 1760,
+    "controlWavesPerSm": 9.17,
+    "candidateWavesPerSm": 2.29,
+    "controlRegistersPerThread": 16,
+    "candidateRegistersPerThread": 23,
+    "controlAchievedOccupancyMedianPercent": 63.580307,
+    "candidateAchievedOccupancyMedianPercent": 70.686899,
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "s1Attribution": {
+    "nsysForwardThroughputChangePercent": 0.729643,
+    "nsysReverseThroughputChangePercent": 0.673244,
+    "nsysForwardTargetAverageChangePercent": -46.326031,
+    "nsysReverseTargetAverageChangePercent": -46.304671,
+    "locked2400Abba100": {
+      "runsNNEvalsPerSec": {
+        "A1Control": 2463.195999,
+        "B1Candidate": 2476.507517,
+        "B2Candidate": 2476.167761,
+        "A2Control": 2462.718280
+      },
+      "controlMeanNNEvalsPerSec": 2462.9571395,
+      "candidateMeanNNEvalsPerSec": 2476.337639,
+      "changePercent": 0.543270,
+      "adjacentPairChangesPercent": [0.540417, 0.546123]
+    }
+  },
+  "fiveItemBundleS2Nsys": {
+    "forward": {
+      "controlNNEvalsPerSec": 3208.441176,
+      "candidateNNEvalsPerSec": 3158.353945,
+      "throughputChangePercent": -1.561108,
+      "busyUnionChangePercent": 2.713275
+    },
+    "reverse": {
+      "controlNNEvalsPerSec": 3196.619790,
+      "candidateNNEvalsPerSec": 3155.860605,
+      "throughputChangePercent": -1.275071,
+      "busyUnionChangePercent": 2.077442
+    },
+    "launchChangeAcross64Forwards": -512,
+    "s2AbbaRun": false
+  },
+  "accuracy": {
+    "rows": 8192,
+    "byteIdenticalToStage50": true,
+    "replaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "status": "passed established all-head FP32 envelope"
+  },
+  "decision": "retain the vec4 implementation default-off as an intrinsic win and as item five in the cumulative strict-local bundle; deployed current best remains Stage50"
+}

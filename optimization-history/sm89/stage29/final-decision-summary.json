@@ -1,0 +1,73 @@
+{
+  "stage": 29,
+  "strategy": "wide-head BN directly emits FP32 and removes two head copies",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S1 only",
+  "binarySha256": "2911970dc5def0257c3d7962e88197a7f110db987ec7005720b0ce8f29b84889",
+  "switch": "cudaUseHeadBNHalfToFloat",
+  "decision": "accepted-for-s1-low-magnitude",
+  "enabledIn": "/workspace/bench-cuda-gpu0-4090-s1.cfg",
+  "requiresSwitch": "cudaUseWideHeadProjection=true",
+  "s2Retested": false,
+  "stage26S2DecisionUnchanged": "rejected",
+  "baselineNcu": {
+    "policyBnUs": 3.20,
+    "policyCopyUs": 2.72,
+    "valueBnUs": 4.45,
+    "valueCopyUs": 3.62,
+    "summedBoundaryUs": 13.99,
+    "copyComputeSolPercent": [11.71, 16.78],
+    "copyL2HitPercent": [98.43, 99.21],
+    "spillRequests": 0
+  },
+  "candidateNcu": {
+    "policyDirectFp32Us": 3.20,
+    "valueHalfAndFp32Us": 4.86,
+    "summedBoundaryUs": 8.06,
+    "changePercent": -42.387420,
+    "registersPerThread": 20,
+    "achievedOccupancyPercent": "63.43-66.50",
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "nsysS1": {
+    "kernelsRemovedPerForward": 2,
+    "forward": {
+      "baselineBoundaryUs": 12.089212,
+      "candidateBoundaryUs": 7.133121,
+      "boundaryChangePercent": -40.995981,
+      "baselineNNEvalsPerSec": 2435.529587,
+      "candidateNNEvalsPerSec": 2447.517742,
+      "throughputChangePercent": 0.492220
+    },
+    "reverse": {
+      "baselineBoundaryUs": 12.064030,
+      "candidateBoundaryUs": 7.142909,
+      "boundaryChangePercent": -40.791684,
+      "baselineNNEvalsPerSec": 2436.734908,
+      "candidateNNEvalsPerSec": 2438.782899,
+      "throughputChangePercent": 0.084047
+    }
+  },
+  "fullGraphLocked2400S1Abba100": {
+    "controlRunsNNEvalsPerSec": [2473.755377, 2474.237388, 2474.237388, 2473.755377],
+    "candidateRunsNNEvalsPerSec": [2476.643401, 2476.167761, 2475.684998, 2475.684998],
+    "controlPooledMedianNNEvalsPerSec": 2473.996382,
+    "candidatePooledMedianNNEvalsPerSec": 2475.926380,
+    "changePercent": 0.078011,
+    "forwardChangePercent": 0.097381,
+    "reverseChangePercent": 0.068255,
+    "adjacentPairChangesPercent": [0.116747, 0.078019, 0.058507, 0.078004],
+    "positivePairs": 4,
+    "totalPairs": 4
+  },
+  "accuracy": {
+    "rows": 8192,
+    "byteIdenticalToStage28": true,
+    "policyTop1VsFp32": 0.9970703125,
+    "policyProbabilityRmse": 0.00012730756134260446,
+    "valueOutcomeRmse": 0.002648415043950081,
+    "ownershipSigmoidRmse": 0.0003015638794749975,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "reason": "small full-graph gain, but NCU mechanism, both Nsys orders, all four locked ABBA pairs and byte-identical accuracy agree"
+}

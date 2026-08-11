@@ -1,0 +1,22 @@
+{
+  "target": "RTX 4090 SM89, FP16 BSHD [13,361,12,32]",
+  "upstreamCommit": "5835c733e7e9c07606b045255768e8a7e9e851bd",
+  "cutlassCommit": "7127592069c2fe01b041e174ba4345ef9b279671",
+  "microbenchmark": "/workspace/results/4090/stage7/flash_b13_microbench.cu",
+  "correctness": "every retained timing variant validated batch 0/head 0 against CPU FP32 softmax; best max abs error 3.0849129e-05",
+  "observationsUs": {
+    "stockRoundedD64M128N112W4": 53.12,
+    "nativeD32M128N112W4": 29.46,
+    "nativeD32M128N96W4SteadyRange": [24.19, 24.21],
+    "nativeD32M64N96W4PackGqaTrueSteadyRange": [23.51, 23.56],
+    "nativeD32M64N96W4PackGqaFalseSteadyRange": [23.28, 23.34],
+    "nativeD32M64N96W4PackGqaFalseMinBlocks4SteadyRange": [23.69, 23.74]
+  },
+  "accepted": "native D32, M64xN96, four warps, PackGQA=false, upstream min-block launch bound",
+  "rejected": [
+    "rounded D64 because upstream API specialization doubled isolated latency",
+    "M128 because M64 was about 2.5% faster in long alternating runs",
+    "PackGQA=true because false was about 1% faster for Hq=Hkv",
+    "min-blocks-per-SM=4 because register capping introduced spills and slowed the kernel"
+  ]
+}

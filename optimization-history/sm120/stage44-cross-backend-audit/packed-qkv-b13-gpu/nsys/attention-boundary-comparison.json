@@ -1,0 +1,228 @@
+{
+  "scope": "RTX5090D, 19x19, fixed B13, isolated S1 attribution",
+  "control": {
+    "sqlite": "/workspace/results/rebuild/stage44-cross-backend-audit/packed-qkv-b13-gpu/nsys/valid-01-control.sqlite",
+    "stream": 48,
+    "kernels_per_forward": 344,
+    "attention_blocks_per_forward": 33,
+    "qkv": {
+      "count": 660,
+      "mean_us": 19.227637878787878,
+      "median_us": 19.232,
+      "p10_us": 18.88,
+      "p90_us": 19.585
+    },
+    "rope": {
+      "count": 660,
+      "mean_us": 3.845031818181818,
+      "median_us": 3.84,
+      "p10_us": 3.776,
+      "p90_us": 3.936
+    },
+    "fa4": {
+      "count": 660,
+      "mean_us": 11.866378787878787,
+      "median_us": 11.872,
+      "p10_us": 11.68,
+      "p90_us": 12.064
+    },
+    "inter_kernel_gaps": {
+      "count": 660,
+      "mean_us": 0.5117681818181818,
+      "median_us": 0.512,
+      "p10_us": 0.48,
+      "p90_us": 0.544
+    },
+    "natural_boundary": {
+      "count": 660,
+      "mean_us": 35.45081666666667,
+      "median_us": 35.424,
+      "p10_us": 34.876900000000006,
+      "p90_us": 36.033
+    },
+    "natural_boundary_sum_per_forward": {
+      "count": 20,
+      "mean_us": 1169.87695,
+      "median_us": 1171.8384999999998,
+      "p10_us": 1155.5597,
+      "p90_us": 1183.9063
+    },
+    "full_forward_gpu_span": {
+      "count": 20,
+      "mean_us": 4166.6187,
+      "median_us": 4172.0205000000005,
+      "p10_us": 4115.0431,
+      "p90_us": 4213.3297999999995
+    },
+    "qkv_ordinals": [
+      12,
+      20,
+      28,
+      40,
+      48,
+      56,
+      68,
+      76,
+      84,
+      96,
+      104,
+      112,
+      124,
+      132,
+      140,
+      152,
+      160,
+      168,
+      180,
+      188,
+      196,
+      208,
+      216,
+      224,
+      236,
+      244,
+      252,
+      264,
+      272,
+      280,
+      292,
+      300,
+      308
+    ]
+  },
+  "candidate": {
+    "sqlite": "/workspace/results/rebuild/stage44-cross-backend-audit/packed-qkv-b13-gpu/nsys/valid-02-candidate.sqlite",
+    "stream": 48,
+    "kernels_per_forward": 344,
+    "attention_blocks_per_forward": 33,
+    "qkv": {
+      "count": 660,
+      "mean_us": 14.163833333333333,
+      "median_us": 14.145,
+      "p10_us": 13.92,
+      "p90_us": 14.432
+    },
+    "rope": {
+      "count": 660,
+      "mean_us": 5.62445606060606,
+      "median_us": 5.632,
+      "p10_us": 5.536,
+      "p90_us": 5.728
+    },
+    "fa4": {
+      "count": 660,
+      "mean_us": 11.90229696969697,
+      "median_us": 11.904,
+      "p10_us": 11.712,
+      "p90_us": 12.096
+    },
+    "inter_kernel_gaps": {
+      "count": 660,
+      "mean_us": 0.5230636363636364,
+      "median_us": 0.512,
+      "p10_us": 0.512,
+      "p90_us": 0.544
+    },
+    "natural_boundary": {
+      "count": 660,
+      "mean_us": 32.21365,
+      "median_us": 32.193,
+      "p10_us": 31.713,
+      "p90_us": 32.708099999999995
+    },
+    "natural_boundary_sum_per_forward": {
+      "count": 20,
+      "mean_us": 1063.05045,
+      "median_us": 1064.9575,
+      "p10_us": 1051.3069,
+      "p90_us": 1073.9591
+    },
+    "full_forward_gpu_span": {
+      "count": 20,
+      "mean_us": 4071.0454,
+      "median_us": 4076.4355,
+      "p10_us": 4022.5566,
+      "p90_us": 4114.9928
+    },
+    "qkv_ordinals": [
+      12,
+      20,
+      28,
+      40,
+      48,
+      56,
+      68,
+      76,
+      84,
+      96,
+      104,
+      112,
+      124,
+      132,
+      140,
+      152,
+      160,
+      168,
+      180,
+      188,
+      196,
+      208,
+      216,
+      224,
+      236,
+      244,
+      252,
+      264,
+      272,
+      280,
+      292,
+      300,
+      308
+    ]
+  },
+  "comparison": {
+    "qkv": {
+      "control_mean_us": 19.227637878787878,
+      "candidate_mean_us": 14.163833333333333,
+      "delta_us": -5.063804545454545,
+      "delta_percent": -26.336071946939388
+    },
+    "rope": {
+      "control_mean_us": 3.845031818181818,
+      "candidate_mean_us": 5.62445606060606,
+      "delta_us": 1.7794242424242421,
+      "delta_percent": 46.27853101266845
+    },
+    "fa4": {
+      "control_mean_us": 11.866378787878787,
+      "candidate_mean_us": 11.90229696969697,
+      "delta_us": 0.035918181818182404,
+      "delta_percent": 0.3026886505163029
+    },
+    "inter_kernel_gaps": {
+      "control_mean_us": 0.5117681818181818,
+      "candidate_mean_us": 0.5230636363636364,
+      "delta_us": 0.011295454545454553,
+      "delta_percent": 2.207142793700978
+    },
+    "natural_boundary": {
+      "control_mean_us": 35.45081666666667,
+      "candidate_mean_us": 32.21365,
+      "delta_us": -3.237166666666667,
+      "delta_percent": -9.131430446595257
+    },
+    "natural_boundary_sum_per_forward": {
+      "control_mean_us": 1169.87695,
+      "candidate_mean_us": 1063.05045,
+      "delta_us": -106.82650000000012,
+      "delta_percent": -9.131430446595267
+    },
+    "full_forward_gpu_span": {
+      "control_mean_us": 4166.6187,
+      "candidate_mean_us": 4071.0454,
+      "delta_us": -95.57330000000002,
+      "delta_percent": -2.293785606059895
+    }
+  },
+  "interpretation": "The deployment decision remains natural S2. This S1 report measures the complete QKV-to-FA4 boundary and does not add independent NCU timings."
+}

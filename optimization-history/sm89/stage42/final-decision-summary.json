@@ -1,0 +1,42 @@
+{
+  "stage": 42,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "CUTLASS dual-FFN operand-B cp.async cache policy Global to Always",
+  "decision": "reject-and-revert",
+  "preImplementationNsys": {
+    "sourceStage": 40,
+    "iterations": 20,
+    "launches": 2178,
+    "averageUs": 43.233,
+    "totalMs": 94.161,
+    "hotspotRankBySummedKernelTime": 1
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "replaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncu": {
+    "controlDurationUs": [41.38, 41.25, 41.28],
+    "controlMedianDurationUs": 41.28,
+    "candidateDurationUs": [41.54, 41.31, 41.50],
+    "candidateMedianDurationUs": 41.50,
+    "medianDeltaPct": 0.5329,
+    "controlL1HitPct": [0.0, 0.0, 0.0],
+    "candidateL1HitPct": [0.0, 0.0, 0.0],
+    "controlL2ThroughputPctRange": [72.72, 73.77],
+    "candidateL2ThroughputPctRange": [73.02, 73.77],
+    "controlNoEligiblePctRange": [78.28, 78.57],
+    "candidateNoEligiblePctRange": [78.25, 78.60],
+    "registersPerThread": 168,
+    "dynamicSharedMemoryKiB": 49.15,
+    "spills": 0
+  },
+  "nsysComparisonRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "B weight reuse does not materialize as same-SM L1 reuse under this launch order. The .ca policy gives no L1 hits and no latency benefit.",
+  "controlBinarySha256": "4b78263efaaabfb62df4097d2379f5d0551954d3b1e50668b15eb80d33e93ff3",
+  "candidateBinarySha256": "d362b0fb3a9e12f5473ee11bfc0f5d0a74744304b18b6216a38158ffc711b6ab",
+  "sourceState": "pristine CUTLASS operand-B Global cache policy restored; accepted binary rebuilt"
+}

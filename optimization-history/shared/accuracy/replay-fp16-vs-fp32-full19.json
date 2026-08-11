@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-05T12:24:40+00:00",
+  "reference": "/workspace/trainingdata/accuracy/replay-fp32-full19.krnn",
+  "candidate": "/workspace/trainingdata/accuracy/replay-fp16-full19.krnn",
+  "referenceRevision": "847e78a44d402df200eabbbe0506776a45607c29-dirty-cuda",
+  "candidateRevision": "847e78a44d402df200eabbbe0506776a45607c29-dirty-cuda",
+  "corpus": "/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.npz",
+  "numRows": 8192,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": NaN,
+    "p0lossCandidateWeighted": NaN,
+    "p0lossReferenceUnweighted": NaN,
+    "p0lossCandidateUnweighted": NaN,
+    "top1VsReference": 0.1116943359375,
+    "optimisticTop1VsReference": 0.12548828125,
+    "top1VsTarget": 0.0047607421875,
+    "optimisticTop1VsTarget": 0.0517578125,
+    "probabilityRmse": NaN,
+    "optimisticProbabilityRmse": NaN,
+    "totalVariation": NaN,
+    "jsd": NaN
+  },
+  "value": {
+    "outcomeRmse": NaN,
+    "rawLogitsRmse": NaN
+  },
+  "score": {
+    "meanRmse": NaN,
+    "all6Rmse": NaN
+  },
+  "ownership": {
+    "rawLogitsRmse": NaN,
+    "sigmoidRmse": NaN
+  },
+  "maxPolicyAbsError": {
+    "row": 19,
+    "move": 0,
+    "value": NaN
+  }
+}

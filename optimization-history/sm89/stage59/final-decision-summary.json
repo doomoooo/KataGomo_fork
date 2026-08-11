@@ -1,0 +1,90 @@
+{
+  "stage": 59,
+  "strategy": "use FP16 Tensor Core accumulation for both QK and PV in the exact-B13 SM89 FlashAttention path while retaining FP32 online-softmax statistics",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "switch": "cudaUseFlashAttentionBoth16Sm89",
+  "implementationStatus": "accepted",
+  "deploymentStatus": "S2-enabled",
+  "sourceRetained": true,
+  "sourceCommit": "7d299d0faab1080579bc5b3a8d06cd8017375a2d",
+  "binarySha256": "afa681b375b31456dc09ba25ec08d1ad987184978a83db378f0abea840c219d8",
+  "deployedConfigSha256": "723fbf8c0f7a090409c129589b666d56a51ed17f8aa478d19c629131da6171dc",
+  "mechanism": {
+    "qkTensorCoreAccumulation": "FP16",
+    "pvTensorCoreAccumulation": "FP16",
+    "onlineSoftmaxRowMaxAndRowSum": "FP32",
+    "outputStorage": "FP16",
+    "scope": "exact B13/S361/H12/D32 SM89 FlashAttention dispatch only"
+  },
+  "ncuFromS2Invocation": {
+    "controlDurationsUs": [28.0, 28.224, 28.256],
+    "candidateDurationsUs": [20.928, 20.864, 20.864],
+    "controlMedianUs": 28.224,
+    "candidateMedianUs": 20.864,
+    "durationChangePercent": -26.077098,
+    "controlRegistersPerThread": 168,
+    "candidateRegistersPerThread": 117,
+    "controlRegisterOccupancyLimitBlocks": 3,
+    "candidateRegisterOccupancyLimitBlocks": 4,
+    "controlEligibleWarpsPerCycle": 0.347816,
+    "candidateEligibleWarpsPerCycle": 0.869792,
+    "dynamicSharedBytes": 16768,
+    "controlMmaOpcode": "HMMA.16816.F32",
+    "candidateMmaOpcode": "HMMA.16816.F16",
+    "localOrSharedSpill": false
+  },
+  "locked2400S2AbbaBaab100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 3256.1479,
+      "A2Control": 3270.302043,
+      "A3Control": 3271.144694,
+      "A4Control": 3300.806028,
+      "B1Candidate": 3369.247636,
+      "B2Candidate": 3453.332205,
+      "B3Candidate": 3424.917401,
+      "B4Candidate": 3423.993676
+    },
+    "controlMeanNNEvalsPerSec": 3274.600166,
+    "candidateMeanNNEvalsPerSec": 3417.872729,
+    "meanChangePercent": 4.375269,
+    "controlMedianNNEvalsPerSec": 3270.723369,
+    "candidateMedianNNEvalsPerSec": 3424.455539,
+    "medianChangePercent": 4.70025
+  },
+  "accuracy": {
+    "rows": 8192,
+    "policyTop1VsStage56": 0.9976806640625,
+    "policyProbabilityRmseVsStage56": 0.0001458439219277352,
+    "valueOutcomeRmseVsStage56": 0.0016277381218969822,
+    "scoreMeanRmseVsStage56": 0.0017438726499676704,
+    "ownershipSigmoidRmseVsStage56": 0.0003424410242587328,
+    "policyTop1VsFp32": 0.997802734375,
+    "policyProbabilityRmseVsFp32": 0.00013462567585520446,
+    "valueOutcomeRmseVsFp32": 0.002608134876936674,
+    "ownershipSigmoidRmseVsFp32": 0.00031313736690208316,
+    "status": "passed accepted both16 all-head envelope"
+  },
+  "postDecisionCheckpoint": {
+    "nsysNNEvalsPerSec": 3401.752265,
+    "flashRawDurationMs": 57.61405,
+    "flashRawChangeVsStage56Percent": -19.741387,
+    "flashExclusiveDurationMs": 14.148319,
+    "flashExclusiveChangeVsStage56Percent": -44.923133,
+    "busyUnionMs": 248.671176,
+    "busyUnionChangeVsStage56Percent": -4.042358,
+    "nextPriorityFamilies": {
+      "ffnDualBusyUnionPercent": 37.083143,
+      "ffnDualExclusivePercent": 18.298747,
+      "qkvRopeBusyUnionPercent": 25.330845,
+      "qkvRopeExclusivePercent": 11.47457,
+      "flashAttentionBusyUnionPercent": 22.940031,
+      "flashAttentionExclusivePercent": 5.689569
+    }
+  },
+  "tensorrtComparison": {
+    "baselineNNEvalsPerSec": 2432.1979345,
+    "candidateLockedAbbaMeanNNEvalsPerSec": 3417.872729,
+    "changePercent": 40.526093
+  },
+  "decision": "retain and enable SM89 FlashAttention both16 for the exact 19x19 B13 S2 deployment; move the next optimization investment to the FFN dual projection plus SwiGLU kernel"
+}

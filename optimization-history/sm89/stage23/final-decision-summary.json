@@ -1,0 +1,82 @@
+{
+  "stage": 23,
+  "strategy": "share ordinary Sm89MatMul weights across two server models",
+  "target": "RTX4090 exact19 B13 FP16 S2",
+  "binarySha256": "144605dfc7fae3faeb2cb0ee1eaec933fbd1d221988114bced6c9b9abb39b720",
+  "switch": "cudaShareModelWeights",
+  "decision": "rejected",
+  "defaultEnabled": false,
+  "startupMechanism": {
+    "controlCudaMallocCalls": 4348,
+    "candidateCudaMallocCalls": 3872,
+    "removedCudaMallocCalls": 476,
+    "controlH2DCalls": 4192,
+    "candidateH2DCalls": 3716,
+    "removedH2DCalls": 476,
+    "controlH2DBytes": 1484049888,
+    "candidateH2DBytes": 1229614560,
+    "removedH2DBytes": 254435328,
+    "conclusion": "physical deduplication worked"
+  },
+  "ncuRepresentativeOutProjection": {
+    "kernel": "ampere_h1688gemm_128x128_ldg8_stages_32x1_nn",
+    "shape": "grid(3,37,1) block(128,1,1)",
+    "controlDurationsUs": [11.71, 11.81, 11.65, 11.65],
+    "candidateDurationsUs": [11.74, 11.55, 11.78, 11.71],
+    "controlMedianUs": 11.680,
+    "candidateMedianUs": 11.725,
+    "changePercent": 0.385274,
+    "registersPerThread": 186,
+    "wavesPerSm": 0.43,
+    "achievedOccupancyPercent": 8.30,
+    "spillRequests": 0,
+    "conclusion": "no isolated-kernel improvement"
+  },
+  "nsysSteadyStateLast30PerStream": {
+    "kernelsPerForwardPerStream": 311,
+    "forwardOrder": {
+      "controlUnionMs": 244.489227,
+      "candidateUnionMs": 245.617125,
+      "unionChangePercent": 0.461328,
+      "controlSummedKernelMs": 379.982190,
+      "candidateSummedKernelMs": 379.202614,
+      "summedChangePercent": -0.205161
+    },
+    "reverseOrder": {
+      "controlUnionMs": 249.432393,
+      "candidateUnionMs": 243.831411,
+      "unionChangePercent": -2.245491,
+      "controlSummedKernelMs": 381.405176,
+      "candidateSummedKernelMs": 380.364939,
+      "summedChangePercent": -0.272738
+    },
+    "conclusion": "kernel count and geometry were unchanged; union was order-sensitive"
+  },
+  "fullGraphLockedAbba": {
+    "short500": {
+      "rounds": 3,
+      "note": "9 of 12 adjacent pairs were positive, but samples were bimodal and conflicted with Nsys"
+    },
+    "long1500": {
+      "controlPooledMedianNNEvalsPerSec": 3185.972217,
+      "candidatePooledMedianNNEvalsPerSec": 3163.154328,
+      "changePercent": -0.716199,
+      "forwardControlMedianNNEvalsPerSec": 3183.630332,
+      "forwardCandidateMedianNNEvalsPerSec": 3156.571342,
+      "forwardChangePercent": -0.849941,
+      "reverseControlMedianNNEvalsPerSec": 3200.302603,
+      "reverseCandidateMedianNNEvalsPerSec": 3189.354212,
+      "reverseChangePercent": -0.342105
+    },
+    "discarded": {
+      "path": "abba-1500-locked2400-warm-r2",
+      "status": "contaminated",
+      "reason": "user requested shorter screening; run was terminated after only A1 and B1 completed"
+    }
+  },
+  "accuracy": {
+    "status": "not rerun",
+    "reason": "performance rejected; arithmetic and kernel execution are unchanged"
+  },
+  "reason": "weight allocation deduplication is real, but the isolated GEMM is already L2-hot and unchanged; the full-graph long-window result regressed in both order directions"
+}

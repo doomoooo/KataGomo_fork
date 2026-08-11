@@ -1,0 +1,146 @@
+{
+  "outproj-s1": {
+    "arms": {
+      "01-private": 8.099648,
+      "02-shared": 8.126008,
+      "03-shared": 8.130567,
+      "04-private": 8.126121,
+      "05-shared": 8.125288,
+      "06-private": 8.130949,
+      "07-private": 8.126263,
+      "08-shared": 8.132316
+    },
+    "private_mean_us": 8.120745249999999,
+    "shared_mean_us": 8.12854475,
+    "change_pct": 0.09604414077637458,
+    "forward_change_pct": 0.18985848991193155,
+    "reverse_change_pct": 0.0024112375480056514,
+    "adjacent_pair_change_pct": [
+      0.3254462416144577,
+      0.05471245136516867,
+      -0.06962286936001982,
+      0.07448688283899774
+    ],
+    "private_repeat_range_us": null
+  },
+  "outer-pre-s1": {
+    "arms": {
+      "01-private": 15.248955,
+      "02-shared": 15.249203,
+      "03-shared": 15.249245,
+      "04-private": 15.248899,
+      "05-shared": 15.248774,
+      "06-private": 15.248413,
+      "07-private": 15.250229,
+      "08-shared": 15.250618
+    },
+    "private_mean_us": 15.249124,
+    "shared_mean_us": 15.24946,
+    "change_pct": 0.0022034052578945307,
+    "forward_change_pct": 0.0019476780235061497,
+    "reverse_change_pct": 0.0024591258850348297,
+    "adjacent_pair_change_pct": [
+      0.0016263409525318906,
+      0.002269016274558666,
+      0.002367459485785872,
+      0.0025507813685932135
+    ],
+    "private_repeat_range_us": null
+  },
+  "outer-post-s1": {
+    "arms": {
+      "01-private": 15.339845,
+      "02-shared": 15.342567,
+      "03-shared": 15.341078,
+      "04-private": 15.339699,
+      "05-shared": 15.341883,
+      "06-private": 15.339503,
+      "07-private": 15.342587,
+      "08-shared": 15.341843
+    },
+    "private_mean_us": 15.3404085,
+    "shared_mean_us": 15.34184275,
+    "change_pct": 0.009349490269427996,
+    "forward_change_pct": 0.013367213019854773,
+    "reverse_change_pct": 0.005332100909671844,
+    "adjacent_pair_change_pct": [
+      0.017744638228101017,
+      0.008989746148202471,
+      0.015515496166984555,
+      -0.004849247392235689
+    ],
+    "private_repeat_range_us": null
+  },
+  "outproj-s2": {
+    "arms": {
+      "01-private": 11.401899,
+      "02-shared": 11.428139,
+      "03-shared": 11.42868,
+      "04-private": 11.402599,
+      "05-shared": 11.429446,
+      "06-private": 11.403759,
+      "07-private": 11.401619,
+      "08-shared": 11.428135
+    },
+    "private_mean_us": 11.402469,
+    "shared_mean_us": 11.4286,
+    "change_pct": 0.22916966492081414,
+    "forward_change_pct": 0.22943280751015482,
+    "reverse_change_pct": 0.22890653248544002,
+    "adjacent_pair_change_pct": [
+      0.23013710260018083,
+      0.22872855565647665,
+      0.22525028808482173,
+      0.2325634631362261
+    ],
+    "private_repeat_range_us": null
+  },
+  "outer-pre-s2": {
+    "arms": {
+      "01-private": 21.467892,
+      "02-shared": 21.411156,
+      "03-shared": 21.469656,
+      "04-private": 21.487633,
+      "05-shared": 21.420212,
+      "06-private": 21.461063,
+      "07-private": 21.475338,
+      "08-shared": 21.411373
+    },
+    "private_mean_us": 21.4729815,
+    "shared_mean_us": 21.42809925,
+    "change_pct": -0.20901731787921207,
+    "forward_change_pct": -0.1739310600906263,
+    "reverse_change_pct": -0.24411920319078462,
+    "adjacent_pair_change_pct": [
+      -0.26428305117242035,
+      -0.08366207669312509,
+      -0.19034937831364784,
+      -0.2978532864069461
+    ],
+    "private_repeat_range_us": null
+  },
+  "outer-post-s2": {
+    "arms": {
+      "01-private": 21.472393,
+      "02-shared": 21.455835,
+      "03-shared": 21.450649,
+      "04-private": 21.469807,
+      "05-shared": 21.470135,
+      "06-private": 21.448158,
+      "07-private": 21.453978,
+      "08-shared": 21.435577
+    },
+    "private_mean_us": 21.461084,
+    "shared_mean_us": 21.453049,
+    "change_pct": -0.0374398609128912,
+    "forward_change_pct": -0.0831722641131627,
+    "reverse_change_pct": 0.008335249321844707,
+    "adjacent_pair_change_pct": [
+      -0.07711297012866769,
+      -0.08923228792881988,
+      0.10246567560721065,
+      -0.08576964141568943
+    ],
+    "private_repeat_range_us": null
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "stage": 65,
+  "target": "RTX4090 exact19 B13 FP16 NHWC; retained default-off split-QKV path",
+  "strategy": "replace the plain QKV no-scale FP32 LinearCombination epilogue with an FP16-compute no-scale epilogue",
+  "status": "mechanism-accepted-throughput-neutral-default-off",
+  "runtimeVariants": {
+    "config": "cudaPlainQKVVariantSm89",
+    "control": 0,
+    "halfEpilogue": 1,
+    "scope": "only active when cudaUseSplitQKVRoPEGemmSm89=true"
+  },
+  "correctness": {
+    "smokeRows": 26,
+    "smokeAllTensorRmseVsControl": 0.0,
+    "fullRows": 8192,
+    "allTensorRmseVsStage64": 0.0,
+    "policyTop1VsStage64": 1.0,
+    "fp32Report": "replay-plain-qkv-half-epilogue-vs-fp32.json",
+    "stage64Report": "replay-plain-qkv-half-epilogue-vs-stage64.json"
+  },
+  "sassAndResources": {
+    "hmmaPerLaunchControl": 64,
+    "hmmaPerLaunchCandidate": 64,
+    "f2fPerLaunchControl": 64,
+    "f2fPerLaunchCandidate": 0,
+    "registersPerThread": 168,
+    "dynamicSharedKiB": 49.15,
+    "wavesPerSm": 1.30,
+    "spills": 0
+  },
+  "pairedNcu": {
+    "note": "the first replay in both variants was an 80-81 us outlier and is excluded symmetrically",
+    "controlUs": [23.30, 23.71],
+    "candidateUs": [23.39, 23.46],
+    "controlMeanUs": 23.505,
+    "candidateMeanUs": 23.425,
+    "changePercent": -0.340353
+  },
+  "naturalS1Nsys": {
+    "matchedSamePhasePair": {
+      "controlLaunchToCompletionUs": 29.594808,
+      "candidateLaunchToCompletionUs": 29.525333,
+      "changePercent": -0.234755
+    },
+    "contamination": "the later traces entered different slow performance states (candidate 33.659 us and control 42.103 us) and are excluded"
+  },
+  "lockedS1Abba50": {
+    "controlMeanNNEvalsPerSec": 2622.250570,
+    "candidateMeanNNEvalsPerSec": 2623.135231,
+    "changePercent": 0.033737,
+    "forwardChangePercent": 0.005209,
+    "reverseChangePercent": 0.062301,
+    "interpretation": "no stable throughput gain, but no aggregate/order regression"
+  },
+  "decision": "Retain variant 1 as a default-off reusable implementation because it is byte-identical, deletes 64 F2F instructions per launch, keeps all resources unchanged, and does not regress natural S1 or ABBA. Classify it as mechanism-accepted/throughput-neutral rather than an intrinsic throughput win. Do not run S2 deployment tests because Stage64's split boundary remains far behind fused QKV+RoPE under S2.",
+  "currentBestCheckpoint": "reuse Stage62; deployed source/config behavior is unchanged"
+}

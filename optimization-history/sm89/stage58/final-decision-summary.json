@@ -1,0 +1,57 @@
+{
+  "stage": 58,
+  "strategy": "fuse a residual projection with the following C384 RMSNorm using one full-row-owner CTA",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment target",
+  "decision": "mechanism-rejected-and-reverted",
+  "controlCommit": "91f6aae65f31f890bce9032acdee7de18b49e42b",
+  "candidateDirtyBinarySha256": "03aeb6a0e9c6154c78fc085767c020e0a4f90839d674676bb46e990ed133fe14",
+  "restoredCleanBinarySha256": "34a5c26e7c1cdbb2ef5dffb0ea91f90bf149866a691c2be6c45a9afc55276bcb",
+  "fullGraphEvidence": {
+    "rmsNormLaunchesPerForward": 66,
+    "linear2ToRmsBoundariesPerForward": 22,
+    "outProjToRmsBoundariesPerForward": 33,
+    "preConvToRmsBoundariesPerForward": 11,
+    "rmsNormExclusiveBusyPercent": 1.33
+  },
+  "prototype": {
+    "scope": "linear2 residual to following RMSNorm",
+    "correctnessValidShape": "threadblock M64xN512xK32, warp M64xN64xK32, stage2, 256 threads",
+    "paddedOutputWorkPercent": 33.333333,
+    "invalidShapes": [
+      "M64xN384 with six M64xN64 warps: unsupported CUTLASS warp-grid mapping, residual diagnostic failed",
+      "M32xN384 with four M32xN96 warps: nonstandard warp tile, residual diagnostic failed"
+    ]
+  },
+  "smoke": {
+    "rows": 26,
+    "policyTop1VsControl": 1.0,
+    "policyProbabilityRmseVsControl": 0.00011466953583294526,
+    "valueOutcomeRmseVsControl": 0.0019306107424199581,
+    "scoreMeanRmseVsControl": 0.005081960465759039,
+    "ownershipSigmoidRmseVsControl": 0.00045154758845455945,
+    "status": "passed established all-head smoke envelope"
+  },
+  "ncuFromS2Invocation": {
+    "controlLinear2MedianUs": 23.072,
+    "controlRmsNormMedianUs": 4.640,
+    "controlBoundaryMedianUs": 27.712,
+    "candidateDurationsUs": [48.32, 47.81, 47.78],
+    "candidateMedianUs": 47.81,
+    "boundaryChangePercent": 72.524538,
+    "acceptanceThresholdUs": 26.3264,
+    "candidateRegistersPerThread": 184,
+    "candidateDynamicSharedKib": 73.73,
+    "candidateWavesPerSm": 0.58,
+    "candidateTheoreticalOccupancyPercent": 16.67,
+    "candidateGridBlocks": 74,
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "s1NsysRun": false,
+  "s2ComparativeNsysRun": false,
+  "longTestRun": false,
+  "fullAccuracyRun": false,
+  "postDecisionFullGraphProfile": "reused Stage57 clean current-best checkpoint because candidate source was fully reverted",
+  "sourceState": "all Stage58 runtime, interface, and kernel changes removed; Stage57 commit remains intact",
+  "mechanismConclusion": "eliminating the RMS launch and residual reread cannot compensate for 33% padded MMA plus a 74-CTA, one-block-per-SM, high-register/high-shared full-row-owner GEMM"
+}

@@ -1,0 +1,44 @@
+{
+  "regime": "L1K-EXACT19-B13-S2",
+  "rawDirectories": [
+    "abba-500-locked2400-warm-r1",
+    "abba-500-locked2400-warm-r3",
+    "abba-500-locked2400-warm-r4"
+  ],
+  "pooled": {
+    "controlSamples": 12,
+    "candidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 3125.480861,
+    "candidateMedianNNEvalsPerSec": 3155.3171345,
+    "improvementPercent": 0.954613860,
+    "controlMedianActualWallPerForwardMs": 8.388071075,
+    "candidateMedianActualWallPerForwardMs": 8.305367941,
+    "actualWallImprovementPercent": 0.995779291
+  },
+  "direction": {
+    "forwardControlMedianNNEvalsPerSec": 3121.1182085,
+    "forwardCandidateMedianNNEvalsPerSec": 3153.8029165,
+    "forwardImprovementPercent": 1.047211474,
+    "reverseControlMedianNNEvalsPerSec": 3159.335394,
+    "reverseCandidateMedianNNEvalsPerSec": 3159.9108955,
+    "reverseImprovementPercent": 0.018215904
+  },
+  "rounds": [
+    {"round": 1, "controlMedianNNEvalsPerSec": 3139.4350845, "candidateMedianNNEvalsPerSec": 3155.3171345, "improvementPercent": 0.505888785},
+    {"round": 3, "controlMedianNNEvalsPerSec": 3161.626675, "candidateMedianNNEvalsPerSec": 3162.652806, "improvementPercent": 0.032455793},
+    {"round": 4, "controlMedianNNEvalsPerSec": 3124.519478, "candidateMedianNNEvalsPerSec": 3150.690322, "improvementPercent": 0.837595803}
+  ],
+  "adjacentPairs": {
+    "positivePairs": 10,
+    "totalPairs": 12,
+    "medianImprovementPercent": 0.957702060,
+    "minImprovementPercent": -0.062830411,
+    "maxImprovementPercent": 2.904445107
+  },
+  "discardedRound": {
+    "round": 2,
+    "path": "abba-500-locked2400-warm-r2",
+    "reason": "candidate B2 process segfaulted during model startup before graph warmup or any timed forward; entire round discarded",
+    "usedForDecision": false
+  }
+}

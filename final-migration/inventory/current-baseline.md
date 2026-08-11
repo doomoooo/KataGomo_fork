@@ -69,11 +69,11 @@ are read-only to final migration.
 
 ## Optimization result roots
 
-- SM120/rebuild history: `/workspace/results/rebuild/HISTORY.md`
+- SM120 history: `/workspace/results/sm120/HISTORY.md`
 - recent SM120 stage reports: `stage55-cute-packed-qkv-rope`,
   `stage56-fa4-n64`, and `stage57-fa4-n96`
-- generated cross-batch plans: `/workspace/results/rebuild/cross-batch-search/`
-- 4090 history: `/workspace/results/4090/HISTORY.md`
+- generated cross-batch plans: `/workspace/results/sm120/cross-batch-search/`
+- SM89 history: `/workspace/results/sm89/HISTORY.md`
 
 Generated plan filenames currently include SM120 tactic plans and joint fixed
 plans. They are evidence for schema discovery only until their owner freezes

@@ -1,0 +1,31 @@
+{
+  "createdUtc": "2026-08-05T16:30:21.441921045+00:00",
+  "regime": "L1-EXACT19-B13-S2",
+  "protocol": "10 warmup and 300 timed forwards per server; forward A-B-B-A plus reverse B-A-A-B",
+  "repeatBinarySha256": "1cc62645f9e1d79ac9592b8290d60df2df4169802ea3598ba107143920ba38a5",
+  "presetBinarySha256": "a3a07ade730090f8a40eb4466bda7f367142ca9d69fc32128f31f4318b4254ce",
+  "A": "upstream DualGemm::run repeats cudaFuncSetAttribute before every launch",
+  "B": "wrapper sets the attribute once and DualGemm::run skips it",
+  "forward": {
+    "order": ["A1", "B1", "B2", "A2"],
+    "repeatNNEvalsPerSec": [2995.329414, 2927.719403],
+    "presetNNEvalsPerSec": [2919.218373, 2911.108194],
+    "repeatMedianNNEvalsPerSec": 2961.5244085,
+    "presetMedianNNEvalsPerSec": 2915.1632835,
+    "presetChangePercent": -1.565448
+  },
+  "reverse": {
+    "order": ["R-B1", "R-A1", "R-A2", "R-B2"],
+    "repeatNNEvalsPerSec": [2978.897390, 2982.658479],
+    "presetNNEvalsPerSec": [2925.524344, 2937.293967],
+    "repeatMedianNNEvalsPerSec": 2980.7779345,
+    "presetMedianNNEvalsPerSec": 2931.4091555,
+    "presetChangePercent": -1.656238
+  },
+  "combined": {
+    "repeatMedianNNEvalsPerSec": 2980.7779345,
+    "presetMedianNNEvalsPerSec": 2922.3713585,
+    "presetChangePercent": -1.959441
+  },
+  "decision": "rejected; repeated attribute call likely paces the two host submission threads and improves S2 scheduling"
+}

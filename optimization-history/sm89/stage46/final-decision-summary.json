@@ -1,0 +1,36 @@
+{
+  "stage": 46,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "delay the two-kgroup dual-FFN wait/barrier until after group 1 MMA",
+  "decision": "reject-static-and-revert",
+  "preImplementationEvidence": {
+    "controlDurationMedianUs": 41.28,
+    "noEligiblePct": 78.31,
+    "executionMathPipeStallPct": 32.7,
+    "mainloopBarrierSamples": 816,
+    "mainloopBarrierLongScoreboardSamples": 802,
+    "excessiveSharedWavefronts": 571464
+  },
+  "sass": {
+    "controlFunctionSha256": "f2cbbe037c48a20bbd7000e124dd86e62cef1711365e102725b10c29b40b5d33",
+    "candidateFunctionSha256": "c0e15f258ab4f66a2a7bce3b3a4da2b8a78b98ebb3b31adcccc574785c912a6e",
+    "candidateV2FunctionSha256": "c0e15f258ab4f66a2a7bce3b3a4da2b8a78b98ebb3b31adcccc574785c912a6e",
+    "controlHmma": 64,
+    "candidateHmma": 64,
+    "controlLdgsts": 24,
+    "candidateLdgsts": 24,
+    "controlBarriers": 19,
+    "candidateBarriers": 19,
+    "controlHmmaBeforeMainloopBarrier": 22,
+    "candidateHmmaBeforeMainloopBarrier": 22
+  },
+  "smokeRun": false,
+  "ncuCandidateRun": false,
+  "nsysRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "ptxas moved register-only MMA work across the source synchronization and eliminated the explicit self-move dependency, so neither implementation realized the requested machine schedule.",
+  "controlBinarySha256": "2b0718dab575bcc80aad816bf60b093d2dcfcd8ca90dbfb69dfc2d4e8ff73b31",
+  "candidateV2BinarySha256": "9a5d75e7188961ad4f6d25e1215174b28bd03282beaad37c64f13744b90447c2",
+  "sourceState": "pinned CUTLASS header restored before the next experiment"
+}

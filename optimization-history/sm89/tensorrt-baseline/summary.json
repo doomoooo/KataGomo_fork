@@ -1,0 +1,43 @@
+{
+  "createdUtc": "2026-08-06T02:07:08Z",
+  "regime": "L1K-EXACT19-B13-S2-CROSS-BACKEND",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "clockMHz": 2400,
+    "board": "19x19 exact",
+    "batchSize": 13,
+    "serverThreads": 2,
+    "precision": "FP16",
+    "timingBoundary": "GPU forward events; plan build, model load, H2D/D2H, and postprocessing excluded"
+  },
+  "binaries": {
+    "tensorrtVersion": "10.16.1.11",
+    "tensorrtSha256": "f514cc1660873427ca4d2b5b2daf862f48b06d72719a3d85eb3c26bb1baf3f63",
+    "cudaStage21Sha256": "748d3eb6225369601a6fb7a6bcc3f31e228ff89d14f38ae5195f0f0b38406b00"
+  },
+  "crossBackendAbba500": {
+    "control": "TensorRT",
+    "candidate": "CUDA Stage21",
+    "controlSamples": 4,
+    "candidateSamples": 4,
+    "tensorrtMedianNNEvalsPerSec": 2432.1979345,
+    "cudaMedianNNEvalsPerSec": 3145.511323,
+    "cudaImprovementPercent": 29.327933322,
+    "forwardImprovementPercent": 28.563762807,
+    "reverseImprovementPercent": 28.644223432,
+    "positiveAdjacentPairs": 4,
+    "totalAdjacentPairs": 4,
+    "report": "cross-backend-abba-r1-summary.json"
+  },
+  "tensorrtAccuracy": {
+    "rows": 8192,
+    "policyTop1VsFp32": 0.997802734375,
+    "p0lossFp32Weighted": 1.5915279388427734,
+    "p0lossTensorRTWeighted": 1.5915627479553223,
+    "policyProbabilityRmse": 0.00014516817464027554,
+    "valueOutcomeRmse": 0.003259723074734211,
+    "scoreMeanRmse": 0.003299898933619261,
+    "ownershipSigmoidRmse": 0.0003139667969662696,
+    "report": "replay-trt-exact19-b13-s2-vs-fp32.json"
+  }
+}

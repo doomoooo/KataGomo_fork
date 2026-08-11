@@ -1,0 +1,39 @@
+{
+  "stage": 36,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2",
+  "strategy": "QKV operand-B copy map 8x4 to 16x2",
+  "decision": "reject-and-revert-before-performance",
+  "controlNcu": {
+    "report": "/workspace/results/4090/stage36/ncu-qkv-copy-map-s2-control/control.ncu-rep",
+    "durationUs": [24.704, 29.632, 30.24],
+    "medianDurationUs": 29.632,
+    "registersPerThread": 240,
+    "dynamicSharedMemoryKiB": 49.152,
+    "wavesPerSm": 1.3,
+    "theoreticalOccupancyPct": 16.666667,
+    "achievedOccupancyPct": [14.958466, 14.927669, 15.032016],
+    "noEligiblePct": [79.2196, 79.341946, 79.409927],
+    "l2HitRatePct": [99.488837, 99.461731, 99.405318],
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "correctnessGate": {
+    "rows": 26,
+    "passed": false,
+    "controlSha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateSha256": "fee03dd84fd1ebbbb51c0242a4a6e1b5b9eb5499aa0c2422a4b730e6d8b9c1bd",
+    "policyTop1VsControl": 0.0,
+    "policyProbabilityRmse": 0.02990839071571827,
+    "policyTotalVariation": 0.9159818291664124,
+    "valueRawLogitsRmse": 7.023793697357178,
+    "comparison": "/workspace/results/4090/stage36/smoke-qkv-copy-map-s2/candidate-vs-control.json"
+  },
+  "candidatePerformanceProfilesRun": false,
+  "nsysRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "rootCause": "CUTLASS row-major-B global warp-raked map is coupled to the RowMajorTensorOpMultiplicandCongruous shared-memory lane layout; a 16x2 alias substitution violates that hidden producer-consumer mapping",
+  "reopenCondition": "Implement a faithful CuTe or custom mainloop with matched global tiled-copy map, shared-memory layout, and MMA consumer mapping; validate correctness before profiling",
+  "candidateBinarySha256": "1705b1f60e9b9b2c2371c53a2aeffd51fee1fd6a9a158e44ee5631709b09d6f7",
+  "postRevertBinarySha256": "8d12ab9266ce20ada665a8f83ce3fb619f1808e3115325669b8b955ceb4337c1"
+}

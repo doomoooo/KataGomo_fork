@@ -1,0 +1,44 @@
+{
+  "stage": 44,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "CUTLASS dual-FFN horizontal instead of SM89 vertical HMMA visit",
+  "decision": "reject-and-revert",
+  "preImplementationNsys": {
+    "sourceStage": 40,
+    "iterations": 20,
+    "launches": 2178,
+    "averageUs": 43.233,
+    "totalMs": 94.161,
+    "hotspotRankBySummedKernelTime": 1
+  },
+  "sass": {
+    "controlFunctionSha256": "732cc554304981029fb336c439b145cdcb9832fd514e80438e30c418b33af8e3",
+    "candidateFunctionSha256": "77428b663bce6212f50cf33522b24b7c2d2d47c5f1a05e1173a9bd54ce9fcc50",
+    "controlHmmaInstructions": 64,
+    "candidateHmmaInstructions": 64
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "replaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncu": {
+    "controlDurationUs": [41.38, 41.25, 41.28],
+    "controlMedianDurationUs": 41.28,
+    "candidateDurationUs": [41.31, 41.54, 41.54],
+    "candidateMedianDurationUs": 41.54,
+    "medianDeltaPct": 0.6298,
+    "candidateWarpCyclesPerIssuedInstructionRange": [8.45, 8.60],
+    "candidateNoEligiblePctRange": [78.28, 78.56],
+    "registersPerThread": 168,
+    "dynamicSharedMemoryKiB": 49.15,
+    "spills": 0
+  },
+  "nsysComparisonRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "Changing independent accumulator visitation changes SASS but does not reduce pipe or scheduler stalls; CUTLASS's SM89 vertical ordering is faster.",
+  "controlBinarySha256": "1506f942ffb78c6a461b8e1da917ac571b69b22a4e0d0eea9ecbfcae371c9dba",
+  "candidateBinarySha256": "f7f4103770350a4de7c754d9354c7902aeae610bc9be93a097ee4e8e20124615",
+  "sourceState": "local macro and pinned CUTLASS override removed; accepted binary rebuilt"
+}

@@ -1,0 +1,76 @@
+{
+  "s1": {
+    "records": [
+      {
+        "run": "s1-01-control",
+        "mode": "control",
+        "throughput": 3172.787225,
+        "legacy_throughput": 3168.988129
+      },
+      {
+        "run": "s1-02-candidate",
+        "mode": "candidate",
+        "throughput": 3183.379328,
+        "legacy_throughput": 3176.756604
+      },
+      {
+        "run": "s1-03-candidate",
+        "mode": "candidate",
+        "throughput": 3184.085716,
+        "legacy_throughput": 3175.862723
+      },
+      {
+        "run": "s1-04-control",
+        "mode": "control",
+        "throughput": 3173.781518,
+        "legacy_throughput": 3170.682183
+      }
+    ],
+    "mean": {
+      "control": 3173.2843715,
+      "candidate": 3183.7325220000002
+    },
+    "candidate_delta_percent": 0.3292535202277458,
+    "adjacent_pair_deltas_percent": [
+      0.3338422102982408,
+      0.324666267717566
+    ]
+  },
+  "s2": {
+    "records": [
+      {
+        "run": "s2-01-control",
+        "mode": "control",
+        "throughput": 3928.554415,
+        "legacy_throughput": 3933.005836
+      },
+      {
+        "run": "s2-02-candidate",
+        "mode": "candidate",
+        "throughput": 3597.275749,
+        "legacy_throughput": 3587.556819
+      },
+      {
+        "run": "s2-03-candidate",
+        "mode": "candidate",
+        "throughput": 3602.347226,
+        "legacy_throughput": 3592.037393
+      },
+      {
+        "run": "s2-04-control",
+        "mode": "control",
+        "throughput": 3947.43345,
+        "legacy_throughput": 3952.535606
+      }
+    ],
+    "mean": {
+      "control": 3937.9939325,
+      "candidate": 3599.8114875
+    },
+    "candidate_delta_percent": -8.587683241688183,
+    "adjacent_pair_deltas_percent": [
+      -8.432584381041341,
+      -8.742040324961021
+    ]
+  }
+}

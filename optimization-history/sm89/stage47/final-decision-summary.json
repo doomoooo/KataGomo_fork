@@ -1,0 +1,33 @@
+{
+  "stage": 47,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "issue both two-kgroup dual-FFN next-stage copy groups before MMA",
+  "decision": "reject-static-and-revert",
+  "control": {
+    "binarySha256": "2b0718dab575bcc80aad816bf60b093d2dcfcd8ca90dbfb69dfc2d4e8ff73b31",
+    "functionSha256": "f2cbbe037c48a20bbd7000e124dd86e62cef1711365e102725b10c29b40b5d33",
+    "hmma": 64,
+    "ldgsts": 24,
+    "barriers": 19,
+    "hmmaBeforeFirstMainloopLdgsts": 9,
+    "hmmaBeforeLastMainloopLdgsts": 18,
+    "hmmaBeforeMainloopBarrier": 22
+  },
+  "candidate": {
+    "binarySha256": "8362d19caf0d8ee37e929902bd1a54c5a12b0219c7e7b9499a2ec50f7cfaa1a7",
+    "functionSha256": "62d0ea3e68f50f551eedc56d16ffe1388718b7612494963413b33476a08d0fc2",
+    "hmma": 64,
+    "ldgsts": 24,
+    "barriers": 19,
+    "hmmaBeforeFirstMainloopLdgsts": 9,
+    "hmmaBeforeLastMainloopLdgsts": 17,
+    "hmmaBeforeMainloopBarrier": 21
+  },
+  "smokeRun": false,
+  "ncuRun": false,
+  "nsysRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "ptxas retained its own interleaving and did not give the async copies the predicted issue-to-wait head start.",
+  "sourceState": "pinned CUTLASS header restored"
+}

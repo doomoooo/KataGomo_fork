@@ -1,0 +1,45 @@
+{
+  "stage": 43,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "disable CUTLASS L2::128B prefetch hint only for dual-FFN",
+  "decision": "reject-and-revert",
+  "preImplementationNsys": {
+    "sourceStage": 40,
+    "iterations": 20,
+    "launches": 2178,
+    "averageUs": 43.233,
+    "totalMs": 94.161,
+    "hotspotRankBySummedKernelTime": 1
+  },
+  "sass": {
+    "candidateCpAsyncCgInstructions": 24,
+    "candidateL2Prefetch128BInstructions": 0,
+    "mechanismApplied": true
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "replaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncu": {
+    "controlDurationUs": [41.38, 41.25, 41.28],
+    "controlMedianDurationUs": 41.28,
+    "candidateDurationUs": [40.90, 41.34, 41.44],
+    "candidateMedianDurationUs": 41.34,
+    "medianDeltaPct": 0.1453,
+    "controlL2ThroughputPctRange": [72.72, 73.77],
+    "candidateL2ThroughputPctRange": [73.05, 74.44],
+    "candidateL2HitPctRange": [99.77, 99.80],
+    "candidateNoEligiblePctRange": [78.30, 78.49],
+    "registersPerThread": 168,
+    "dynamicSharedMemoryKiB": 49.15,
+    "spills": 0
+  },
+  "nsysComparisonRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "Removing the 128-byte L2 prefetch hint changes the emitted instructions but does not lower reported L2 throughput or kernel latency.",
+  "controlBinarySha256": "112391a7a0c12dbfa88edec8b2d391321cce89f2fa128f5ea8468cd2d6933560",
+  "candidateBinarySha256": "4cfe56b4b4fa45f4008967584f8c6d545b9fff075b6298223c80b4c42ae5e11d",
+  "sourceState": "local define and pinned CUTLASS header override removed; accepted binary rebuilt"
+}

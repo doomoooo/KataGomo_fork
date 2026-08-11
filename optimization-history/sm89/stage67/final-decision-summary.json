@@ -1,0 +1,37 @@
+{
+  "stage": 67,
+  "target": "RTX4090 exact19 B13 FP16 NHWC; retained default-off split-QKV path",
+  "strategy": "change stage-3 native-half plain QKV from M128xN128/warp64x64 to M128xN64/warp64x32",
+  "status": "mechanism-rejected-and-reverted",
+  "correctness": {
+    "smokeRows": 26,
+    "allTensorRmseVsN128": 0.0,
+    "policyTop1VsN128": 1.0
+  },
+  "ncu": {
+    "controlN128MeanUs": 23.40,
+    "candidateN64MeanUs": 29.203333,
+    "changePercent": 24.8006,
+    "controlGridCtas": 333,
+    "candidateGridCtas": 666,
+    "controlRegistersPerThread": 168,
+    "candidateRegistersPerThread": 128,
+    "controlDynamicSharedKiB": 49.15,
+    "candidateDynamicSharedKiB": 36.86,
+    "controlTheoreticalOccupancyPercent": 16.67,
+    "candidateTheoreticalOccupancyPercent": 16.67,
+    "controlWavesPerSm": 1.30,
+    "candidateWavesPerSm": 2.60,
+    "spills": 0
+  },
+  "naturalS1Nsys": {
+    "controlLaunchToCompletionUsMean": 29.571414,
+    "candidateLaunchToCompletionUsMean": 35.124735,
+    "boundaryChangePercent": 18.7794,
+    "controlNNEvalsPerSecMean": 2560.172570,
+    "candidateNNEvalsPerSecMean": 2473.078817,
+    "throughputChangePercent": -3.40187
+  },
+  "mechanismConclusion": "N64 reduces registers and shared memory but 36.86 KiB still permits only two CTA/SM; doubling CTA count only increases waves and repeated A work without increasing the occupancy tier",
+  "decision": "Fully revert. Do not run S2, ABBA, 8192-row accuracy, or a new deployed full-graph checkpoint."
+}

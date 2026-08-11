@@ -1,0 +1,12 @@
+{
+  "forward": {
+    "controlNNEvalsPerSec": 2425.08355,
+    "candidateNNEvalsPerSec": 2442.551191,
+    "throughputChangePercent": 0.7202902761845209
+  },
+  "reverse": {
+    "controlNNEvalsPerSec": 2427.155427,
+    "candidateNNEvalsPerSec": 2440.013282,
+    "throughputChangePercent": 0.5297499639688175
+  }
+}

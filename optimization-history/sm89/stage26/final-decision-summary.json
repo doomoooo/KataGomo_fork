@@ -1,0 +1,69 @@
+{
+  "stage": 26,
+  "strategy": "head BN consumes FP16 and emits FP32 directly while preserving half output where required",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "binarySha256": "1397d9975c9dd33d094560df97b5e327618d70ad7e5ed9100f52fc2c639faced",
+  "switch": "cudaUseHeadBNHalfToFloat",
+  "decision": "rejected",
+  "defaultEnabled": false,
+  "baselineNcu": {
+    "policyG1Us": 3.10,
+    "valueV1Us": 4.61,
+    "registersPerThread": 16,
+    "maxComputeSolPercent": 27.46,
+    "maxMemorySolPercent": 26.91,
+    "spillRequests": 0
+  },
+  "candidateNcu": {
+    "policyG1DurationsUs": [3.20, 3.20],
+    "valueV1DurationsUs": [4.74, 4.74],
+    "policyRegistersPerThread": 18,
+    "valueRegistersPerThread": 19,
+    "achievedOccupancyPercent": "63.50-67.86",
+    "spillRequests": 0
+  },
+  "nsysSteadyStateLast20PerStream": {
+    "controlKernelsPerForwardPerStream": 309,
+    "candidateKernelsPerForwardPerStream": 307,
+    "forward": {
+      "policyControlUs": 6.197848,
+      "policyCandidateUs": 3.165167,
+      "policyChangePercent": -48.9312,
+      "valueControlUs": 8.428152,
+      "valueCandidateUs": 5.117606,
+      "valueChangePercent": -39.2796,
+      "controlUnionMs": 163.848334,
+      "candidateUnionMs": 165.507700,
+      "unionChangePercent": 1.01275
+    },
+    "reverse": {
+      "policyControlUs": 6.322016,
+      "policyCandidateUs": 3.387636,
+      "policyChangePercent": -46.4153,
+      "valueControlUs": 7.411454,
+      "valueCandidateUs": 4.688500,
+      "valueChangePercent": -36.7398,
+      "controlUnionMs": 162.574548,
+      "candidateUnionMs": 161.541242,
+      "unionChangePercent": -0.635589
+    }
+  },
+  "fullGraphLocked2400Abba300": {
+    "controlRunsNNEvalsPerSec": [3233.238715, 3259.073260, 3261.480450, 3232.004513],
+    "candidateRunsNNEvalsPerSec": [3165.716100, 3247.714119, 3235.608056, 3174.820271],
+    "controlPooledMedianNNEvalsPerSec": 3246.155988,
+    "candidatePooledMedianNNEvalsPerSec": 3205.214164,
+    "changePercent": -1.26124,
+    "forwardChangePercent": -1.21500,
+    "reverseChangePercent": -1.27908,
+    "adjacentPairChangesPercent": [-2.08839, -0.348539, -0.793271, -1.76931],
+    "positivePairs": 0,
+    "totalPairs": 4
+  },
+  "accuracy": {
+    "status": "not run",
+    "reason": "candidate failed the full-graph performance gate"
+  },
+  "reason": "both local head boundaries improved and two launches were removed, but the S2 union was order-sensitive and the full-graph ABBA regressed in every pair and both aggregate directions",
+  "reopenCondition": "pooling or ownership projection is fused into a wider head boundary that changes the dual-stream schedule"
+}

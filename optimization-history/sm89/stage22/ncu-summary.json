@@ -1,0 +1,39 @@
+{
+  "regime": "L2400-EXACT19-B13-S2-NCU-REPLAY",
+  "control": {
+    "kernel": "applyCScaleBiasNHWCSiluHalfKernel",
+    "shape": "grid(3,361,13), block(256,1,1)",
+    "samplesUs": [11.648, 12.000, 11.680],
+    "medianDurationUs": 11.680,
+    "gridSize": 14079,
+    "threads": 3604224,
+    "registersPerThread": 16,
+    "wavesPerSm": 18.33,
+    "medianAchievedOccupancyPercent": 61.617959,
+    "medianL2HitRatePercent": 99.574823,
+    "localSpillingRequests": 0
+  },
+  "candidate": {
+    "kernel": "sm89ScaleBiasSiluNHWCHalfVec8B13Kernel",
+    "shape": "grid(1760,1,1), block(256,1,1)",
+    "samplesUs": [6.880, 6.752, 6.912, 7.232],
+    "medianDurationUs": 6.896,
+    "durationChangePercent": -40.958904110,
+    "gridSize": 1760,
+    "threads": 450560,
+    "registersPerThread": 31,
+    "wavesPerSm": 2.29,
+    "medianAchievedOccupancyPercent": 77.048968,
+    "medianL2HitRatePercent": 99.291441,
+    "localSpillingRequests": 0
+  },
+  "reports": {
+    "control": "ncu-baseline/control.ncu-rep",
+    "candidate": "ncu-candidate-valid/candidate.ncu-rep"
+  },
+  "invalidAttempt": {
+    "path": "ncu-candidate/candidate.raw",
+    "reason": "launch-skip 500 exceeded the number of launches matching the C768-only candidate filter; no kernels were profiled",
+    "usedForDecision": false
+  }
+}

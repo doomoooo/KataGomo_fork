@@ -1,0 +1,53 @@
+{
+  "createdUtc": "2026-08-06T02:30:27Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090 (SM89)",
+    "board": "19x19 exact",
+    "batchSize": 13,
+    "serverThreads": 2,
+    "precision": "FP16"
+  },
+  "change": "replace exact C768 NHWC affine+SiLU scalar launch with a flat vec8 kernel using 16-byte loads/stores while preserving half FMA and scalar float expf arithmetic",
+  "testedBinarySha256": "c2c3eaff383a2f229a9dc8b6d183cebfab1644f929d1334c3d3ac9ba9080e025",
+  "ncu": {
+    "controlMedianDurationUs": 11.680,
+    "candidateMedianDurationUs": 6.896,
+    "durationChangePercent": -40.958904110,
+    "controlGridSize": 14079,
+    "candidateGridSize": 1760,
+    "candidateRegistersPerThread": 31,
+    "candidateLocalSpillingRequests": 0,
+    "report": "ncu-summary.json"
+  },
+  "nsys": {
+    "controlTargetAverageUs": 14.776522222,
+    "candidateTargetAverageUs": 8.632098611,
+    "targetChangePercent": -41.582339327,
+    "controlKernelUnionMs": 251.929689,
+    "candidateKernelUnionMs": 245.016048,
+    "kernelUnionChangePercent": -2.744274018,
+    "memcpyMemsetAndSyncCountsUnchanged": true,
+    "report": "nsys-summary.json"
+  },
+  "locked2400WarmAbba500": {
+    "controlMedianNNEvalsPerSec": 3125.480861,
+    "candidateMedianNNEvalsPerSec": 3155.3171345,
+    "improvementPercent": 0.954613860,
+    "forwardImprovementPercent": 1.047211474,
+    "reverseImprovementPercent": 0.018215904,
+    "positiveAdjacentPairs": 10,
+    "totalAdjacentPairs": 12,
+    "report": "abba-pooled-3r-summary.json"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage21": true,
+    "policyTop1VsFp32": 0.9969482421875,
+    "p0lossFp32Weighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915454626083374,
+    "report": "replay-scale-bias-silu-vec8-vs-fp32.json"
+  },
+  "decision": "accepted and enabled in bench-cuda-gpu0-4090-s2.cfg"
+}

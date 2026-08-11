@@ -1,0 +1,85 @@
+{
+  "stage": 56,
+  "strategy": "fuse each nested postConv residual output with the following C768 BN plus SiLU",
+  "target": "RTX4090 exact19 B13 FP16 NHWC S2",
+  "switch": "cudaUsePostConvBNSiluSm89",
+  "implementationStatus": "intrinsic-accepted",
+  "deploymentStatus": "S2-enabled",
+  "sourceRetained": true,
+  "binarySha256": "22b67bfaf00f9965a3356831996131fe4a6d401be52562250dedc086a2aa11b6",
+  "cleanBuildBinarySha256": "dcb45285218c77137e8ef6dd1ff8b80a2d26b69de13e51f4336442de8f7cd661",
+  "sourceCommits": ["cdf62bc", "dd4cb33", "8100279"],
+  "deployedConfigSha256": "5fc1f21d8490dbac6378e22684ca76fb5b6734ba8930d82c47b1e050652714d7",
+  "mechanism": {
+    "residualHalfRoundingPreserved": true,
+    "followingHalfFmaAndFloatExpfPreserved": true,
+    "bnLaunchesRemovedPerForward": 11,
+    "fullC768ResidualReadsRemovedPerForward": 11
+  },
+  "ncuFromS2Invocation": {
+    "controlPostConvDurationUs": [19.904, 19.872, 19.808],
+    "controlBnDurationUs": [6.560, 6.656, 6.624],
+    "controlBoundaryMedianUs": 26.496,
+    "candidateDurationUs": [21.120, 21.248, 21.120],
+    "candidateMedianUs": 21.120,
+    "boundaryChangePercent": -20.289855,
+    "controlPostConvRegistersPerThread": 186,
+    "candidateRegistersPerThread": 164,
+    "controlPostConvWavesPerSm": 0.87,
+    "candidateWavesPerSm": 0.87
+  },
+  "shortNsys": {
+    "s1ThroughputChangesPercent": {
+      "forward": 1.168792,
+      "reverse": 1.296042
+    },
+    "s2ThroughputChangesPercent": {
+      "forward": 3.383433,
+      "reverse": 2.318687
+    },
+    "controlC768BnLaunchesPerForward": 12,
+    "candidateC768BnLaunchesPerForward": 1,
+    "candidateFusedPostConvLaunchesPerForward": 11
+  },
+  "locked2400S2Abba100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 3277.161151,
+      "B1Candidate": 3279.065719,
+      "B2Candidate": 3298.876106,
+      "A2Control": 3276.843928
+    },
+    "controlMeanNNEvalsPerSec": 3277.0025395,
+    "candidateMeanNNEvalsPerSec": 3288.9709125,
+    "changePercent": 0.365223,
+    "adjacentPairChangesPercent": [0.058116, 0.672360]
+  },
+  "accuracy": {
+    "rows": 8192,
+    "policyTop1VsFp32": 0.9976806640625,
+    "policyProbabilityRmseVsFp32": 0.00012631106073968112,
+    "valueOutcomeRmseVsFp32": 0.0026571874041110277,
+    "ownershipSigmoidRmseVsFp32": 0.0003004046739079058,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "sixItemBundleS2Nsys": {
+    "forwardThroughputChangePercent": -2.158178,
+    "reverseThroughputChangePercent": -1.015832,
+    "additionalLaunchesRemovedAcross64Forwards": 512,
+    "decision": "keep prior five strict-local items default-off"
+  },
+  "postDecisionCheckpoint": {
+    "nsysNNEvalsPerSec": 3267.780,
+    "busyUnionPercent": 98.366,
+    "topExclusiveFamiliesPercent": {
+      "ffnDual": 17.73,
+      "qkvRope": 10.83,
+      "flashAttention": 9.91
+    }
+  },
+  "tensorrtComparison": {
+    "baselineNNEvalsPerSec": 2432.1979345,
+    "candidateNNEvalsPerSec": 3288.9709125,
+    "changePercent": 35.226285
+  },
+  "decision": "retain and enable the cross-block fused postConv plus following BN/SiLU path; deploy Stage56 alone on top of Stage50 and leave the previous five-item strict-local bundle disabled"
+}

@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-06T05:25:41+00:00",
+  "reference": "/workspace/results/4090/stage32/smoke-rmsnorm-vec12-s2/control.krnn",
+  "candidate": "/workspace/results/4090/stage32/smoke-rmsnorm-vec12-s2/candidate.krnn",
+  "referenceRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "candidateRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "corpus": "/workspace/results/4090/stage30/smoke/corpus-first26.npz",
+  "numRows": 26,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.6224147081375122,
+    "p0lossCandidateWeighted": 1.6219652891159058,
+    "p0lossReferenceUnweighted": 1.6224147081375122,
+    "p0lossCandidateUnweighted": 1.6219652891159058,
+    "top1VsReference": 1.0,
+    "optimisticTop1VsReference": 1.0,
+    "top1VsTarget": 0.4230769230769231,
+    "optimisticTop1VsTarget": 0.038461538461538464,
+    "probabilityRmse": 0.00012552116822917014,
+    "optimisticProbabilityRmse": 0.00011843111860798672,
+    "totalVariation": 0.002161929849535227,
+    "jsd": 5.920197509112768e-06
+  },
+  "value": {
+    "outcomeRmse": 0.0012019864516332746,
+    "rawLogitsRmse": 0.005165201611816883
+  },
+  "score": {
+    "meanRmse": 0.0014762948267161846,
+    "all6Rmse": 0.004389033652842045
+  },
+  "ownership": {
+    "rawLogitsRmse": 0.0027692459989339113,
+    "sigmoidRmse": 0.0003133667923975736
+  },
+  "maxPolicyAbsError": {
+    "row": 16,
+    "move": 203,
+    "value": 0.005436539649963379
+  }
+}

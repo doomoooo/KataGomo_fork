@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-06T02:07:08+00:00",
+  "reference": "trainingdata/accuracy/replay-fixed-fp32-full19.krnn",
+  "candidate": "results/4090/tensorrt-baseline/replay-trt-exact19-b13-s2-full19.krnn",
+  "referenceRevision": "847e78a44d402df200eabbbe0506776a45607c29-dirty-cuda",
+  "candidateRevision": "090caa6115c2ae86a75839d1b4fddeacd23d7444-dirty-trt",
+  "corpus": "/workspace/trainingdata/accuracy/2026-08-01-19x19-8192-seed20260803-full19.npz",
+  "numRows": 8192,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915627479553223,
+    "p0lossReferenceUnweighted": 1.5915189981460571,
+    "p0lossCandidateUnweighted": 1.5915539264678955,
+    "top1VsReference": 0.997802734375,
+    "optimisticTop1VsReference": 0.9959716796875,
+    "top1VsTarget": 0.5672607421875,
+    "optimisticTop1VsTarget": 0.03125,
+    "probabilityRmse": 0.00014516817464027554,
+    "optimisticProbabilityRmse": 0.0001703379093669355,
+    "totalVariation": 0.002389180939644575,
+    "jsd": 7.487990842491854e-06
+  },
+  "value": {
+    "outcomeRmse": 0.003259723074734211,
+    "rawLogitsRmse": 0.014054305851459503
+  },
+  "score": {
+    "meanRmse": 0.003299898933619261,
+    "all6Rmse": 0.011064326390624046
+  },
+  "ownership": {
+    "rawLogitsRmse": 0.004070779774338007,
+    "sigmoidRmse": 0.0003139667969662696
+  },
+  "maxPolicyAbsError": {
+    "row": 5183,
+    "move": 5,
+    "value": 0.03183645009994507
+  }
+}

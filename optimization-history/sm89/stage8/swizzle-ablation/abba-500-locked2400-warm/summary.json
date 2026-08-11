@@ -1,0 +1,35 @@
+{
+  "createdUtc": "2026-08-05T16:38:01.968226803+00:00",
+  "regime": "L1-EXACT19-B13-S2-LOCK2400",
+  "protocol": "prime each binary, lock SM at 2400 MHz, then 10 warmup and 500 timed forwards per server; forward A-B-B-A plus reverse B-A-A-B",
+  "swizzle2BinarySha256": "86eb9b4df8f0b8b6b0b7c05cee9048a78045528acc836e429402da8bd4297d1f",
+  "swizzle4BinarySha256": "d2ec2a0a69dd8fe37f22b1fc0de1fe4fe68afad11023361cafff91d2da313ce9",
+  "A": "swizzle 2, logical and launched CTA count 666",
+  "B": "swizzle 4, logical CTA count 666 padded to a 740-CTA launch grid",
+  "forward": {
+    "order": ["A1", "B1", "B2", "A2"],
+    "swizzle2NNEvalsPerSec": [2905.496647, 2844.177595],
+    "swizzle4NNEvalsPerSec": [2842.260809, 2833.214420],
+    "swizzle2MedianNNEvalsPerSec": 2874.837121,
+    "swizzle4MedianNNEvalsPerSec": 2837.7376145,
+    "swizzle4ChangePercent": -1.290491
+  },
+  "reverse": {
+    "order": ["R-B1", "R-A1", "R-A2", "R-B2"],
+    "swizzle2NNEvalsPerSec": [2836.149253, 2838.051270],
+    "swizzle4NNEvalsPerSec": [2831.397600, 2829.906052],
+    "swizzle2MedianNNEvalsPerSec": 2837.1002615,
+    "swizzle4MedianNNEvalsPerSec": 2830.651826,
+    "swizzle4ChangePercent": -0.227290
+  },
+  "combined": {
+    "swizzle2MedianNNEvalsPerSec": 2841.1144325,
+    "swizzle4MedianNNEvalsPerSec": 2832.306010,
+    "swizzle4ChangePercent": -0.310034,
+    "steadyExcludingFirstSwizzle2MedianNNEvalsPerSec": 2838.051270,
+    "steadySwizzle4MedianNNEvalsPerSec": 2832.306010,
+    "steadySwizzle4ChangePercent": -0.202437
+  },
+  "gpuObservation": "all recorded samples P2, exactly 2400 MHz SM and 10251 MHz memory, 55-67 C",
+  "decision": "rejected; swizzle 4's padded launch loses under B13/S2 despite a small single-stream microbenchmark gain"
+}

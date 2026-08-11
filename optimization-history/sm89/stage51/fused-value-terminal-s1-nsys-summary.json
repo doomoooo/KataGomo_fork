@@ -1,0 +1,152 @@
+{
+  "forward": {
+    "control": {
+      "streams": [
+        64
+      ],
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 1,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          5.361344099
+        ],
+        "perServerNNEvalsPerSec": [
+          2424.765089
+        ],
+        "combinedPerBatchMs": 5.361344099,
+        "combinedNNEvalsPerSec": 2424.765089,
+        "actualWallSeconds": 0.178126969,
+        "actualWallPerForwardMs": 5.937565633
+      },
+      "totalLaunches": 9798,
+      "observedHeadBoundaries": 32,
+      "targetLaunches": 128,
+      "targetRawMs": 0.313857,
+      "targetUsPerHead": 9.80803125,
+      "targetUnionMs": 0.313857,
+      "spanMs": 172.601115,
+      "busyUnionMs": 164.406931,
+      "busyPercent": 95.25253124813244
+    },
+    "candidate": {
+      "streams": [
+        64
+      ],
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 1,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          5.35345602
+        ],
+        "perServerNNEvalsPerSec": [
+          2428.337872
+        ],
+        "combinedPerBatchMs": 5.35345602,
+        "combinedNNEvalsPerSec": 2428.337872,
+        "actualWallSeconds": 0.177798865,
+        "actualWallPerForwardMs": 5.926628833
+      },
+      "totalLaunches": 9734,
+      "observedHeadBoundaries": 32,
+      "targetLaunches": 64,
+      "targetRawMs": 0.159904,
+      "targetUsPerHead": 4.997,
+      "targetUnionMs": 0.159904,
+      "spanMs": 172.404337,
+      "busyUnionMs": 164.215903,
+      "busyPercent": 95.25044778890916
+    },
+    "throughputChangePercent": 0.1473455311695071,
+    "targetBoundaryChangePercent": -49.05195678286609,
+    "busyUnionChangePercent": -0.11619218170308976
+  },
+  "reverse": {
+    "control": {
+      "streams": [
+        64
+      ],
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 1,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          5.360144138
+        ],
+        "perServerNNEvalsPerSec": [
+          2425.307914
+        ],
+        "combinedPerBatchMs": 5.360144138,
+        "combinedNNEvalsPerSec": 2425.307914,
+        "actualWallSeconds": 0.178756569,
+        "actualWallPerForwardMs": 5.9585523
+      },
+      "totalLaunches": 9798,
+      "observedHeadBoundaries": 32,
+      "targetLaunches": 128,
+      "targetRawMs": 0.314116,
+      "targetUsPerHead": 9.816125,
+      "targetUnionMs": 0.314116,
+      "spanMs": 172.58209,
+      "busyUnionMs": 164.441827,
+      "busyPercent": 95.28325158189938
+    },
+    "candidate": {
+      "streams": [
+        64
+      ],
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 1,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          5.352895975
+        ],
+        "perServerNNEvalsPerSec": [
+          2428.591936
+        ],
+        "combinedPerBatchMs": 5.352895975,
+        "combinedNNEvalsPerSec": 2428.591936,
+        "actualWallSeconds": 0.177907308,
+        "actualWallPerForwardMs": 5.9302436
+      },
+      "totalLaunches": 9734,
+      "observedHeadBoundaries": 32,
+      "targetLaunches": 64,
+      "targetRawMs": 0.160096,
+      "targetUsPerHead": 5.003,
+      "targetUnionMs": 0.160096,
+      "spanMs": 172.387212,
+      "busyUnionMs": 164.179994,
+      "busyPercent": 95.23907956699247
+    },
+    "throughputChangePercent": 0.13540639442286562,
+    "targetBoundaryChangePercent": -49.032841370703814,
+    "busyUnionChangePercent": -0.15922530464222984
+  }
+}

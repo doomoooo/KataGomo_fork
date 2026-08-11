@@ -1,0 +1,41 @@
+{
+  "stage": 40,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2 only",
+  "strategy": "CUTLASS fused dual-FFN pipeline stage 3 to stage 2",
+  "decision": "reject-and-revert",
+  "preImplementationEvidence": {
+    "freshNsysIterations": 20,
+    "dualFfnLaunches": 2178,
+    "dualFfnAverageUs": 43.233,
+    "dualFfnTotalMs": 94.161,
+    "combinedNNEvalsPerSec": 3195.843256,
+    "hotspotRankBySummedKernelTime": 1
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "controlReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "ncu": {
+    "controlDurationUs": [41.02, 41.47, 41.34],
+    "controlMedianDurationUs": 41.34,
+    "candidateDurationUs": [42.56, 42.27, 42.27],
+    "candidateMedianDurationUs": 42.27,
+    "medianDeltaPct": 2.2496,
+    "controlDynamicSharedMemoryKiB": 49.15,
+    "candidateDynamicSharedMemoryKiB": 32.77,
+    "controlTheoreticalOccupancyPct": 16.67,
+    "candidateTheoreticalOccupancyPct": 25.0,
+    "candidateAchievedOccupancyPctRange": [21.92, 21.98],
+    "candidateNoEligiblePctRange": [78.70, 78.84],
+    "registersPerThread": 168,
+    "spills": 0
+  },
+  "nsysComparisonRun": false,
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "mechanismConclusion": "Stage 2 enables three resident CTAs and raises achieved occupancy, but does not reduce scheduler no-eligible cycles and makes the CUTLASS dual mainloop slower. CTA residency is not the limiting mechanism.",
+  "candidateBinarySha256": "32c2d9206742dccca947cce16f509edd0db87b344c4977fac83217534732b1ea",
+  "sourceState": "CUTLASS stage 3 and the pristine third-party wrapper restored; accepted binary rebuilt"
+}

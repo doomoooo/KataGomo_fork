@@ -1,0 +1,63 @@
+{
+  "stage": "61",
+  "optimization": "revalidate five-item intrinsic fusion bundle after Stage59 both16 phase change",
+  "status": "deployment-rejected-source-already-retained-default-off",
+  "target": "RTX 4090 SM89, exact 19x19 B13 FP16 S2",
+  "controlRevision": "7d299d0faab1080579bc5b3a8d06cd8017375a2d",
+  "bundleSwitches": [
+    "cudaUseInitialGlobalMatMulAdd",
+    "cudaUseWideHeadProjection",
+    "cudaUseHeadBNHalfToFloat",
+    "cudaUseFusedValueTerminalSm89",
+    "cudaUseScaleBiasSiluVec4C384Sm89"
+  ],
+  "reusedIntrinsicEvidence": {
+    "initialGlobalBoundaryChangePercent": -43.0,
+    "wideHeadProjectionBoundaryChangePercent": -54.7,
+    "headBnToFloatBoundaryChangePercent": -42.39,
+    "valueTerminalBoundaryChangePercent": -49.0,
+    "c384AffineSiluMedianUs": {
+      "control": 6.816,
+      "candidate": 4.224,
+      "changePercent": -38.03
+    },
+    "launchesRemovedPerForward": 8,
+    "allComponentsSourceRetained": true
+  },
+  "locked2400AbbaBaab100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 3437.32017,
+      "B1Candidate": 3392.201091,
+      "B2Candidate": 3386.884328,
+      "A2Control": 3451.571847,
+      "B3Candidate": 3453.919442,
+      "A3Control": 3454.97694,
+      "A4Control": 3421.917214,
+      "B4Candidate": 3465.232485
+    },
+    "controlMeanNNEvalsPerSec": 3441.44654275,
+    "candidateMeanNNEvalsPerSec": 3424.5593365,
+    "meanChangePercent": -0.4907008155,
+    "controlMedianNNEvalsPerSec": 3444.4460085,
+    "candidateMedianNNEvalsPerSec": 3423.0602665,
+    "medianChangePercent": -0.6208760987,
+    "forwardMeanChangePercent": -1.5939660214,
+    "reverseMeanChangePercent": 0.6144892164,
+    "adjacentIndexedPairChangesPercent": [
+      -1.3126236943,
+      -1.8741466748,
+      -0.0306079612,
+      1.2658187879
+    ],
+    "clockMHz": 2400,
+    "competitionDetected": false
+  },
+  "decision": "Do not deploy. Stage59 changed the phase but did not make the bundle consistently positive: the forward order is clearly negative, reverse is positive, and pooled mean/median are negative. Keep the already-validated component implementations default-off for a future controlled-phase topology.",
+  "fullAccuracyRun": false,
+  "newWholeGraphProfileRun": false,
+  "reasonForStopping": "Rejected candidates reuse the accepted Stage59 whole-graph checkpoint; only effective/deployed optimizations trigger a new full Nsys/NCU profile.",
+  "artifacts": {
+    "hypothesis": "hypothesis-revalidate-five-item-intrinsic-bundle.md",
+    "benchmark": "abba-five-item-bundle-s2-100-locked2400"
+  }
+}

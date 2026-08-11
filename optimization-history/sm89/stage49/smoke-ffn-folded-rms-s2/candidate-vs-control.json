@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-06T09:02:50+00:00",
+  "reference": "/workspace/results/4090/stage49/smoke-ffn-folded-rms-s2/control.krnn",
+  "candidate": "/workspace/results/4090/stage49/smoke-ffn-folded-rms-s2/candidate.krnn",
+  "referenceRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "candidateRevision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+  "corpus": "/workspace/results/4090/stage30/smoke/corpus-first26.npz",
+  "numRows": 26,
+  "posLen": 19,
+  "policy": {
+    "p0lossReferenceWeighted": 1.6224147081375122,
+    "p0lossCandidateWeighted": 1.6213679313659668,
+    "p0lossReferenceUnweighted": 1.6224147081375122,
+    "p0lossCandidateUnweighted": 1.6213679313659668,
+    "top1VsReference": 1.0,
+    "optimisticTop1VsReference": 1.0,
+    "top1VsTarget": 0.4230769230769231,
+    "optimisticTop1VsTarget": 0.038461538461538464,
+    "probabilityRmse": 0.0001319289003731683,
+    "optimisticProbabilityRmse": 0.00014041259419173002,
+    "totalVariation": 0.0022955513559281826,
+    "jsd": 6.6827074078901205e-06
+  },
+  "value": {
+    "outcomeRmse": 0.001195841352455318,
+    "rawLogitsRmse": 0.004961957223713398
+  },
+  "score": {
+    "meanRmse": 0.0006953600677661598,
+    "all6Rmse": 0.003842352656647563
+  },
+  "ownership": {
+    "rawLogitsRmse": 0.002750926185399294,
+    "sigmoidRmse": 0.0002987396437674761
+  },
+  "maxPolicyAbsError": {
+    "row": 24,
+    "move": 340,
+    "value": 0.005442619323730469
+  }
+}

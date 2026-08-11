@@ -1,0 +1,70 @@
+{
+  "stage": 51,
+  "strategy": "combine value and score terminal projections into one 384-to-9 SGEMM plus split-and-bias",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment with S1 attribution",
+  "switch": "cudaUseFusedValueTerminalSm89",
+  "implementationStatus": "mechanism-accepted-throughput-neutral",
+  "deploymentStatus": "S2-disabled",
+  "sourceRetained": true,
+  "binarySha256": "7ce51d558c49422ee06ea40f31d31dddf9d2c836ceaaa206ff0ec4a95c05411f",
+  "controlNcu": {
+    "terminalLikeSgemmMedianUs": 3.552,
+    "v3BiasMedianUs": 1.760,
+    "sv3BiasMedianUs": 1.824,
+    "wavesPerSm": 0.0,
+    "maxSmThroughputPercent": 0.20
+  },
+  "candidateNcu": {
+    "splitBiasMedianUs": 1.856,
+    "registersPerThread": 16,
+    "wavesPerSm": 0.0,
+    "smThroughputPercent": 0.0073
+  },
+  "pairedS2Nsys": {
+    "forward": {
+      "controlBoundaryUs": 10.903016,
+      "candidateBoundaryUs": 5.665031,
+      "boundaryChangePercent": -48.041611,
+      "controlNNEvalsPerSec": 3241.122556,
+      "candidateNNEvalsPerSec": 3245.475795,
+      "throughputChangePercent": 0.134313,
+      "busyUnionChangePercent": -0.868979
+    },
+    "reverse": {
+      "controlBoundaryUs": 11.012547,
+      "candidateBoundaryUs": 5.660094,
+      "boundaryChangePercent": -48.603227,
+      "controlNNEvalsPerSec": 3243.195703,
+      "candidateNNEvalsPerSec": 3209.382158,
+      "throughputChangePercent": -1.042600,
+      "busyUnionChangePercent": 0.663601
+    },
+    "launchesPerHead": "4 -> 2"
+  },
+  "pairedS1Nsys": {
+    "forwardThroughputChangePercent": 0.147346,
+    "reverseThroughputChangePercent": 0.135406,
+    "forwardBoundaryChangePercent": -49.051957,
+    "reverseBoundaryChangePercent": -49.032841
+  },
+  "locked2400S1Abba100": {
+    "runsNNEvalsPerSec": {
+      "A1Control": 2462.695812,
+      "B1Candidate": 2459.073412,
+      "B2Candidate": 2459.371109,
+      "A2Control": 2457.362940
+    },
+    "controlMeanNNEvalsPerSec": 2460.029376,
+    "candidateMeanNNEvalsPerSec": 2459.2222605,
+    "changePercent": -0.032809,
+    "adjacentPairChangesPercent": [-0.147091, 0.081720],
+    "interpretation": "throughput neutral and order-conflicting, not intrinsic-accepted"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "byteIdenticalToStage50": true,
+    "replaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "status": "passed established all-head FP32 envelope"
+  },
+  "decision": "retain the simple reusable implementation default-off; do not enable in the current S2 config; retest after phase control or as part of a larger value-head fusion"
+}

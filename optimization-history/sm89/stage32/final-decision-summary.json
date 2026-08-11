@@ -1,0 +1,49 @@
+{
+  "createdUtc": "2026-08-06T05:27:19Z",
+  "stage": 32,
+  "candidate": "aligned uint4+uint2 vec12 C384 RMSNorm",
+  "target": "RTX 4090, FP16, B13, 19x19, S2",
+  "controlBinarySha256": "d39452745eb4ba9aa897dc01badab9830852740980d23e670c032a82d8975317",
+  "candidateBinarySha256": "050a4a63543a84a77da1bf94e8aee20c0223da02dcbd9770916dd282d2f5d5fa",
+  "postRevertBinarySha256": "28c7f42bc050262d7c8a1bd5c0d2e06359de25770b9cde78a875559188c1a13b",
+  "preImplementationS2Ncu": {
+    "durationUs": [4.70, 4.54, 4.61],
+    "medianDurationUs": 4.61,
+    "registersPerThread": 40,
+    "localSpills": 0,
+    "longScoreboardCyclesPerIssuedInstruction": [8.3, 8.5, 8.5],
+    "noEligiblePct": [66.66, 66.41, 66.66]
+  },
+  "candidateS2Ncu": {
+    "durationUs": [5.50, 5.15, 5.38],
+    "medianDurationUs": 5.38,
+    "registersPerThread": 40,
+    "localSpills": 0,
+    "longScoreboardCyclesPerIssuedInstruction": [14.3, 14.2, 14.6],
+    "noEligiblePct": [80.43, 80.70, 80.27]
+  },
+  "s2Nsys": {
+    "forwardOrder": {
+      "controlRmsNormAvgUs": 5.489,
+      "candidateRmsNormAvgUs": 6.419,
+      "controlNNEvalsPerSec": 3207.440464,
+      "candidateNNEvalsPerSec": 3136.197173,
+      "throughputChangePct": -2.221
+    },
+    "reverseOrder": {
+      "controlRmsNormAvgUs": 6.084,
+      "candidateRmsNormAvgUs": 6.353,
+      "controlNNEvalsPerSec": 3234.770648,
+      "candidateNNEvalsPerSec": 3154.947818,
+      "throughputChangePct": -2.468
+    }
+  },
+  "accuracySmoke": {
+    "rows": 26,
+    "finite": true,
+    "policyTop1VsControl": 1.0,
+    "optimisticPolicyTop1VsControl": 1.0,
+    "policyProbabilityRmseVsControl": 0.00012552116822917014
+  },
+  "decision": "rejected and reverted: vector loads lengthened scoreboard dependencies, slowed the isolated kernel, and reduced S2 throughput in both run orders; no ABBA or 8192-row replay"
+}

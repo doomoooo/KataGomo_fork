@@ -1,0 +1,62 @@
+{
+  "stage": 68,
+  "createdUtc": "2026-08-06T17:16:29Z",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; CUDA backend execution stream architecture",
+  "strategy": "make ComputeHandle borrow a caller-owned explicit non-blocking CUDA stream and route libraries, custom kernels, copies, events, SM89 forward, and synchronization through it",
+  "status": "accepted-interface-fix",
+  "scope": {
+    "cudaBackend": true,
+    "sm89Forward": true,
+    "cudaHelpers": true,
+    "tensorRTBackend": false,
+    "initializationOnlySynchronousWeightCopiesAllowed": true
+  },
+  "correctness": {
+    "smokeRows": 26,
+    "reference": "/workspace/results/4090/stage62/smoke-dual-ffn-half2-tanh/candidate.krnn",
+    "candidate": "/workspace/results/4090/stage68/smoke/external-stream.krnn",
+    "allReportedErrors": 0.0,
+    "policyTop1VsReference": 1.0,
+    "runnnlayertestsConfigurations": 28,
+    "runnnlayertestsPassed": true
+  },
+  "nsysStreamPlacement": {
+    "report": "/workspace/results/4090/stage68/nsys-stream-placement-s2/external-stream.nsys-rep",
+    "forwardStreams": [81, 82],
+    "warmupStreams": [15, 16],
+    "allStreamFlags": 2,
+    "allStreamTypes": "Non-blocking stream",
+    "capturedKernels": 5916,
+    "defaultStreamForwardKernels": 0,
+    "forwardCopiesUseMatchingExternalStream": true
+  },
+  "throughputNoRegression": {
+    "protocol": "three independent 100-iteration S2 runs, unpaired against the earlier accepted checkpoint",
+    "s2NNEvalsPerSec": [3462.633366, 3460.038166, 3450.633603],
+    "s2MeanNNEvalsPerSec": 3457.768378,
+    "earlierStage62CheckpointNNEvalsPerSec": 3418.728,
+    "unpairedDifferencePercent": 1.142,
+    "causalSpeedupClaim": false
+  },
+  "staticAudit": {
+    "cudaBackendPtdsReferences": 0,
+    "streamlessCudahelpersLaunches": 0,
+    "cudaPtdsCompileDefinitionRemoved": true
+  },
+  "postChangeFullGraph": {
+    "revision": "bd6b8a6a32c5b7742b0eb8f872753c3e4d66e638",
+    "nsysReport": "/workspace/results/4090/stage68/post-stream-full-nsys-s2/current.nsys-rep",
+    "ncuReport": "/workspace/results/4090/stage68/post-stream-full-ncu-s2/current.ncu-rep",
+    "nsysTimedNNEvalsPerSec": 3431.046027,
+    "kernelSpanMs": 132.982,
+    "kernelBusyUnionMs": 131.180,
+    "kernelBusyPercent": 98.645,
+    "ncuLaunchGeometries": 61,
+    "largestBusyUnionFamilies": [
+      {"family": "FFN dual projection + SwiGLU", "percent": 36.97},
+      {"family": "QKV + RoPE", "percent": 25.98},
+      {"family": "FlashAttention", "percent": 23.15}
+    ]
+  },
+  "decision": "Accept and commit. The caller owns the stream, ComputeHandle borrows it, and CUDA backend forward execution has no implicit PTDS dependency."
+}

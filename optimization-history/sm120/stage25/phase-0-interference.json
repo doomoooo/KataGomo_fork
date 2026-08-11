@@ -1,0 +1,596 @@
+{
+  "families": [
+    {
+      "family": "fused_ffn",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.0848513814391423,
+      "median_us": 45.441,
+      "overlap_fraction": 0.7667417837684064,
+      "p90_us": 49.316100000000006,
+      "summed_excess_ms": 4.5421405,
+      "total_ms": 60.00409
+    },
+    {
+      "family": "library_gemm",
+      "instances": 2760,
+      "matched_instances": 2760,
+      "median_slowdown": 1.6864570138238695,
+      "median_us": 16.2725,
+      "overlap_fraction": 0.9497917365863996,
+      "p90_us": 22.4,
+      "summed_excess_ms": 19.410196,
+      "total_ms": 45.093374
+    },
+    {
+      "family": "linear2_residual",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.6177611657834974,
+      "median_us": 34.2405,
+      "overlap_fraction": 0.9819384289780264,
+      "p90_us": 37.2161,
+      "summed_excess_ms": 17.079164,
+      "total_ms": 44.973884
+    },
+    {
+      "family": "wide_qkv",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.2524637304788415,
+      "median_us": 24.3365,
+      "overlap_fraction": 0.7727698769820841,
+      "p90_us": 31.748100000000004,
+      "summed_excess_ms": 8.329379,
+      "total_ms": 34.092839
+    },
+    {
+      "family": "fa4",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.2559366754617414,
+      "median_us": 15.2,
+      "overlap_fraction": 0.47387964762413715,
+      "p90_us": 16.225,
+      "summed_excess_ms": 4.310599,
+      "total_ms": 20.252579
+    },
+    {
+      "family": "rmsnorm",
+      "instances": 2640,
+      "matched_instances": 2640,
+      "median_slowdown": 1.7590011614401857,
+      "median_us": 4.72,
+      "overlap_fraction": 0.99954208088463,
+      "p90_us": 6.4,
+      "summed_excess_ms": 5.691366,
+      "total_ms": 12.858166
+    },
+    {
+      "family": "qk_rope",
+      "instances": 1320,
+      "matched_instances": 1320,
+      "median_slowdown": 1.7865989485877216,
+      "median_us": 7.408,
+      "overlap_fraction": 0.996545060390834,
+      "p90_us": 9.632,
+      "summed_excess_ms": 4.471465,
+      "total_ms": 9.984545
+    },
+    {
+      "family": "affine_silu",
+      "instances": 920,
+      "matched_instances": 920,
+      "median_slowdown": 1.3457367024345217,
+      "median_us": 6.1445,
+      "overlap_fraction": 0.9757099492292636,
+      "p90_us": 9.3481,
+      "summed_excess_ms": 1.798636,
+      "total_ms": 5.754496
+    },
+    {
+      "family": "head_elementwise",
+      "instances": 480,
+      "matched_instances": 480,
+      "median_slowdown": 1.1228070175438596,
+      "median_us": 2.368,
+      "overlap_fraction": 0.796894635426848,
+      "p90_us": 8.068100000000001,
+      "summed_excess_ms": 0.336587,
+      "total_ms": 1.539787
+    },
+    {
+      "family": "cudnn",
+      "instances": 120,
+      "matched_instances": 120,
+      "median_slowdown": 1.1160386029411766,
+      "median_us": 1.792,
+      "overlap_fraction": 0.24990164576098223,
+      "p90_us": 21.728,
+      "summed_excess_ms": 0.105482,
+      "total_ms": 1.001482
+    },
+    {
+      "family": "copy_reformat",
+      "instances": 200,
+      "matched_instances": 200,
+      "median_slowdown": 1.1800720288115247,
+      "median_us": 1.728,
+      "overlap_fraction": 0.5838013145195161,
+      "p90_us": 2.496,
+      "summed_excess_ms": 0.071682,
+      "total_ms": 0.359523
+    },
+    {
+      "family": "sumChannelsNCHWKernel",
+      "instances": 40,
+      "matched_instances": 40,
+      "median_slowdown": 1.1372549019607843,
+      "median_us": 1.856,
+      "overlap_fraction": 0.44043577800584194,
+      "p90_us": 2.1792,
+      "summed_excess_ms": 0.010722,
+      "total_ms": 0.076002
+    }
+  ],
+  "isolated_sqlite": "/workspace/results/rebuild/stage24/isolated-s2-kernels-b13.sqlite",
+  "iterations": 20,
+  "kernels_per_forward": {
+    "65": 344,
+    "82": 344
+  },
+  "pairs": [
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "library_gemm",
+      "instances": 531,
+      "matched_instances": 531,
+      "median_overlap_fraction": 0.9520888674233277,
+      "median_slowdown": 2.44967183597607,
+      "median_us": 21.184
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "rmsnorm",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.313953488372093,
+      "median_us": 6.304
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "qk_rope",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.2366271103888717,
+      "median_us": 9.344
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "rmsnorm",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 2.1090949162503674,
+      "median_us": 5.728
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "library_gemm",
+      "instances": 220,
+      "matched_instances": 220,
+      "median_overlap_fraction": 0.9671036578107166,
+      "median_slowdown": 1.8134562955378828,
+      "median_us": 26.576
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "linear2_residual",
+      "instances": 440,
+      "matched_instances": 440,
+      "median_overlap_fraction": 0.9758866147001988,
+      "median_slowdown": 1.6975468787702104,
+      "median_us": 35.9045
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "library_gemm",
+      "instances": 1251,
+      "matched_instances": 1251,
+      "median_overlap_fraction": 0.9651416122004357,
+      "median_slowdown": 1.6905660377358491,
+      "median_us": 14.689
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "linear2_residual",
+      "instances": 220,
+      "matched_instances": 220,
+      "median_overlap_fraction": 0.9757836660312915,
+      "median_slowdown": 1.6284564184887484,
+      "median_us": 34.3845
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "wide_qkv",
+      "instances": 440,
+      "matched_instances": 440,
+      "median_overlap_fraction": 0.9740005784944405,
+      "median_slowdown": 1.5748230827079261,
+      "median_us": 30.848
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "copy_reformat",
+      "instances": 46,
+      "matched_instances": 46,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.55,
+      "median_us": 1.488
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "library_gemm",
+      "instances": 30,
+      "matched_instances": 30,
+      "median_overlap_fraction": 0.9534143518518519,
+      "median_slowdown": 1.5365853658536586,
+      "median_us": 4.032
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "linear2_residual",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 0.9907786885245902,
+      "median_slowdown": 1.5244790737848752,
+      "median_us": 32.256
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "library_gemm",
+      "instances": 357,
+      "matched_instances": 357,
+      "median_overlap_fraction": 0.9514705882352941,
+      "median_slowdown": 1.4752342704149932,
+      "median_us": 20.736
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "rmsnorm",
+      "instances": 440,
+      "matched_instances": 440,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.423529411764706,
+      "median_us": 3.872
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "affine_silu",
+      "instances": 689,
+      "matched_instances": 689,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4135802469135803,
+      "median_us": 7.296
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "qk_rope",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.4054054054054055,
+      "median_us": 5.8725
+    },
+    {
+      "dominant_peer": "fa4",
+      "family": "fa4",
+      "instances": 18,
+      "matched_instances": 18,
+      "median_overlap_fraction": 0.645247454327643,
+      "median_slowdown": 1.3891698264865715,
+      "median_us": 16.816
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "wide_qkv",
+      "instances": 215,
+      "matched_instances": 215,
+      "median_overlap_fraction": 0.6700509619563071,
+      "median_slowdown": 1.3811074918566775,
+      "median_us": 26.976
+    },
+    {
+      "dominant_peer": "rmsnorm",
+      "family": "wide_qkv",
+      "instances": 5,
+      "matched_instances": 5,
+      "median_overlap_fraction": 0.6615581098339719,
+      "median_slowdown": 1.3300492610837438,
+      "median_us": 25.92
+    },
+    {
+      "dominant_peer": "wide_qkv",
+      "family": "library_gemm",
+      "instances": 217,
+      "matched_instances": 217,
+      "median_overlap_fraction": 0.9362139917695473,
+      "median_slowdown": 1.3219448094612352,
+      "median_us": 15.968
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "rmsnorm",
+      "instances": 880,
+      "matched_instances": 880,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.2790697674418605,
+      "median_us": 3.488
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "fa4",
+      "instances": 651,
+      "matched_instances": 651,
+      "median_overlap_fraction": 0.45073375262054505,
+      "median_slowdown": 1.2717153811270974,
+      "median_us": 15.297
+    },
+    {
+      "dominant_peer": "idle",
+      "family": "head_elementwise",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 0.0,
+      "median_slowdown": 1.2702702702702702,
+      "median_us": 1.504
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "affine_silu",
+      "instances": 220,
+      "matched_instances": 220,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.2594125500667557,
+      "median_us": 4.256
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "fa4",
+      "instances": 651,
+      "matched_instances": 651,
+      "median_overlap_fraction": 0.48367346938775513,
+      "median_slowdown": 1.2450331125827814,
+      "median_us": 15.041
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "library_gemm",
+      "instances": 132,
+      "matched_instances": 132,
+      "median_overlap_fraction": 0.8553977272727272,
+      "median_slowdown": 1.2219009900990099,
+      "median_us": 6.752
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "affine_silu",
+      "instances": 6,
+      "matched_instances": 6,
+      "median_overlap_fraction": 0.2220453999519577,
+      "median_slowdown": 1.1870967741935483,
+      "median_us": 5.888
+    },
+    {
+      "dominant_peer": "copy_reformat",
+      "family": "head_elementwise",
+      "instances": 31,
+      "matched_instances": 31,
+      "median_overlap_fraction": 0.8290598290598291,
+      "median_slowdown": 1.1717171717171717,
+      "median_us": 3.776
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "copy_reformat",
+      "instances": 95,
+      "matched_instances": 95,
+      "median_overlap_fraction": 0.7333333333333333,
+      "median_slowdown": 1.1666666666666667,
+      "median_us": 1.824
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "sumChannelsNCHWKernel",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 0.4057971014492754,
+      "median_slowdown": 1.1568627450980393,
+      "median_us": 1.888
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "cudnn",
+      "instances": 79,
+      "matched_instances": 79,
+      "median_overlap_fraction": 0.48214285714285715,
+      "median_slowdown": 1.1503267973856208,
+      "median_us": 1.792
+    },
+    {
+      "dominant_peer": "qk_rope",
+      "family": "wide_qkv",
+      "instances": 660,
+      "matched_instances": 660,
+      "median_overlap_fraction": 0.6327354778320778,
+      "median_slowdown": 1.1479674381280185,
+      "median_us": 22.4
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "affine_silu",
+      "instances": 5,
+      "matched_instances": 5,
+      "median_overlap_fraction": 0.36363636363636365,
+      "median_slowdown": 1.135483870967742,
+      "median_us": 5.632
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "copy_reformat",
+      "instances": 45,
+      "matched_instances": 45,
+      "median_overlap_fraction": 0.7857142857142857,
+      "median_slowdown": 1.1323529411764706,
+      "median_us": 2.432
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "head_elementwise",
+      "instances": 357,
+      "matched_instances": 357,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.125,
+      "median_us": 2.176
+    },
+    {
+      "dominant_peer": "sumChannelsNCHWKernel",
+      "family": "cudnn",
+      "instances": 17,
+      "matched_instances": 17,
+      "median_overlap_fraction": 0.7954545454545454,
+      "median_slowdown": 1.125,
+      "median_us": 1.44
+    },
+    {
+      "dominant_peer": "fused_ffn",
+      "family": "fused_ffn",
+      "instances": 667,
+      "matched_instances": 667,
+      "median_overlap_fraction": 0.6756583172768144,
+      "median_slowdown": 1.1233354104641233,
+      "median_us": 47.713
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "sumChannelsNCHWKernel",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 0.47368421052631576,
+      "median_slowdown": 1.1176470588235294,
+      "median_us": 1.824
+    },
+    {
+      "dominant_peer": "head_elementwise",
+      "family": "head_elementwise",
+      "instances": 34,
+      "matched_instances": 34,
+      "median_overlap_fraction": 1.0,
+      "median_slowdown": 1.1077943615257049,
+      "median_us": 2.416
+    },
+    {
+      "dominant_peer": "library_gemm",
+      "family": "cudnn",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 0.3298662704309064,
+      "median_slowdown": 1.1062091503267975,
+      "median_us": 21.664
+    },
+    {
+      "dominant_peer": "sumChannelsNCHWKernel",
+      "family": "head_elementwise",
+      "instances": 19,
+      "matched_instances": 19,
+      "median_overlap_fraction": 0.6666666666666666,
+      "median_slowdown": 1.0810810810810811,
+      "median_us": 1.28
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "copy_reformat",
+      "instances": 14,
+      "matched_instances": 14,
+      "median_overlap_fraction": 0.4488966630785791,
+      "median_slowdown": 1.0666666666666667,
+      "median_us": 1.024
+    },
+    {
+      "dominant_peer": "cudnn",
+      "family": "head_elementwise",
+      "instances": 10,
+      "matched_instances": 10,
+      "median_overlap_fraction": 0.3346456692913386,
+      "median_slowdown": 1.0495867768595042,
+      "median_us": 8.128
+    },
+    {
+      "dominant_peer": "affine_silu",
+      "family": "head_elementwise",
+      "instances": 10,
+      "matched_instances": 10,
+      "median_overlap_fraction": 0.20717131474103587,
+      "median_slowdown": 1.0413868801652892,
+      "median_us": 8.0645
+    },
+    {
+      "dominant_peer": "linear2_residual",
+      "family": "fused_ffn",
+      "instances": 653,
+      "matched_instances": 653,
+      "median_overlap_fraction": 0.8637640449438202,
+      "median_slowdown": 1.0315865206089863,
+      "median_us": 43.456
+    },
+    {
+      "dominant_peer": "copy_reformat",
+      "family": "library_gemm",
+      "instances": 21,
+      "matched_instances": 21,
+      "median_overlap_fraction": 0.3902439024390244,
+      "median_slowdown": 0.9771158735924446,
+      "median_us": 1.345
+    }
+  ],
+  "phase": {
+    "max_offset_us": -0.992,
+    "median_offset_us": -3.664,
+    "min_offset_us": -3.968,
+    "offsets_us": [
+      -0.992,
+      -3.488,
+      -3.68,
+      -3.392,
+      -3.936,
+      -3.872,
+      -3.84,
+      -3.36,
+      -3.808,
+      -3.296,
+      -3.904,
+      -3.488,
+      -3.872,
+      -3.456,
+      -3.808,
+      -3.392,
+      -3.968,
+      -3.488,
+      -3.872,
+      -3.648
+    ],
+    "p10_offset_us": -3.9071999999999996,
+    "p90_offset_us": -3.3535999999999997,
+    "stream_order": [
+      65,
+      82
+    ]
+  },
+  "sqlite": "/workspace/results/rebuild/stage25/phase-0-s2.sqlite",
+  "streams": [
+    65,
+    82
+  ]
+}

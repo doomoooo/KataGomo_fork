@@ -1,0 +1,642 @@
+{
+  "forward": {
+    "controlTput": 3200.4913,
+    "candidateTput": 3153.106079,
+    "tputPct": -1.4805608438929307,
+    "controlBoundaryRawMs": 103.096305,
+    "candidateBoundaryRawMs": 104.832039,
+    "boundaryPct": 1.683604470596678,
+    "control": {
+      "streams": [
+        114,
+        99
+      ],
+      "kernelLaunches": 19788,
+      "spanMs": 269.470295,
+      "busyUnionMs": 264.581659,
+      "uncoveredGapMs": 4.888636,
+      "busyPct": 98.18583491735147,
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.131552219,
+          8.115968227
+        ],
+        "perServerNNEvalsPerSec": [
+          1598.710756,
+          1601.780544
+        ],
+        "combinedPerBatchMs": 8.131552219,
+        "combinedNNEvalsPerSec": 3200.4913,
+        "actualWallSeconds": 0.282203831,
+        "actualWallPerForwardMs": 9.406794367
+      },
+      "families": [
+        {
+          "id": "ffn_dual",
+          "label": "FFN dual projection + SwiGLU",
+          "launches": 2112,
+          "rawDurationMs": 90.991255,
+          "unionMs": 90.490545,
+          "exclusiveMs": 49.116245,
+          "unionBusyPct": 34.20136729885725,
+          "exclusiveBusyPct": 18.56373763232016
+        },
+        {
+          "id": "flash",
+          "label": "FlashAttention",
+          "launches": 2112,
+          "rawDurationMs": 69.430273,
+          "unionMs": 68.098491,
+          "exclusiveMs": 28.632877,
+          "unionBusyPct": 25.738175222493407,
+          "exclusiveBusyPct": 10.821943254955553
+        },
+        {
+          "id": "qkv",
+          "label": "QKV + RoPE",
+          "launches": 2112,
+          "rawDurationMs": 63.246414,
+          "unionMs": 62.654634,
+          "exclusiveMs": 28.76905,
+          "unionBusyPct": 23.680641446125335,
+          "exclusiveBusyPct": 10.873410541280187
+        },
+        {
+          "id": "ffn_linear2",
+          "label": "FFN linear2 + residual",
+          "launches": 2112,
+          "rawDurationMs": 58.727456,
+          "unionMs": 56.283274,
+          "exclusiveMs": 8.763421,
+          "unionBusyPct": 21.272553136421298,
+          "exclusiveBusyPct": 3.312180078211695
+        },
+        {
+          "id": "attention_outproj",
+          "label": "attention out-projection",
+          "launches": 2112,
+          "rawDurationMs": 42.966598,
+          "unionMs": 41.755839,
+          "exclusiveMs": 5.842913,
+          "unionBusyPct": 15.781834295626666,
+          "exclusiveBusyPct": 2.208359045779511
+        },
+        {
+          "id": "rmsnorm",
+          "label": "RMSNorm",
+          "launches": 4224,
+          "rawDurationMs": 24.2101,
+          "unionMs": 24.2101,
+          "exclusiveMs": 3.374606,
+          "unionBusyPct": 9.150331920777623,
+          "exclusiveBusyPct": 1.2754497090820645
+        },
+        {
+          "id": "outer_postconv",
+          "label": "outer postConv",
+          "launches": 704,
+          "rawDurationMs": 15.677344,
+          "unionMs": 15.629568,
+          "exclusiveMs": 2.480108,
+          "unionBusyPct": 5.907275681569447,
+          "exclusiveBusyPct": 0.9373695853951842
+        },
+        {
+          "id": "outer_preconv",
+          "label": "outer preConv",
+          "launches": 704,
+          "rawDurationMs": 12.056355,
+          "unionMs": 11.890848,
+          "exclusiveMs": 2.116784,
+          "unionBusyPct": 4.494207211846079,
+          "exclusiveBusyPct": 0.8000494093205456
+        },
+        {
+          "id": "other",
+          "label": "heads/frontend/other",
+          "launches": 2124,
+          "rawDurationMs": 11.342143,
+          "unionMs": 8.612399,
+          "exclusiveMs": 6.394273,
+          "unionBusyPct": 3.2551005358992025,
+          "exclusiveBusyPct": 2.416748396002763
+        },
+        {
+          "id": "outer_c768_pointwise",
+          "label": "outer C768 BN + SiLU",
+          "launches": 768,
+          "rawDurationMs": 6.810597,
+          "unionMs": 6.807525,
+          "exclusiveMs": 0.494342,
+          "unionBusyPct": 2.5729391166906246,
+          "exclusiveBusyPct": 0.18683910361299835
+        },
+        {
+          "id": "outer_c384_pointwise",
+          "label": "outer/trunk C384 BN + SiLU",
+          "launches": 704,
+          "rawDurationMs": 5.82544,
+          "unionMs": 5.82544,
+          "exclusiveMs": 0.920036,
+          "unionBusyPct": 2.201755035484149,
+          "exclusiveBusyPct": 0.3477323422482584
+        },
+        {
+          "id": "rmsnorm_inv",
+          "label": "RMSNorm inverse-only",
+          "launches": 0,
+          "rawDurationMs": 0.0,
+          "unionMs": 0.0,
+          "exclusiveMs": 0.0,
+          "unionBusyPct": 0.0,
+          "exclusiveBusyPct": 0.0
+        }
+      ]
+    },
+    "candidate": {
+      "streams": [
+        114,
+        105
+      ],
+      "kernelLaunches": 19788,
+      "spanMs": 273.470703,
+      "busyUnionMs": 264.920219,
+      "uncoveredGapMs": 8.550484,
+      "busyPct": 96.87334551518668,
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.241136074,
+          8.250544071
+        ],
+        "perServerNNEvalsPerSec": [
+          1577.452415,
+          1575.653665
+        ],
+        "combinedPerBatchMs": 8.250544071,
+        "combinedNNEvalsPerSec": 3153.106079,
+        "actualWallSeconds": 0.291637827,
+        "actualWallPerForwardMs": 9.7212609
+      },
+      "families": [
+        {
+          "id": "ffn_dual",
+          "label": "FFN dual projection + SwiGLU",
+          "launches": 2112,
+          "rawDurationMs": 97.656666,
+          "unionMs": 95.389938,
+          "exclusiveMs": 52.524224,
+          "unionBusyPct": 36.00704331291527,
+          "exclusiveBusyPct": 19.826430839542677
+        },
+        {
+          "id": "flash",
+          "label": "FlashAttention",
+          "launches": 2112,
+          "rawDurationMs": 67.296303,
+          "unionMs": 65.232676,
+          "exclusiveMs": 28.324554,
+          "unionBusyPct": 24.62351731635855,
+          "exclusiveBusyPct": 10.69172979960431
+        },
+        {
+          "id": "qkv",
+          "label": "QKV + RoPE",
+          "launches": 2112,
+          "rawDurationMs": 63.456283,
+          "unionMs": 62.71695,
+          "exclusiveMs": 28.60698,
+          "unionBusyPct": 23.673900858431647,
+          "exclusiveBusyPct": 10.79833774408891
+        },
+        {
+          "id": "ffn_linear2",
+          "label": "FFN linear2 + residual",
+          "launches": 2112,
+          "rawDurationMs": 60.090491,
+          "unionMs": 56.643655,
+          "exclusiveMs": 10.140861,
+          "unionBusyPct": 21.38140124367027,
+          "exclusiveBusyPct": 3.8278924267384817
+        },
+        {
+          "id": "attention_outproj",
+          "label": "attention out-projection",
+          "launches": 2112,
+          "rawDurationMs": 41.990518,
+          "unionMs": 40.122733,
+          "exclusiveMs": 6.602499,
+          "unionBusyPct": 15.145213585981521,
+          "exclusiveBusyPct": 2.4922593771523345
+        },
+        {
+          "id": "outer_postconv",
+          "label": "outer postConv",
+          "launches": 704,
+          "rawDurationMs": 15.652319,
+          "unionMs": 15.634527,
+          "exclusiveMs": 2.495663,
+          "unionBusyPct": 5.901598246829171,
+          "exclusiveBusyPct": 0.9420432345331861
+        },
+        {
+          "id": "rmsnorm",
+          "label": "RMSNorm",
+          "launches": 2112,
+          "rawDurationMs": 12.908708,
+          "unionMs": 12.908708,
+          "exclusiveMs": 0.695464,
+          "unionBusyPct": 4.872677536175523,
+          "exclusiveBusyPct": 0.2625182791351988
+        },
+        {
+          "id": "outer_preconv",
+          "label": "outer preConv",
+          "launches": 704,
+          "rawDurationMs": 12.50257,
+          "unionMs": 12.404552,
+          "exclusiveMs": 2.121548,
+          "unionBusyPct": 4.682372695758643,
+          "exclusiveBusyPct": 0.8008252476946653
+        },
+        {
+          "id": "other",
+          "label": "heads/frontend/other",
+          "launches": 2124,
+          "rawDurationMs": 11.438112,
+          "unionMs": 8.796498,
+          "exclusiveMs": 6.203393,
+          "unionBusyPct": 3.320432858316488,
+          "exclusiveBusyPct": 2.3416079842512887
+        },
+        {
+          "id": "rmsnorm_inv",
+          "label": "RMSNorm inverse-only",
+          "launches": 2112,
+          "rawDurationMs": 7.175373,
+          "unionMs": 7.175373,
+          "exclusiveMs": 1.18263,
+          "unionBusyPct": 2.7085033475681977,
+          "exclusiveBusyPct": 0.4464098680214363
+        },
+        {
+          "id": "outer_c768_pointwise",
+          "label": "outer C768 BN + SiLU",
+          "launches": 768,
+          "rawDurationMs": 6.754437,
+          "unionMs": 6.754437,
+          "exclusiveMs": 0.492931,
+          "unionBusyPct": 2.549611738015361,
+          "exclusiveBusyPct": 0.18606771572991943
+        },
+        {
+          "id": "outer_c384_pointwise",
+          "label": "outer/trunk C384 BN + SiLU",
+          "launches": 704,
+          "rawDurationMs": 5.860899,
+          "unionMs": 5.860899,
+          "exclusiveMs": 0.808745,
+          "unionBusyPct": 2.2123260437135603,
+          "exclusiveBusyPct": 0.30527869977338346
+        }
+      ]
+    }
+  },
+  "reverse": {
+    "controlTput": 3173.55716,
+    "candidateTput": 3153.885404,
+    "tputPct": -0.6198645560239302,
+    "controlBoundaryRawMs": 102.818517,
+    "candidateBoundaryRawMs": 104.81892199999999,
+    "boundaryPct": 1.945568812279208,
+    "control": {
+      "streams": [
+        114,
+        99
+      ],
+      "kernelLaunches": 19788,
+      "spanMs": 270.142345,
+      "busyUnionMs": 265.282763,
+      "uncoveredGapMs": 4.859582,
+      "busyPct": 98.20110319987042,
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.198783875,
+          8.18662405
+        ],
+        "perServerNNEvalsPerSec": [
+          1585.601011,
+          1587.956149
+        ],
+        "combinedPerBatchMs": 8.198783875,
+        "combinedNNEvalsPerSec": 3173.55716,
+        "actualWallSeconds": 0.282137411,
+        "actualWallPerForwardMs": 9.404580367
+      },
+      "families": [
+        {
+          "id": "ffn_dual",
+          "label": "FFN dual projection + SwiGLU",
+          "launches": 2112,
+          "rawDurationMs": 90.632439,
+          "unionMs": 89.723889,
+          "exclusiveMs": 51.094173,
+          "unionBusyPct": 33.82198224465869,
+          "exclusiveBusyPct": 19.26026871184239
+        },
+        {
+          "id": "flash",
+          "label": "FlashAttention",
+          "launches": 2112,
+          "rawDurationMs": 69.299869,
+          "unionMs": 66.967402,
+          "exclusiveMs": 29.171189,
+          "unionBusyPct": 25.243781858529573,
+          "exclusiveBusyPct": 10.996262505001125
+        },
+        {
+          "id": "qkv",
+          "label": "QKV + RoPE",
+          "launches": 2112,
+          "rawDurationMs": 63.220074,
+          "unionMs": 62.191682,
+          "exclusiveMs": 28.894653,
+          "unionBusyPct": 23.44354427581109,
+          "exclusiveBusyPct": 10.892020526791633
+        },
+        {
+          "id": "ffn_linear2",
+          "label": "FFN linear2 + residual",
+          "launches": 2112,
+          "rawDurationMs": 59.529517,
+          "unionMs": 55.203572,
+          "exclusiveMs": 10.62665,
+          "unionBusyPct": 20.80933241787745,
+          "exclusiveBusyPct": 4.005782313116213
+        },
+        {
+          "id": "attention_outproj",
+          "label": "attention out-projection",
+          "launches": 2112,
+          "rawDurationMs": 42.58105,
+          "unionMs": 40.457227,
+          "exclusiveMs": 6.91492,
+          "unionBusyPct": 15.250605257002695,
+          "exclusiveBusyPct": 2.606622428762927
+        },
+        {
+          "id": "rmsnorm",
+          "label": "RMSNorm",
+          "launches": 4224,
+          "rawDurationMs": 24.372156,
+          "unionMs": 24.372156,
+          "exclusiveMs": 3.141682,
+          "unionBusyPct": 9.187236940833582,
+          "exclusiveBusyPct": 1.184276718348263
+        },
+        {
+          "id": "outer_postconv",
+          "label": "outer postConv",
+          "launches": 704,
+          "rawDurationMs": 15.873888,
+          "unionMs": 15.783007,
+          "exclusiveMs": 2.459919,
+          "unionBusyPct": 5.949503398379487,
+          "exclusiveBusyPct": 0.927281882992149
+        },
+        {
+          "id": "outer_preconv",
+          "label": "outer preConv",
+          "launches": 704,
+          "rawDurationMs": 12.094379,
+          "unionMs": 11.847625,
+          "exclusiveMs": 2.246507,
+          "unionBusyPct": 4.466036491032778,
+          "exclusiveBusyPct": 0.8468348921712641
+        },
+        {
+          "id": "other",
+          "label": "heads/frontend/other",
+          "launches": 2124,
+          "rawDurationMs": 11.421194,
+          "unionMs": 8.572571,
+          "exclusiveMs": 6.539952,
+          "unionBusyPct": 3.2314843614622637,
+          "exclusiveBusyPct": 2.4652758912949047
+        },
+        {
+          "id": "outer_c768_pointwise",
+          "label": "outer C768 BN + SiLU",
+          "launches": 768,
+          "rawDurationMs": 7.046431,
+          "unionMs": 7.046431,
+          "exclusiveMs": 0.449442,
+          "unionBusyPct": 2.6561963243725715,
+          "exclusiveBusyPct": 0.16941997848537185
+        },
+        {
+          "id": "outer_c384_pointwise",
+          "label": "outer/trunk C384 BN + SiLU",
+          "launches": 704,
+          "rawDurationMs": 5.95546,
+          "unionMs": 5.95546,
+          "exclusiveMs": 0.905417,
+          "unionBusyPct": 2.244947968971508,
+          "exclusiveBusyPct": 0.3413026122620715
+        },
+        {
+          "id": "rmsnorm_inv",
+          "label": "RMSNorm inverse-only",
+          "launches": 0,
+          "rawDurationMs": 0.0,
+          "unionMs": 0.0,
+          "exclusiveMs": 0.0,
+          "unionBusyPct": 0.0,
+          "exclusiveBusyPct": 0.0
+        }
+      ]
+    },
+    "candidate": {
+      "streams": [
+        114,
+        99
+      ],
+      "kernelLaunches": 19788,
+      "spanMs": 265.653771,
+      "busyUnionMs": 263.137087,
+      "uncoveredGapMs": 2.516684,
+      "busyPct": 99.05264510624997,
+      "benchmark": {
+        "modelFile": "/workspace/models/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+        "modelName": "b11c768h12nbt3tflrs-fson-silu",
+        "revision": "0f81e92960227d2653c9c3732a1a67336952194d-dirty-cuda",
+        "batchSize": 13,
+        "numServerThreads": 2,
+        "numIterations": 20,
+        "gpuIdxs": [
+          0
+        ],
+        "perServerMedianMs": [
+          8.244623661,
+          8.242976189
+        ],
+        "perServerNNEvalsPerSec": [
+          1576.785131,
+          1577.100273
+        ],
+        "combinedPerBatchMs": 8.244623661,
+        "combinedNNEvalsPerSec": 3153.885404,
+        "actualWallSeconds": 0.28886097,
+        "actualWallPerForwardMs": 9.628699
+      },
+      "families": [
+        {
+          "id": "ffn_dual",
+          "label": "FFN dual projection + SwiGLU",
+          "launches": 2112,
+          "rawDurationMs": 96.784894,
+          "unionMs": 88.138829,
+          "exclusiveMs": 61.635594,
+          "unionBusyPct": 33.49540348145604,
+          "exclusiveBusyPct": 23.42337779242802
+        },
+        {
+          "id": "qkv",
+          "label": "QKV + RoPE",
+          "launches": 2112,
+          "rawDurationMs": 61.86171,
+          "unionMs": 58.884765,
+          "exclusiveMs": 26.663865,
+          "unionBusyPct": 22.377980113460783,
+          "exclusiveBusyPct": 10.133069915758398
+        },
+        {
+          "id": "flash",
+          "label": "FlashAttention",
+          "launches": 2112,
+          "rawDurationMs": 65.522041,
+          "unionMs": 57.556965,
+          "exclusiveMs": 31.694642,
+          "unionBusyPct": 21.873376214733273,
+          "exclusiveBusyPct": 12.044916344308394
+        },
+        {
+          "id": "ffn_linear2",
+          "label": "FFN linear2 + residual",
+          "launches": 2112,
+          "rawDurationMs": 66.265787,
+          "unionMs": 52.791382,
+          "exclusiveMs": 17.867009,
+          "unionBusyPct": 20.062311474930937,
+          "exclusiveBusyPct": 6.79000030124982
+        },
+        {
+          "id": "attention_outproj",
+          "label": "attention out-projection",
+          "launches": 2112,
+          "rawDurationMs": 38.719108,
+          "unionMs": 31.478615,
+          "exclusiveMs": 11.290567,
+          "unionBusyPct": 11.962819592967524,
+          "exclusiveBusyPct": 4.2907547274018425
+        },
+        {
+          "id": "outer_postconv",
+          "label": "outer postConv",
+          "launches": 704,
+          "rawDurationMs": 16.692067,
+          "unionMs": 16.528707,
+          "exclusiveMs": 2.2652,
+          "unionBusyPct": 6.281405326950359,
+          "exclusiveBusyPct": 0.8608440664238257
+        },
+        {
+          "id": "rmsnorm",
+          "label": "RMSNorm",
+          "launches": 2112,
+          "rawDurationMs": 15.080505,
+          "unionMs": 15.080505,
+          "exclusiveMs": 0.034016,
+          "unionBusyPct": 5.7310450502935,
+          "exclusiveBusyPct": 0.012927102138209808
+        },
+        {
+          "id": "outer_preconv",
+          "label": "outer preConv",
+          "launches": 704,
+          "rawDurationMs": 14.172624,
+          "unionMs": 13.226152,
+          "exclusiveMs": 2.78565,
+          "unionBusyPct": 5.026335189307617,
+          "exclusiveBusyPct": 1.0586307052946893
+        },
+        {
+          "id": "outer_c768_pointwise",
+          "label": "outer C768 BN + SiLU",
+          "launches": 768,
+          "rawDurationMs": 8.167569,
+          "unionMs": 8.167569,
+          "exclusiveMs": 0.12141,
+          "unionBusyPct": 3.1039216452221345,
+          "exclusiveBusyPct": 0.046139448218486964
+        },
+        {
+          "id": "rmsnorm_inv",
+          "label": "RMSNorm inverse-only",
+          "launches": 2112,
+          "rawDurationMs": 8.034028,
+          "unionMs": 8.034028,
+          "exclusiveMs": 0.120577,
+          "unionBusyPct": 3.0531720524822865,
+          "exclusiveBusyPct": 0.045822883187879936
+        },
+        {
+          "id": "other",
+          "label": "heads/frontend/other",
+          "launches": 2124,
+          "rawDurationMs": 11.634757,
+          "unionMs": 7.929039,
+          "exclusiveMs": 6.974859,
+          "unionBusyPct": 3.0132730776942895,
+          "exclusiveBusyPct": 2.6506560057799833
+        },
+        {
+          "id": "outer_c384_pointwise",
+          "label": "outer/trunk C384 BN + SiLU",
+          "launches": 704,
+          "rawDurationMs": 6.933573,
+          "unionMs": 6.933573,
+          "exclusiveMs": 0.070656,
+          "unionBusyPct": 2.634966085187376,
+          "exclusiveBusyPct": 0.0268514031243342
+        }
+      ]
+    }
+  }
+}

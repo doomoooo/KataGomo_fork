@@ -1,0 +1,115 @@
+{
+  "createdUtc": "2026-08-06T01:58:08Z",
+  "regime": "L1K-EXACT19-B13-S2",
+  "target": {
+    "gpu": "NVIDIA GeForce RTX 4090 (SM89)",
+    "board": "19x19 exact",
+    "batchSize": 13,
+    "serverThreads": 2,
+    "precision": "FP16",
+    "modelSha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "corpusSha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "fp32ReferenceSha256": "4603a430367f5dd67c02ba02b71692f9a17ce24acae08d354152dd8376f229b3"
+  },
+  "change": "switch each stream's access-policy window from the accepted C768 trunk residual to the 3,604,224-byte C384 residual for each nested-block inner lifetime, then restore C768",
+  "testedBinarySha256": "748d3eb6225369601a6fb7a6bcc3f31e228ff89d14f38ae5195f0f0b38406b00",
+  "implementation": {
+    "c768WindowBytesPerStream": 7208448,
+    "c384WindowBytesPerStream": 3604224,
+    "requestedCombinedS2SetAsideBytes": 21625344,
+    "deviceMaxPersistingL2Bytes": 51904512,
+    "hitRatio": 1.0,
+    "controlAttributeCallsPerForwardPerStream": 2,
+    "candidateAttributeCallsPerForwardPerStream": 24,
+    "arithmeticChanged": false
+  },
+  "ncu": {
+    "protocol": "split metric groups after the combined 12x4-pass candidate teardown was marked contaminated",
+    "c384ControlMedianDurationUs": 6.62,
+    "c384CandidateMedianDurationUs": 6.59,
+    "c384DurationChangePercent": -0.453172205,
+    "c384ControlMedianL2HitRatePercent": 52.51,
+    "c384CandidateMedianL2HitRatePercent": 97.99,
+    "c384ControlEvictLastSectors": 0,
+    "c384CandidateEvictLastSectors": 112632,
+    "c768ControlMedianDurationUs": 11.36,
+    "c768CandidateMedianDurationUs": 11.30,
+    "c768ControlMedianL2HitRatePercent": 82.50,
+    "c768CandidateMedianL2HitRatePercent": 82.97,
+    "validReport": "ncu-single-pass/summary.json",
+    "contaminatedReport": "ncu-paired/candidate.ncu-rep"
+  },
+  "nsys": {
+    "pairs": [
+      {
+        "controlKernelUnionMs": 248.057936,
+        "candidateKernelUnionMs": 249.735404,
+        "kernelUnionChangePercent": 0.676240409,
+        "controlSummedKernelMs": 391.612295,
+        "candidateSummedKernelMs": 386.019355,
+        "report": "nsys-paired/outer-and-union-summary.json"
+      },
+      {
+        "controlKernelUnionMs": 247.977414,
+        "candidateKernelUnionMs": 245.762802,
+        "kernelUnionChangePercent": -0.893070044,
+        "controlSummedKernelMs": 391.709190,
+        "candidateSummedKernelMs": 383.707565,
+        "report": "nsys-paired-r2/outer-and-union-summary.json"
+      }
+    ],
+    "equalWeightControlKernelUnionMs": 248.017675,
+    "equalWeightCandidateKernelUnionMs": 247.749103,
+    "equalWeightKernelUnionChangePercent": -0.108287444,
+    "equalWeightControlSummedKernelMs": 391.6607425,
+    "equalWeightCandidateSummedKernelMs": 384.863460,
+    "equalWeightSummedKernelChangePercent": -1.735502633,
+    "memcpyAndMemsetUnchanged": true,
+    "newSynchronizations": 0
+  },
+  "locked2400WarmAbba500": {
+    "rawDirectories": [
+      "abba-500-locked2400-warm-r1",
+      "abba-500-locked2400-warm-r2",
+      "abba-500-locked2400-warm-r3"
+    ],
+    "controlSamples": 12,
+    "candidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 3117.6142155,
+    "candidateMedianNNEvalsPerSec": 3157.841614,
+    "improvementPercent": 1.290326375,
+    "forwardImprovementPercent": 0.769850127,
+    "reverseImprovementPercent": 0.855427447,
+    "actualWallImprovementPercent": 1.230618476,
+    "perRoundImprovementPercent": [1.006002022, 0.251217443, 0.834697995],
+    "positiveAdjacentPairs": 8,
+    "totalAdjacentPairs": 12,
+    "adjacentPairMedianImprovementPercent": 0.858819559,
+    "report": "abba-pooled-3r-summary.json"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "candidateReplaySha256": "7dde3f6b36e240eb4e92ffc632ecc578d059052fb2c13816b043d0a7093ba484",
+    "byteIdenticalToStage20": true,
+    "policyTop1VsFp32": 0.9969482421875,
+    "p0lossFp32Weighted": 1.5915279388427734,
+    "p0lossCandidateWeighted": 1.5915454626083374,
+    "policyProbabilityRmse": 0.00012512259127106518,
+    "valueOutcomeRmse": 0.002610212890431285,
+    "scoreMeanRmse": 0.002347242087125778,
+    "ownershipSigmoidRmse": 0.0002988878113683313,
+    "report": "replay-persisting-l2-inner-vs-fp32.json"
+  },
+  "finalDefaultConfigSmoke": {
+    "clockMHz": 2400,
+    "iterations": 300,
+    "combinedNNEvalsPerSec": 3160.199660,
+    "actualWallPerForwardMs": 8.339065532,
+    "raw": "final-default-config-300-r2.raw",
+    "contaminatedPriorAttempt": {
+      "raw": "final-default-config-300.raw",
+      "reason": "startup stalled before timed forward in official cudnnGetConvolutionForwardAlgorithm_v7 and was interrupted; immediate same-environment retry passed"
+    }
+  },
+  "decision": "accepted and enabled in bench-cuda-gpu0-4090-s2.cfg"
+}

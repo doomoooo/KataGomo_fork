@@ -1,0 +1,62 @@
+{
+  "stage": 52,
+  "strategy": "accumulate three independently intrinsic-positive operator fusions and retest them as one bundle",
+  "target": "RTX4090 exact19 B13 FP16 NHWC; S2 deployment with S1 attribution",
+  "bundleSwitches": [
+    "cudaUseInitialGlobalMatMulAdd",
+    "cudaUseWideHeadProjection",
+    "cudaUseHeadBNHalfToFloat"
+  ],
+  "implementationStatus": "intrinsic-accepted-bundle",
+  "deploymentStatus": "S2-disabled-phase-sensitive",
+  "sourceRetained": true,
+  "binarySha256": "7ce51d558c49422ee06ea40f31d31dddf9d2c836ceaaa206ff0ec4a95c05411f",
+  "deployedConfigSha256": "6ec9eb3324c5eab207240418ea5f41cd84f72f3ed834a239d95a6d7a27ab5a70",
+  "intrinsicEvidence": {
+    "componentNcuBoundaryChangesPercent": {
+      "initialGlobalMatMulAdd": -43.0,
+      "wideHeadProjection": -54.7,
+      "wideHeadBnToFloat": -42.38742
+    },
+    "combinedLaunchesRemovedPerForward": 6,
+    "s1NsysThroughputChangesPercent": {
+      "forward": 0.720290,
+      "reverse": 0.529750
+    },
+    "locked2400S1Abba100": {
+      "runsNNEvalsPerSec": {
+        "A1Control": 2463.195999,
+        "B1Candidate": 2479.068976,
+        "B2Candidate": 2478.441436,
+        "A2Control": 2463.636724
+      },
+      "controlMeanNNEvalsPerSec": 2463.4163615,
+      "candidateMeanNNEvalsPerSec": 2478.755206,
+      "changePercent": 0.622666,
+      "adjacentPairChangesPercent": [0.644406, 0.600929]
+    }
+  },
+  "pairedS2Nsys": {
+    "forward": {
+      "controlNNEvalsPerSec": 3244.698175,
+      "candidateNNEvalsPerSec": 3126.900183,
+      "throughputChangePercent": -3.630476,
+      "busyUnionChangePercent": 1.980089
+    },
+    "reverse": {
+      "controlNNEvalsPerSec": 3128.146464,
+      "candidateNNEvalsPerSec": 3199.423463,
+      "throughputChangePercent": 2.278570,
+      "busyUnionChangePercent": -2.654688
+    },
+    "launchChangeAcross64Forwards": -384,
+    "interpretation": "strictly less launch work, but both control and candidate switch between incompatible two-stream phase bands"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "jointBundleAlreadyCoveredByStage29": true,
+    "headBnReplayByteIdenticalToStage28": true,
+    "status": "passed established all-head FP32 envelope"
+  },
+  "decision": "retain all three implementations in the cumulative intrinsic bundle; keep them disabled in the deployed S2 config; add future strict local wins to the bundle and retest the entire set"
+}

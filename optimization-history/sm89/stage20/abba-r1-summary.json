@@ -1,0 +1,73 @@
+{
+   "adjacentPairs" : {
+      "maxImprovementPercent" : 1.35469099100727,
+      "medianImprovementPercent" : 1.07752366261352,
+      "minImprovementPercent" : 0.457904784190477,
+      "positivePairs" : 4,
+      "samples" : [
+         {
+            "candidateLabel" : "B1",
+            "candidateNNEvalsPerSec" : 3100.388141,
+            "controlLabel" : "A1",
+            "controlNNEvalsPerSec" : 3086.256027,
+            "improvementPercent" : 0.457904784190477,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "B2",
+            "candidateNNEvalsPerSec" : 3113.217653,
+            "controlLabel" : "A2",
+            "controlNNEvalsPerSec" : 3084.382781,
+            "improvementPercent" : 0.934866845244531,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B1",
+            "candidateNNEvalsPerSec" : 3112.836041,
+            "controlLabel" : "R-A1",
+            "controlNNEvalsPerSec" : 3071.23036,
+            "improvementPercent" : 1.35469099100727,
+            "round" : 1
+         },
+         {
+            "candidateLabel" : "R-B2",
+            "candidateNNEvalsPerSec" : 3113.694799,
+            "controlLabel" : "R-A2",
+            "controlNNEvalsPerSec" : 3076.160094,
+            "improvementPercent" : 1.22018047998251,
+            "round" : 1
+         }
+      ],
+      "totalPairs" : 4
+   },
+   "direction" : {
+      "forwardCandidateMedianNNEvalsPerSec" : 3106.802897,
+      "forwardControlMedianNNEvalsPerSec" : 3085.319404,
+      "forwardImprovementPercent" : 0.696313418058025,
+      "reverseCandidateMedianNNEvalsPerSec" : 3113.26542,
+      "reverseControlMedianNNEvalsPerSec" : 3073.695227,
+      "reverseImprovementPercent" : 1.28738180195638
+   },
+   "pooled" : {
+      "actualWallImprovementPercent" : 1.02699312845607,
+      "candidateMedianActualWallPerForwardMs" : 8.433894551,
+      "candidateMedianNNEvalsPerSec" : 3113.026847,
+      "candidateSamples" : 4,
+      "controlMedianActualWallPerForwardMs" : 8.5205100685,
+      "controlMedianNNEvalsPerSec" : 3080.2714375,
+      "controlSamples" : 4,
+      "improvementPercent" : 1.06339360555139
+   },
+   "rawDirectories" : [
+      "results/4090/stage20/abba-500-locked2400-warm-r1"
+   ],
+   "regime" : "L1K-EXACT19-B13-S2",
+   "rounds" : [
+      {
+         "candidateMedianNNEvalsPerSec" : 3113.026847,
+         "controlMedianNNEvalsPerSec" : 3080.2714375,
+         "improvementPercent" : 1.06339360555139,
+         "round" : 1
+      }
+   ]
+}

@@ -1,0 +1,87 @@
+{
+  "regime": "5090D-B13-S2-unlocked-1000iter-ABBA-BAAB",
+  "runs": [
+    {
+      "sequence": "01",
+      "mode": "fp32",
+      "combinedNNEvalsPerSec": 3136.572049,
+      "combinedPerBatchMs": 8.289600372,
+      "actualWallSeconds": 8.467113155
+    },
+    {
+      "sequence": "02",
+      "mode": "both16",
+      "combinedNNEvalsPerSec": 3146.602695,
+      "combinedPerBatchMs": 8.262975693,
+      "actualWallSeconds": 8.43582507
+    },
+    {
+      "sequence": "03",
+      "mode": "both16",
+      "combinedNNEvalsPerSec": 3136.520713,
+      "combinedPerBatchMs": 8.289487839,
+      "actualWallSeconds": 8.464238342
+    },
+    {
+      "sequence": "04",
+      "mode": "fp32",
+      "combinedNNEvalsPerSec": 3118.672616,
+      "combinedPerBatchMs": 8.336928368,
+      "actualWallSeconds": 8.522606888
+    },
+    {
+      "sequence": "05",
+      "mode": "both16",
+      "combinedNNEvalsPerSec": 3128.585877,
+      "combinedPerBatchMs": 8.310560226,
+      "actualWallSeconds": 8.485643919
+    },
+    {
+      "sequence": "06",
+      "mode": "fp32",
+      "combinedNNEvalsPerSec": 3112.490166,
+      "combinedPerBatchMs": 8.35345602,
+      "actualWallSeconds": 8.534241417
+    },
+    {
+      "sequence": "07",
+      "mode": "fp32",
+      "combinedNNEvalsPerSec": 3104.290796,
+      "combinedPerBatchMs": 8.375792027,
+      "actualWallSeconds": 8.559890701
+    },
+    {
+      "sequence": "08",
+      "mode": "both16",
+      "combinedNNEvalsPerSec": 3115.90997,
+      "combinedPerBatchMs": 8.344287872,
+      "actualWallSeconds": 8.520933054
+    }
+  ],
+  "fp32": {
+    "values": [
+      3136.572049,
+      3118.672616,
+      3112.490166,
+      3104.290796
+    ],
+    "mean": 3118.0064067499998,
+    "median": 3115.5813909999997,
+    "min": 3104.290796,
+    "max": 3136.572049
+  },
+  "both16": {
+    "values": [
+      3146.602695,
+      3136.520713,
+      3128.585877,
+      3115.90997
+    ],
+    "mean": 3131.90481375,
+    "median": 3132.5532949999997,
+    "min": 3115.90997,
+    "max": 3146.602695
+  },
+  "meanSpeedupPct": 0.4457465824929674,
+  "medianSpeedupPct": 0.5447427580941078
+}

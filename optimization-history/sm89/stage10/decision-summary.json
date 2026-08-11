@@ -1,0 +1,41 @@
+{
+  "createdUtc": "2026-08-05T17:22:00+00:00",
+  "regime": "L1-EXACT19-B13-S2",
+  "change": "replace 33 attention out-projection cuBLAS beta=1 GEMMs per forward with fixed CUTLASS M128xN128xK32/W64x64/stage4/swizzle1",
+  "microDualStreamAbba10000": {
+    "controlMedianPairUs": 15.238997,
+    "candidateMedianPairUs": 14.226029,
+    "improvementPercent": 7.120525,
+    "correctness": "bit-exact against cuBLAS on fixed random inputs"
+  },
+  "ncu": {
+    "controlReport": "ncu-cublas-outproj-b13-beta1.ncu-rep",
+    "candidateReport": "ncu-cutlass-outproj-m128n128-w64x64-s4-beta1.ncu-rep",
+    "controlDurationUs": 13.47,
+    "candidateDurationUs": 14.05,
+    "controlRegistersPerThread": 186,
+    "candidateRegistersPerThread": 162,
+    "candidateDynamicSharedMemoryBytes": 65536,
+    "gridBlocks": 111,
+    "spillBytes": 0
+  },
+  "unlockedAbba300": {
+    "forwardPercent": 1.078784,
+    "reversePercent": -1.053667,
+    "combinedControlMedianNNEvalsPerSec": 2983.149032,
+    "combinedCandidateMedianNNEvalsPerSec": 2984.718371,
+    "combinedPercent": 0.052607
+  },
+  "locked2400WarmAbba500": {
+    "roundCombinedPercent": [0.597924, 0.404055, -0.547618],
+    "allControlSamples": 12,
+    "allCandidateSamples": 12,
+    "controlMedianNNEvalsPerSec": 2889.978783,
+    "candidateMedianNNEvalsPerSec": 2905.105886,
+    "combinedPercent": 0.523433,
+    "groupedForwardPercent": -0.526573,
+    "groupedReversePercent": 0.593431
+  },
+  "accuracy": "not run because the performance acceptance criterion failed; isolated exact-boundary comparison was bit-exact",
+  "decision": "rejected: whole-network forward and reverse orders do not agree even after three locked-clock rounds"
+}

@@ -1,0 +1,72 @@
+{
+  "stage": 37,
+  "target": "RTX 4090 SM89 exact 19x19 B13 FP16 S2",
+  "strategy": "one no-split C768-to-C384 policy/value head projection",
+  "switch": "cudaUseWideHeadProjection",
+  "decision": "reject-s2-enablement-retain-default-off-implementation",
+  "preCandidateEvidence": {
+    "currentS2NsysProjectionBoundaryUs": 46.103,
+    "controlNcuProjectionDurationsUs": [9.6, 9.5, 16.064],
+    "controlNcuWavesPerSm": [0.58, 0.58, 0.29],
+    "controlNcuAchievedOccupancyPct": 8.3,
+    "controlNcuSpills": 0
+  },
+  "smoke": {
+    "rows": 26,
+    "byteIdentical": true,
+    "controlReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97",
+    "candidateReplaySha256": "00f4110d9b2770fc942f8ac88e1ecea6e17519dc99994bc6ca2f73233396be97"
+  },
+  "candidateNcuS2": {
+    "durationUs": [16.0, 16.1],
+    "medianDurationUs": 16.05,
+    "gridCtas": 111,
+    "threadsPerCta": 128,
+    "registersPerThread": 162,
+    "dynamicSharedMemoryKiB": 81.92,
+    "wavesPerSm": 0.87,
+    "theoreticalOccupancyPct": 8.33,
+    "achievedOccupancyPct": 8.32,
+    "localSpillRequests": 0,
+    "sharedSpillRequests": 0
+  },
+  "nsysS2": {
+    "iterationsPerRun": 20,
+    "capturedHeadForwards": 66,
+    "kernelsRemoved": 132,
+    "forwardOrder": {
+      "controlBoundaryUs": 53.505833,
+      "candidateBoundaryUs": 32.429257,
+      "boundaryDeltaPct": -39.3912,
+      "controlNNEvalsPerSec": 3201.661302,
+      "candidateNNEvalsPerSec": 3213.152529,
+      "throughputDeltaPct": 0.3589,
+      "controlSummedKernelMs": 416.935877,
+      "candidateSummedKernelMs": 418.543446,
+      "summedKernelDeltaPct": 0.3856,
+      "controlGpuBusyUnionMs": 271.948434,
+      "candidateGpuBusyUnionMs": 270.112835,
+      "gpuBusyUnionDeltaPct": -0.675
+    },
+    "reverseOrder": {
+      "controlBoundaryUs": 52.596697,
+      "candidateBoundaryUs": 30.861712,
+      "boundaryDeltaPct": -41.3239,
+      "controlNNEvalsPerSec": 3203.614928,
+      "candidateNNEvalsPerSec": 3134.729771,
+      "throughputDeltaPct": -2.1502,
+      "controlSummedKernelMs": 418.503386,
+      "candidateSummedKernelMs": 414.184228,
+      "summedKernelDeltaPct": -1.032,
+      "controlGpuBusyUnionMs": 269.390263,
+      "candidateGpuBusyUnionMs": 275.514815,
+      "gpuBusyUnionDeltaPct": 2.2735
+    }
+  },
+  "abbaRun": false,
+  "full8192AccuracyRun": false,
+  "s2ConfigEnabled": false,
+  "mechanismConclusion": "The projection and launch reduction is locally valid in both orders, but reverse-order GPU busy union and throughput regress because the new head launch shape changes dual-stream overlap phase.",
+  "reopenCondition": "A common dual-stream phase controller or a head launch shape that preserves the incumbent overlap schedule",
+  "binarySha256": "8d12ab9266ce20ada665a8f83ce3fb619f1808e3115325669b8b955ceb4337c1"
+}

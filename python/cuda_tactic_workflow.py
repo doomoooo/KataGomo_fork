@@ -2352,12 +2352,12 @@ def materialize_space(
         "history_recipe": {
             "sources": (
                 [
-                    "/workspace/results/4090/HISTORY.md",
-                    "/workspace/4090-optimization-portability.md",
+                    "optimization-history/sm89/HISTORY.md",
+                    "optimization-history/docs/4090-optimization-portability.md",
                 ]
                 if architecture == "sm89" else
                 [
-                    "SM89_SM120_AUTOTUNE_HANDOVER_20260807.md",
+                    "optimization-history/docs/SM89_SM120_AUTOTUNE_HANDOVER_20260807.md",
                     "retained SM120 optimization commits",
                 ]
             ),
