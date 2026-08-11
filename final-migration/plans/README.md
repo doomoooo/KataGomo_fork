@@ -17,8 +17,5 @@ Current assets:
 
 - `sm89/rtx4090d-b12-s2/best-tactic-plan.json`: certified RTX 4090 D, exact
   B12, two streams per device, `3110.690824` long-gate physical nnEval/s.
-
-The previous SM120 plan referenced a search component removed by the fixed
-full-board backend contract, so it remains absent rather than being presented
-as compatible. RTX 5080 B19/S2 will return only after it passes the current
-long whole-graph and immutable full-FP32 gates.
+- `sm120/rtx5080-b16-s2/best-tactic-plan.json`: certified RTX 5080, exact B16,
+  two streams per device, `2836.211933` long-gate physical nnEval/s.

@@ -17,6 +17,16 @@ EXPECTED_PLANS = {
         "batch": 12,
         "records": 60,
     },
+    "rtx5080": {
+        "path": pathlib.Path(
+            "final-migration/plans/sm120/rtx5080-b16-s2/best-tactic-plan.json"
+        ),
+        "file_sha256": "db3d0777b69e4d646c28154b125768eee1c6049c21577c020f824d5c181f4c16",
+        "architecture": "sm120",
+        "compute_capability": [12, 0],
+        "batch": 16,
+        "records": 63,
+    },
 }
 
 

@@ -38,6 +38,7 @@ from cuda_tactic_workflow import (  # noqa: E402
     nvcc_arch_flag,
     official_fallback_overrides,
     positive_history_seed_candidate_ids,
+    refinement_sweep_limit_can_resume,
     refinement_top_candidates,
     resolve_candidate_config_state,
     runtime_tactic_baseline,
@@ -118,6 +119,14 @@ def _make_result(space_path, space, family, batches, model_path, config_path):
 
 
 class CudaTacticWorkflowTests(unittest.TestCase):
+    def test_refinement_resume_allows_only_monotonic_sweep_extension(self):
+        self.assertTrue(refinement_sweep_limit_can_resume(3, 3))
+        self.assertTrue(refinement_sweep_limit_can_resume(3, 5))
+        self.assertFalse(refinement_sweep_limit_can_resume(5, 3))
+        self.assertFalse(refinement_sweep_limit_can_resume(0, 5))
+        self.assertFalse(refinement_sweep_limit_can_resume(True, 5))
+        self.assertFalse(refinement_sweep_limit_can_resume(None, 5))
+
     def test_nvcc_arch_flag_uses_the_compiler_spelling(self):
         self.assertEqual(nvcc_arch_flag([8, 9]), "-arch=sm_89")
         self.assertEqual(nvcc_arch_flag([12, 0]), "-arch=sm_120")

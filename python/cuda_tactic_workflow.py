@@ -3415,6 +3415,16 @@ def mark_superseded_refinement_winner(
         )
 
 
+def refinement_sweep_limit_can_resume(
+    previous_limit: object, requested_limit: int,
+) -> bool:
+    """Allow a completed/checkpointed refinement to grow, never to shrink."""
+    return (
+        type(previous_limit) is int and
+        1 <= previous_limit <= requested_limit
+    )
+
+
 def require_stable_metric(row: dict[str, object]) -> float:
     value = stable_metric(row)
     if value is None:
@@ -5215,7 +5225,9 @@ def run_refine(args: argparse.Namespace) -> None:
             metadata.get("iterations") == args.iterations and
             metadata.get("warmup") == args.warmup and
             metadata.get("repeats") == args.repeats and
-            metadata.get("max_sweeps") == args.max_sweeps and
+            refinement_sweep_limit_can_resume(
+                metadata.get("max_sweeps"), args.max_sweeps,
+            ) and
             metadata.get("resweep_top_k") == args.resweep_top_k and
             # A checkpoint written before adaptive ABBA was added still has
             # valid broad-scan rows. Reuse those exact command matches and add
