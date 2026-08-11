@@ -39,8 +39,9 @@ main TileLang source revision cannot silently rewrite an accepted candidate.
 ## 2. Architecture selection and scan
 
 Device selection is by CUDA ordinal after `CUDA_VISIBLE_DEVICES` remapping.
-The CUDA Runtime supplies compute capability and resource properties.  Product
-names, SM counts and historical ordinals are provenance only.
+The CUDA Runtime supplies compute capability and resource properties. Product
+names and historical ordinals are provenance only; SM count and the remaining
+resource properties consumed by the runtime plan loader must match exactly.
 
 Supported mappings:
 
@@ -57,6 +58,9 @@ binary. `--full-batch-scan` instead selects all 29 shapes without changing the
 per-batch flow. Discovery uses 100 timed iterations, 50 warmup and one repeat
 with a 0.1% acceptance threshold. The final joint gate uses at least 1000 timed
 iterations, 50 warmup and two repeats with at most 10% relative spread.
+Every measurement monitors external SM activity. Memory-only processes are
+ignored. Non-zero foreign SM work discards only the affected measurement; the
+workflow waits 30 seconds and retries instead of aborting the scan.
 
 An implementation catalog is not an independent operator claim. The static
 space contract groups catalogs by shared config ownership and declared runtime
@@ -88,6 +92,14 @@ resource incompatibility are hard errors.  Discovery output is never labeled
 final.  `ready_for_scan_bypass` requires complete long-stable evidence;
 `production_ready` additionally requires the immutable 8192-row FP32
 certificate.  The latter must remain false when the golden is unavailable.
+
+The build-only receiver path consumes one carried production plan. It
+materializes the normal space for that exact receiver and batch, verifies every
+selected candidate against it, then retains only selected candidates and their
+recursive artifact dependencies before generation and compilation. It runs no
+prescan, benchmark, refinement, long gate, or accuracy replay. A content-hashed
+`plan-build.json` binds the locally compiled binary, artifact bundle, restricted
+space, and source plan; the runtime launcher rejects an unbound rebuilt binary.
 
 The release-qualification `reference` phase may create that golden only by
 forcing `useFP16=false` and disabling both optimized architecture backends;

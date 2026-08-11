@@ -123,6 +123,71 @@ def complete_manifest_for_batches(path: pathlib.Path, batches: str) -> bool:
     )
 
 
+def is_build_only_space(path: pathlib.Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        policy = load_json(path).get("candidate_policy", {})
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(policy, dict) and
+        policy.get("build_only_plan_restricted") is True
+    )
+
+
+def has_candidates(
+    space_path: pathlib.Path, family: str, implementation: str,
+) -> bool:
+    space = load_json(space_path)
+    search_family = (
+        "qkv_rope"
+        if space.get("architecture") == "sm120" and family == "wide_qkv"
+        else family
+    )
+    for batch in space.get("batches", []):
+        for candidate in batch.get(search_family, []):
+            candidate_implementation = candidate.get("implementation")
+            if candidate_implementation is None and space.get("architecture") == "sm120":
+                candidate_implementation = "tilelang"
+            if (
+                candidate_implementation == implementation and
+                candidate.get("artifact_family", search_family) == family
+            ):
+                return True
+    return False
+
+
+def write_empty_manifest(
+    *, space_path: pathlib.Path, family: str, target: pathlib.Path,
+    registry_source: pathlib.Path | None = None,
+) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "schema": 1,
+        "complete": True,
+        "requested_entry_count": 0,
+        "family": family,
+        "space": str(space_path.resolve()),
+        "space_sha256": sha256(space_path),
+        "sources": [],
+        "entries": [],
+    }
+    if registry_source is not None:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "python"))
+        from portable_fat_scan import render_registry
+
+        registry_source.parent.mkdir(parents=True, exist_ok=True)
+        registry_source.write_text(render_registry(family, []))
+        payload.update({
+            "registry_source": str(registry_source.resolve()),
+            "registry_sha256": sha256(registry_source),
+        })
+    (target / "manifest.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    )
+
+
 def tilelang_root_from_manifests(*manifests: dict[str, Any]) -> pathlib.Path:
     roots: set[pathlib.Path] = set()
     for manifest in manifests:
@@ -255,7 +320,7 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
     binary = build / "katago"
     bundle = out / "artifact-bundle.json"
 
-    if not space.exists() or args.force:
+    if not space.exists() or (args.force and not is_build_only_space(space)):
         run([str(python), "python/cuda_tactic_workflow.py", "space",
              "--architecture", "sm89", "--gpu-class", paths["gpu_class"].name,
              "--device", str(args.device), "--batches", args.batches,
@@ -265,6 +330,12 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
              "--space", str(space), "--phase", "full", "--output", str(generation)], cwd=repo, env=env)
 
     for family, target in (("dual_ffn", dual), ("linear2", linear)):
+        if not has_candidates(space, family, "tilelang_gemm"):
+            write_empty_manifest(
+                space_path=space, family=family, target=target,
+                registry_source=target / f"sm89_search_{family}_fat_registry.cu",
+            )
+            continue
         command = [str(python), "python/portable_prepare_tilelang_fat_scan.py",
                    "--space", str(space), "--family", family,
                    "--batches", args.batches, "--device", str(args.device),
@@ -280,7 +351,12 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
 
     dual_manifest = load_json(dual / "manifest.json")
     linear_manifest = load_json(linear / "manifest.json")
-    tilelang_root = tilelang_root_from_manifests(dual_manifest, linear_manifest)
+    if dual_manifest.get("entries") or linear_manifest.get("entries"):
+        tilelang_root = tilelang_root_from_manifests(
+            dual_manifest, linear_manifest,
+        )
+    else:
+        tilelang_root = paths["prefix"] / "sources/TileLang"
     configure = [
         "cmake", "-S", str(repo / "cpp"), "-B", str(build), "-G", "Ninja",
         "-DUSE_BACKEND=CUDA", "-DCMAKE_BUILD_TYPE=Release",
@@ -308,7 +384,7 @@ def sm89_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: 
 def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env: dict[str, str]) -> None:
     repo, out, python = paths["repo"], paths["out"], paths["python"]
     space = out / "space.json"
-    if not space.exists() or args.force:
+    if not space.exists() or (args.force and not is_build_only_space(space)):
         run([str(python), "python/cuda_tactic_workflow.py", "space",
              "--architecture", "sm120", "--gpu-class", paths["gpu_class"].name,
              "--device", str(args.device), "--batches", args.batches,
@@ -318,13 +394,18 @@ def sm120_prepare(args: argparse.Namespace, paths: dict[str, pathlib.Path], env:
         target = out / "fat" / family
         manifest = target / "manifest.json"
         manifests[family] = manifest
-        command = [str(python), "python/sm120_prepare_tilelang_fat_scan.py",
-                   "--space", str(space), "--family", family,
-                   "--batches", args.batches, "--device", str(args.device),
-                   "--output-dir", str(target), "--python", str(python)]
-        if not args.force:
-            command.append("--reuse-existing")
-        run(command, cwd=repo, env=env)
+        if has_candidates(space, family, "tilelang"):
+            command = [str(python), "python/sm120_prepare_tilelang_fat_scan.py",
+                       "--space", str(space), "--family", family,
+                       "--batches", args.batches, "--device", str(args.device),
+                       "--output-dir", str(target), "--python", str(python)]
+            if not args.force:
+                command.append("--reuse-existing")
+            run(command, cwd=repo, env=env)
+        else:
+            write_empty_manifest(
+                space_path=space, family=family, target=target,
+            )
     coordinate = out / "coordinate-fat"
     manifest = coordinate / "manifest.json"
     if not complete_manifest_for_batches(manifest, args.batches) or args.force:
@@ -675,6 +756,7 @@ def workflow_accuracy(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prefix", type=pathlib.Path)
+    parser.add_argument("--repo", type=pathlib.Path)
     parser.add_argument("--output-dir", type=pathlib.Path)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--batches", default="4-32")
@@ -742,7 +824,7 @@ def main() -> int:
         pointer = script_dir / "runtime-prefix.txt"
         args.prefix = pathlib.Path(pointer.read_text().strip()) if pointer.exists() else script_dir / "runtime"
     prefix = args.prefix.resolve()
-    repo = prefix / "repo"
+    repo = (args.repo or prefix / "repo").resolve()
     python = prefix / "venv/bin/python"
     model = prefix / "assets/b11c768h12nbt3tflrs-fson-silu.bin.gz"
     for path, label in ((python, "configured Python"), (model, "model")):

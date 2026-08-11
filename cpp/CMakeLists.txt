@@ -311,11 +311,11 @@ if(USE_BACKEND STREQUAL "CUDA")
   endif()
   if(SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
      SM89_SEARCH_LINEAR2_FAT_REGISTRY OR SM89_SEARCH_LINEAR2_FAT_SOURCES)
-    if(NOT SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR NOT SM89_SEARCH_DUAL_FFN_FAT_SOURCES OR
-       NOT SM89_SEARCH_LINEAR2_FAT_REGISTRY OR NOT SM89_SEARCH_LINEAR2_FAT_SOURCES OR
+    if(NOT SM89_SEARCH_DUAL_FFN_FAT_REGISTRY OR
+       NOT SM89_SEARCH_LINEAR2_FAT_REGISTRY OR
        NOT SM89_TACTIC_TILELANG_ROOT)
       message(FATAL_ERROR
-        "SM89 tactic search requires TileLang root plus both dual-FFN and linear2 registry/source sets")
+        "SM89 tactic search requires TileLang root plus both dual-FFN and linear2 registries")
     endif()
     if(NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/src/tl_templates/cuda/debug.h" OR
        NOT EXISTS "${SM89_TACTIC_TILELANG_ROOT}/3rdparty/cutlass/include/cutlass/cutlass.h")

@@ -18,6 +18,21 @@ After extracting the release in a writable persistent directory:
 
 ```bash
 ./setup.sh
+./build-for-plan.sh --device 0
+./run.sh
+```
+
+This is the build-only path for the certified plan carried by the tar.
+`build-for-plan.sh` verifies the model and exact receiver hardware, generates
+only the selected plan's single batch tactics and recursive artifact
+dependencies, and compiles KataGo. It performs no prescan, candidate benchmark,
+refinement, long gate, or accuracy replay. The content-hashed `plan-build.json`
+binds the rebuilt binary and generated artifacts to the certified plan.
+
+To tune a new plan for the receiver instead:
+
+```bash
+./setup.sh
 ./run-autotune.sh --device 0
 ./run.sh
 ```
@@ -100,7 +115,9 @@ the frozen source instead of asking a newer compiler to reproduce old bytes.
 
 Each benchmark subprocess records SM occupancy with `nvidia-smi pmon` while it
 runs. A process that only holds device memory but has zero SM activity is not
-treated as contention; a newly active external compute process invalidates
-that measurement.
+treated as contention. External non-zero SM activity invalidates only the
+affected measurement result; the workflow waits 30 seconds and retries rather
+than aborting the autotune run. Occupancy monitoring remains frequent while a
+measurement is active, but conflict rechecks are deliberately low-frequency.
 
 See [SPEC.md](SPEC.md) for the packaging and plan contracts.

@@ -93,6 +93,13 @@ class FatScanTests(unittest.TestCase):
         for request in requests:
             self.assertEqual(source.count(request["launch_symbol"]), 2)
 
+    def test_empty_registry_is_valid_for_plan_restricted_build(self) -> None:
+        source = render_registry("linear2", [])
+        self.assertIn("getSm120SearchLinear2FatTactics", source)
+        self.assertIn("count = 0;", source)
+        self.assertIn("return nullptr;", source)
+        self.assertNotIn("fatTactics[]", source)
+
     def test_qkv_registry_preserves_packed_output_abi(self) -> None:
         token = symbol_token("wide_qkv", 7, "cute-packed")
         source = render_registry("wide_qkv", [{

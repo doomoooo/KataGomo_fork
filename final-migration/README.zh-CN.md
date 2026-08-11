@@ -112,7 +112,8 @@ discovery 短测只用于剪枝，不是发布性能。
 
 每个 benchmark 子进程都由 `nvidia-smi pmon` 监控。只占显存且 SM 使用为零的
 进程允许存在。外部 PID 在测量期间出现非零 SM 活动时，benchmark 进程组会被
-停止，该样本作废。无法确认监控状态时测量 fail-closed。
+标记为受干扰，该样本作废；autotuner 等待 30 秒后重新确认设备空闲并重跑，
+不会因为暂时的 SM 冲突退出。无法确认监控状态时测量 fail-closed。
 
 分发工作流不包含 GPU lock，也不修改功耗上限或频率。
 
@@ -160,18 +161,30 @@ GPU 空闲只允许它自己的不足量逻辑请求组启动。另一张卡的 
 
 ## 运行 GTP
 
-完成 setup 和 autotune 后，在 CUDA Runtime device 0 上启动 GTP：
+如果要直接使用源码完备 tar 附带的认证 plan，不重新执行 autotune：
 
 ```bash
+./setup.sh
+./build-for-plan.sh --device 0
 ./run.sh
 ```
 
+`build-for-plan.sh` 会校验接收设备与 plan 的 compute capability 和 SM 数量，
+把生成范围裁剪到 plan 的单个 batch、已选 tactic 及递归 artifact dependency，
+然后编译 KataGo。它不会执行 batch prescan、候选 benchmark、refinement、long
+gate 或精度 replay。生成的 binary、artifact bundle 和裁剪空间会写入带 hash 的
+`plan-build.json`；`run.sh` 校验该 manifest 后才接受本地编译 binary。
+
+如果要为接收设备重新搜索 plan，则把 build-only 步骤换成
+`./run-autotune.sh --device 0`，完成后再执行 `./run.sh`。
+
 launcher 会检测接收设备、选择兼容的已认证 plan，校验模型、plan 文件和被测
 binary 的 hash，并自动设置精确 batch、双 lane 设备映射、batch-aware dispatch、
-异步 event pipeline 和搜索线程预算。它优先使用被测 binary hash；只有保留的
-result 能证明 target、batch 和完整 apply 映射相同，才会自动接受重编译 binary，
-backend activation 仍然 fail-closed。需要时可以选择其他 CUDA Runtime ordinal
-或显式覆盖输入：
+异步 event pipeline 和搜索线程预算。存在有效 `plan-build.json` 时，它优先使用
+该 manifest 绑定的本地编译 binary；否则使用 plan 记录的被测 binary hash。
+只有保留的 result 能证明 target、batch 和完整 apply 映射相同，才会自动接受
+其他重编译 binary，backend activation 仍然 fail-closed。需要时可以选择其他
+CUDA Runtime ordinal 或显式覆盖输入：
 
 ```bash
 ./run.sh --device 1
@@ -249,7 +262,16 @@ AUTOTUNE_CORPUS_MANIFEST=/path/to/8192-full19.manifest.json \
 
 ```bash
 ./setup.sh
+./build-for-plan.sh --device 0
+./run.sh
+```
+
+如果要重新生成 plan，而不是使用附带 plan：
+
+```bash
+./setup.sh
 ./run-autotune.sh --device 0
+./run.sh
 ```
 
 预编译 runtime tar：

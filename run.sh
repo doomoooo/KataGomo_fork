@@ -149,12 +149,16 @@ if [[ -n "${plan}" ]]; then
 else
   declare -a matching_plans=()
   declare -A seen_plans=()
+  declare -A seen_plan_hashes=()
   for root in "${plan_roots[@]}"; do
     while IFS= read -r candidate; do
       resolved="$(readlink -m -- "${candidate}")"
       [[ -z "${seen_plans[${resolved}]:-}" ]] || continue
       seen_plans["${resolved}"]=1
       [[ -r "$(dirname -- "${resolved}")/SHA256SUMS" ]] || continue
+      candidate_plan_sha="$(sha256sum "${resolved}" | awk '{print $1}')"
+      [[ -z "${seen_plan_hashes[${candidate_plan_sha}]:-}" ]] || continue
+      seen_plan_hashes["${candidate_plan_sha}"]=1
       if validate_plan "${resolved}"; then
         matching_plans+=("${resolved}")
       fi
@@ -249,11 +253,72 @@ if a.get("apply", {}).get("per_batch_tactic_overrides") != b.get("apply", {}).ge
 ' "$1" "$2" >/dev/null
 }
 
+plan_build_binary() {
+  "${python}" -c '
+import hashlib, json, pathlib, sys
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+manifest_path = pathlib.Path(sys.argv[1]).resolve()
+plan_path = pathlib.Path(sys.argv[2]).resolve()
+manifest = json.load(manifest_path.open(encoding="utf-8"))
+plan = json.load(plan_path.open(encoding="utf-8"))
+if manifest.get("schema") != 1 or manifest.get("kind") != "cuda-plan-build":
+    raise SystemExit(1)
+if manifest.get("plan_id") != plan.get("plan_id"):
+    raise SystemExit(1)
+if manifest.get("plan_sha256") != plan.get("plan_sha256"):
+    raise SystemExit(1)
+if manifest.get("source_plan_file_sha256") != sha256(plan_path):
+    raise SystemExit(1)
+if manifest.get("batch") != int(plan["batches"][0]):
+    raise SystemExit(1)
+target = plan["target"]
+for key in ("architecture", "gpu_class", "streams"):
+    if manifest.get(key) != target.get(key):
+        raise SystemExit(1)
+root = manifest_path.parent
+paths = {}
+for key, hash_key in (
+    ("binary", "binary_sha256"),
+    ("artifact_bundle", "artifact_bundle_sha256"),
+    ("space", "space_sha256"),
+):
+    relative = pathlib.Path(manifest[key])
+    if relative.is_absolute():
+        raise SystemExit(1)
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise SystemExit(1)
+    if not path.is_file() or sha256(path) != manifest.get(hash_key):
+        raise SystemExit(1)
+    paths[key] = path
+print(paths["binary"])
+' "$1" "$2" 2>/dev/null
+}
+
 if [[ -n "${katago}" ]]; then
   katago="$(readlink -m -- "${katago}")"
   binary_matches_plan "${katago}" \
     || die "--katago executable does not match the plan binary SHA-256"
 else
+  if [[ -n "${prefix}" && -d "${prefix}/results" ]]; then
+    while IFS= read -r build_manifest; do
+      candidate="$(plan_build_binary "${build_manifest}" "${plan}" || true)"
+      [[ -x "${candidate}" ]] || continue
+      katago="${candidate}"
+      printf '[katago-run] using locally compiled build-only binary for %s\n' \
+        "${plan_id}" >&2
+      break
+    done < <(find "${prefix}/results" -type f -name plan-build.json -print | sort)
+  fi
   declare -a binary_candidates=(
     "$(dirname -- "${plan}")/build/katago"
     "${SCRIPT_DIR}/katago"
@@ -266,12 +331,14 @@ else
       binary_candidates+=("${candidate}")
     done < <(find "${prefix}/results" -type f -path '*/build/katago' -print | sort)
   fi
-  for candidate in "${binary_candidates[@]}"; do
-    if [[ -n "${candidate}" ]] && binary_matches_plan "${candidate}"; then
-      katago="$(readlink -m -- "${candidate}")"
-      break
-    fi
-  done
+  if [[ -z "${katago}" ]]; then
+    for candidate in "${binary_candidates[@]}"; do
+      if [[ -n "${candidate}" ]] && binary_matches_plan "${candidate}"; then
+        katago="$(readlink -m -- "${candidate}")"
+        break
+      fi
+    done
+  fi
   if [[ -z "${katago}" && -n "${prefix}" && -d "${prefix}/results" ]]; then
     while IFS= read -r candidate_plan; do
       candidate="$(dirname -- "${candidate_plan}")/build/katago"

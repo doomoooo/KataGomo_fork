@@ -166,8 +166,22 @@ def render_registry(family: str, requests: Iterable[dict]) -> str:
     """Render the one registry TU for a generated family bundle."""
     validate_family(family)
     values = list(requests)
+    abi = _FAMILY_ABI[family]
     if not values:
-        raise ValueError("cannot render an empty fat registry")
+        return f'''// Generated empty registry for a plan-restricted build. Do not edit.
+#include "cudabackend_sm89_tactic_kernels.h"
+
+#include <cstddef>
+
+namespace Sm89Backend {{
+
+const {abi["tactic_type"]}* {abi["getter"]}(std::size_t& count) {{
+  count = 0;
+  return nullptr;
+}}
+
+}} // namespace Sm89Backend
+'''
     keys: set[tuple[int, str]] = set()
     tokens: set[str] = set()
     for item in values:
@@ -191,7 +205,6 @@ def render_registry(family: str, requests: Iterable[dict]) -> str:
         keys.add(key)
         tokens.add(token)
 
-    abi = _FAMILY_ABI[family]
     declarations = "\n".join(
         f'extern "C" cudaError_t {item["launch_symbol"]}({abi["launch_args"]});'
         for item in values

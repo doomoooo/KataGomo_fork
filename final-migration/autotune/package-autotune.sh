@@ -90,7 +90,9 @@ mkdir -p -- "${bundle}/payload/wheels" "${bundle}/patches" "${bundle}/metadata" 
   "${bundle}/plans" "${source_stage}"
 
 cp -- "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/run-autotune.sh" \
-  "${SCRIPT_DIR}/autotune.py" "${SCRIPT_DIR}/detect_gpu.py" \
+  "${REPO_ROOT}/build-for-plan.sh" \
+  "${SCRIPT_DIR}/autotune.py" "${SCRIPT_DIR}/build_for_plan.py" \
+  "${SCRIPT_DIR}/detect_gpu.py" \
   "${SCRIPT_DIR}/prepare_accuracy_corpus.py" \
   "${REPO_ROOT}/python/build_parallelism.py" "${bundle}/"
 cp -- "${REPO_ROOT}/run.sh" "${bundle}/run.sh"
@@ -102,8 +104,9 @@ cp -a -- "${REPO_ROOT}/final-migration/plans/." "${bundle}/plans/"
 cp -- "${REPO_ROOT}/cpp/neuralnet/flash-attention-sm89.patch" \
   "${SCRIPT_DIR}/patches/flash-attention-sm120-both16.patch" "${bundle}/patches/"
 chmod 0755 "${bundle}/setup.sh" "${bundle}/run-autotune.sh" \
-  "${bundle}/run.sh" \
-  "${bundle}/autotune.py" "${bundle}/detect_gpu.py" \
+  "${bundle}/run.sh" "${bundle}/build-for-plan.sh" \
+  "${bundle}/autotune.py" "${bundle}/build_for_plan.py" \
+  "${bundle}/detect_gpu.py" \
   "${bundle}/prepare_accuracy_corpus.py"
 
 revision_for() {

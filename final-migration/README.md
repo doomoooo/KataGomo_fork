@@ -131,9 +131,10 @@ Discovery timings are pruning evidence, not release performance claims.
 
 Every benchmark subprocess is monitored with `nvidia-smi pmon`. A process that
 only owns device memory and consumes zero SM time is allowed. If a foreign PID
-uses nonzero SM time during measurement, the benchmark process group is stopped
-and the sample is invalidated. Failure to establish the monitoring state is a
-measurement failure.
+uses nonzero SM time during measurement, the sample is invalidated. The
+autotuner waits 30 seconds, confirms that the device is idle, and reruns it
+instead of exiting on temporary contention. Failure to establish the monitoring
+state is a measurement failure.
 
 The distributed workflow does not contain GPU locks and does not change power
 limits or clocks.
@@ -186,20 +187,35 @@ idle state cannot authorize an underfilled launch on a busy GPU.
 
 ## Running GTP
 
-After setup and autotune, start GTP on CUDA Runtime device 0 with:
+To use the certified plan carried by the source-complete tar without running
+autotune, use:
 
 ```bash
+./setup.sh
+./build-for-plan.sh --device 0
 ./run.sh
 ```
+
+`build-for-plan.sh` validates the receiver against the plan, including exact
+compute capability and SM count, restricts generation to the plan's one batch,
+selected tactics, and recursive artifact dependencies, then compiles KataGo.
+It does not run batch prescan, candidate benchmarks, refinement, the long gate,
+or accuracy replay. The resulting binary, artifact bundle, and restricted
+space are content-hashed in `plan-build.json`; `run.sh` verifies that manifest
+before accepting the locally compiled binary.
+
+To search a new plan for the receiver instead, replace the build-only step
+with `./run-autotune.sh --device 0`, then run `./run.sh` normally.
 
 The launcher detects the receiver, selects a compatible certified plan, checks
 the model, plan file, and measured binary hashes, and supplies exact batch,
 two-lane device mapping, batch-aware dispatch, the asynchronous event pipeline,
-and a search-thread budget. It prefers the measured binary hash; a rebuilt
-binary is accepted automatically only when a retained result proves the same
-target, batch, and complete apply mapping. Backend activation remains
-fail-closed. Select another CUDA Runtime ordinal or override an input when
-needed:
+and a search-thread budget. When a valid `plan-build.json` exists, it prefers
+the locally compiled binary bound by that manifest; otherwise it uses the
+measured binary hash recorded by the plan. Another rebuilt binary is accepted
+automatically only when a retained result proves the same target, batch, and
+complete apply mapping. Backend activation remains fail-closed. Select another
+CUDA Runtime ordinal or override an input when needed:
 
 ```bash
 ./run.sh --device 1
@@ -286,7 +302,16 @@ After extraction into a persistent writable directory:
 
 ```bash
 ./setup.sh
+./build-for-plan.sh --device 0
+./run.sh
+```
+
+To generate a new plan instead of using the bundled one:
+
+```bash
+./setup.sh
 ./run-autotune.sh --device 0
+./run.sh
 ```
 
 Prebuilt runtime tar:

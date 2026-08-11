@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 PYTHON_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ from cuda_tactic_workflow import (  # noqa: E402
     SM89_RUNTIME_CONFIG_KEYS,
     SM120_RUNTIME_CONFIG_KEYS,
     _compile_metadata,
+    _wait_for_gpu_sm_idle,
     absolute_paths_in_json,
     build_plan,
     build_parser,
@@ -42,6 +44,7 @@ from cuda_tactic_workflow import (  # noqa: E402
     refinement_sweep_limit_can_resume,
     refinement_top_candidates,
     resolve_candidate_config_state,
+    restrict_space_to_plan,
     runtime_tactic_baseline,
     scan_command,
     sha256_file,
@@ -120,6 +123,25 @@ def _make_result(space_path, space, family, batches, model_path, config_path):
 
 
 class CudaTacticWorkflowTests(unittest.TestCase):
+    def test_external_sm_work_waits_and_retries_at_low_frequency(self):
+        with (
+            patch(
+                "cuda_tactic_workflow._active_sm_pids",
+                side_effect=({917}, {917}, set()),
+            ),
+            patch(
+                "cuda_tactic_workflow._is_recent_completed_benchmark",
+                return_value=False,
+            ),
+            patch("cuda_tactic_workflow.time.sleep") as sleep,
+        ):
+            conflicts = _wait_for_gpu_sm_idle(0)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["foreign_active_sm_pids"], [917])
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list], [0.5, 30.0]
+        )
+
     def test_refinement_resume_allows_only_monotonic_sweep_extension(self):
         self.assertTrue(refinement_sweep_limit_can_resume(3, 3))
         self.assertTrue(refinement_sweep_limit_can_resume(3, 5))
@@ -225,6 +247,37 @@ class CudaTacticWorkflowTests(unittest.TestCase):
             bundle["activation_marker_keys"],
         )
         self.assertEqual(len(bundle["activation_markers"]), 2)
+
+    def test_build_only_space_keeps_plan_candidates_and_dependencies(self):
+        plan = json.loads((
+            REPO / "final-migration/plans/sm120/rtx5080-b16-s2/"
+            "best-tactic-plan.json"
+        ).read_text())
+        space = materialize_space(
+            "sm120", "rtx5080", 0, [16], 2,
+            device_properties={
+                "compute_capability": [12, 0],
+                "multiProcessorCount": 84,
+            },
+        )
+        full_count = sum(
+            len(candidate_map(space, family, 16)) for family in SM120_FAMILIES
+        )
+        restricted = restrict_space_to_plan(space, plan, 16)
+        restricted_count = sum(
+            len(candidate_map(restricted, family, 16))
+            for family in SM120_FAMILIES
+        )
+        self.assertLess(restricted_count, full_count)
+        self.assertEqual(
+            restricted["candidate_policy"]["build_only_plan_id"],
+            plan["plan_id"],
+        )
+        for family in SM120_FAMILIES:
+            selected = plan["families"][family]["batches"]["16"]
+            self.assertIn(
+                selected["candidate_id"], candidate_map(restricted, family, 16)
+            )
 
     def test_space_materializes_sm89_all_batches(self):
         sm89 = materialize_space(

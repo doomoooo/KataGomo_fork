@@ -51,7 +51,17 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertIn('"${bundle}/plans/"', package)
         self.assertIn('"${bundle}/README.md"', package)
         self.assertIn('"${bundle}/README.zh-CN.md"', package)
+        self.assertIn('"${REPO_ROOT}/build-for-plan.sh"', package)
+        self.assertIn('"${SCRIPT_DIR}/build_for_plan.py"', package)
         self.assertIn("find payload patches metadata plans", package)
+
+    def test_build_only_path_uses_prepare_without_benchmark_phases(self) -> None:
+        helper = (AUTOTUNE_PATH.parent / "build_for_plan.py").read_text()
+        self.assertIn('"--phase", "prepare", "--full-batch-scan"', helper)
+        self.assertIn("restrict_space_to_plan", helper)
+        self.assertNotIn('"discovery"', helper)
+        self.assertNotIn('"gate"', helper)
+        self.assertNotIn('"accuracy"', helper)
 
     def test_parse_batch_set(self) -> None:
         self.assertEqual(AUTOTUNE.parse_batch_set("4-6,8,6"), [4, 5, 6, 8])

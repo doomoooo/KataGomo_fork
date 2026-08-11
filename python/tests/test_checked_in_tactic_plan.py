@@ -3,6 +3,8 @@ import json
 import pathlib
 import unittest
 
+from python.cuda_tactic_workflow import validate_plan
+
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MODEL_SHA256 = "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
@@ -108,6 +110,18 @@ class CheckedInTacticPlanTests(unittest.TestCase):
 
                 checksum = (path.parent / "SHA256SUMS").read_text().split()[0]
                 self.assertEqual(checksum, expected["file_sha256"])
+
+                producer = target["cuda_device_capabilities_at_scan"][0]
+                validate_plan(plan, device_properties={
+                    "compute_capability": expected["compute_capability"],
+                    "multiProcessorCount": producer["multiProcessorCount"],
+                })
+                with self.assertRaisesRegex(ValueError, "SM count"):
+                    validate_plan(plan, device_properties={
+                        "compute_capability": expected["compute_capability"],
+                        "multiProcessorCount":
+                            producer["multiProcessorCount"] + 1,
+                    })
 
 
 if __name__ == "__main__":

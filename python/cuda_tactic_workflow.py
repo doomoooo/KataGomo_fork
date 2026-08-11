@@ -58,6 +58,7 @@ PLAN_KIND = "cuda-tactic-plan"
 RESULT_KIND = "cuda-tactic-scan"
 ARTIFACT_BUNDLE_KIND = "cuda-tactic-artifact-bundle"
 BASELINE_SCAN_KIND = "cuda-stable-optimized-batch-prescan"
+SM_CONFLICT_RETRY_SECONDS = 30.0
 # A family is an implementation catalog. A decision group is the actual
 # ordered coordinate: every runtime dependency/overlap stays inside one group,
 # and no later group may own the same config key. Bundle setup comes first;
@@ -2548,7 +2549,36 @@ def build_artifact_bundle(
         if value.get("requires_artifact")
     }
     if not expected:
-        raise ValueError("search space contains no generated AOT candidates")
+        if manifest_paths:
+            for manifest_path in manifest_paths:
+                manifest = read_json(manifest_path)
+                if not manifest.get("complete") or manifest.get("entries") != []:
+                    raise ValueError(
+                        "static-only artifact bundle received a non-empty manifest"
+                    )
+        return {
+            "schema": SCHEMA,
+            "kind": ARTIFACT_BUNDLE_KIND,
+            "generated_utc": utc_now(),
+            "complete_history_coverage": True,
+            "positive_history_closure": closure,
+            "space": str(space_path.resolve()),
+            "space_sha256": sha256_file(space_path),
+            "architecture": space["architecture"],
+            "gpu_class": space["gpu_class"],
+            "linked_binary": str(binary.resolve()),
+            "linked_binary_sha256": sha256_file(binary),
+            "link_proof": "plan-restricted space requires no generated AOT launcher",
+            "source_manifests": [
+                {
+                    "path": str(path.resolve()),
+                    "sha256": sha256_file(path),
+                    "entry_count": 0,
+                }
+                for path in manifest_paths
+            ],
+            "entries": [],
+        }
     nm = subprocess.run(
         ["nm", "-a", str(binary)], text=True, capture_output=True, check=False,
     )
@@ -2804,6 +2834,89 @@ def candidate_map(space: dict[str, object], family: str, batch: int) -> dict[str
             raise ValueError(f"invalid candidate in {family}/B{batch}")
         result[str(item["id"])] = item
     return result
+
+
+def restrict_space_to_plan(
+    space: dict[str, object], plan: dict[str, object], batch: int,
+) -> dict[str, object]:
+    """Keep only one plan's selected generated tactics and dependencies."""
+    validate_plan(plan, space=space, batches=[batch])
+    restricted = json.loads(canonical_json(space))
+    source_batches = space_batches(space)
+    if batch not in source_batches:
+        raise ValueError(f"search space has no B{batch}")
+    plan_families = plan.get("families", {})
+    if not isinstance(plan_families, dict):
+        raise ValueError("plan has no family map")
+
+    needed: dict[str, set[str]] = {
+        family: set() for family in space_families(space)
+    }
+    pending: list[tuple[str, str]] = []
+    for family in space_families(space):
+        family_payload = plan_families.get(family)
+        entries = (
+            family_payload.get("batches", {})
+            if isinstance(family_payload, dict) else {}
+        )
+        entry = entries.get(str(batch)) if isinstance(entries, dict) else None
+        if not isinstance(entry, dict) or not entry.get("candidate_id"):
+            raise ValueError(f"plan has no {family}/B{batch} candidate")
+        candidate_id = str(entry["candidate_id"])
+        current = candidate_map(space, family, batch).get(candidate_id)
+        if current is None or current != entry.get("candidate"):
+            raise ValueError(
+                f"plan candidate differs from receiver space: {family}/B{batch}"
+            )
+        pending.append((family, candidate_id))
+
+    while pending:
+        family, candidate_id = pending.pop()
+        if candidate_id in needed[family]:
+            continue
+        candidate = candidate_map(space, family, batch).get(candidate_id)
+        if candidate is None:
+            raise ValueError(
+                f"plan artifact dependency is absent: {family}/B{batch}/{candidate_id}"
+            )
+        needed[family].add(candidate_id)
+        dependencies = candidate.get("artifact_dependencies", [])
+        if not isinstance(dependencies, list):
+            raise ValueError(
+                f"candidate has malformed artifact dependencies: {family}/{candidate_id}"
+            )
+        for dependency in dependencies:
+            if not isinstance(dependency, dict):
+                raise ValueError("artifact dependency is not an object")
+            dependency_family = str(dependency.get("family", ""))
+            dependency_id = str(dependency.get("candidate_id", ""))
+            if dependency_family not in needed or not dependency_id:
+                raise ValueError(f"invalid artifact dependency: {dependency}")
+            pending.append((dependency_family, dependency_id))
+
+    only_batch = space_batches(restricted)[batch]
+    for family, candidate_ids in needed.items():
+        values = only_batch.get(family, [])
+        assert isinstance(values, list)
+        only_batch[family] = [
+            value for value in values
+            if isinstance(value, dict) and str(value.get("id")) in candidate_ids
+        ]
+        if len(only_batch[family]) != len(candidate_ids):
+            raise ValueError(
+                f"failed to retain every plan candidate for {family}/B{batch}"
+            )
+    restricted["batches"] = [only_batch]
+    candidate_policy = restricted.get("candidate_policy", {})
+    if not isinstance(candidate_policy, dict):
+        candidate_policy = {}
+    candidate_policy.update({
+        "build_only_plan_restricted": True,
+        "build_only_plan_id": plan.get("plan_id"),
+        "build_only_exact_batch": batch,
+    })
+    restricted["candidate_policy"] = candidate_policy
+    return restricted
 
 
 def candidate_config(family: str, value: dict[str, object]) -> dict[str, object]:
@@ -4232,6 +4345,29 @@ def validate_plan(
                 "CUDA-reported receiver capability does not match the plan: "
                 f"{actual_compute_capability} != {target.get('compute_capability')}"
             )
+        producer_devices = target.get("cuda_device_capabilities_at_scan", [])
+        producer = (
+            producer_devices[0]
+            if isinstance(producer_devices, list) and producer_devices else None
+        )
+        actual_sm_count = device_properties.get("multiProcessorCount")
+        if not isinstance(actual_sm_count, int):
+            attributes = device_properties.get("attributes", {})
+            actual_sm_count = (
+                attributes.get("multiProcessorCount")
+                if isinstance(attributes, dict) else None
+            )
+        if (
+            not isinstance(producer, dict) or
+            not isinstance(producer.get("multiProcessorCount"), int) or
+            not isinstance(actual_sm_count, int)
+        ):
+            raise ValueError("plan/device SM-count identity is unavailable")
+        if producer["multiProcessorCount"] != actual_sm_count:
+            raise ValueError(
+                "CUDA-reported receiver SM count does not match the plan: "
+                f"{actual_sm_count} != {producer['multiProcessorCount']}"
+            )
     if target.get("fixed_board") != [19, 19]:
         raise ValueError("CUDA tactic plans currently require 19x19")
     if not plan.get("ready_for_scan_bypass", False):
@@ -4502,29 +4638,45 @@ def _is_recent_completed_benchmark(pid: int) -> bool:
     return _process_start_time(pid) == identity[0]
 
 
-def _run_benchmark_with_occupancy(
-    command: Sequence[str], *, device: int, timeout: int,
-) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
-    baseline = {
-        pid for pid in _active_sm_pids(device)
-        if not _is_recent_completed_benchmark(pid)
-    }
-    if baseline:
-        # A CUDA process may remain visible to pmon and /proc for a fraction
-        # of a second after the preceding benchmark has returned. Confirm the
-        # activity once before classifying it as competing work. Persistent
-        # or newly arriving SM users remain fail-closed here and in the
-        # monitor below.
-        time.sleep(0.5)
-        baseline = {
+def _wait_for_gpu_sm_idle(
+    device: int, *, retry_seconds: float = SM_CONFLICT_RETRY_SECONDS,
+) -> list[dict[str, object]]:
+    conflicts: list[dict[str, object]] = []
+    while True:
+        active = {
             pid for pid in _active_sm_pids(device)
             if not _is_recent_completed_benchmark(pid)
         }
-    if baseline:
-        raise RuntimeError(
-            "GPU has active SM work before benchmark: "
-            + ",".join(str(pid) for pid in sorted(baseline))
+        if active:
+            # Confirm once quickly because pmon can retain a final sample from
+            # a process that has just exited. Persistent work then uses a
+            # deliberately low-frequency retry loop.
+            time.sleep(0.5)
+            active = {
+                pid for pid in _active_sm_pids(device)
+                if not _is_recent_completed_benchmark(pid)
+            }
+        if not active:
+            return conflicts
+        event = {
+            "detected_utc": utc_now(),
+            "foreign_active_sm_pids": sorted(active),
+            "retry_seconds": retry_seconds,
+        }
+        conflicts.append(event)
+        print(
+            "[cuda-tactic] GPU " + str(device) +
+            " has external SM work from PID(s) " +
+            ",".join(str(pid) for pid in sorted(active)) +
+            f"; retrying in {retry_seconds:g}s",
+            file=sys.stderr, flush=True,
         )
+        time.sleep(retry_seconds)
+
+
+def _run_benchmark_once_with_occupancy(
+    command: Sequence[str], *, device: int, timeout: int,
+) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
     try:
         process = subprocess.Popen(
             list(command), text=True, stdout=subprocess.PIPE,
@@ -4557,6 +4709,35 @@ def _run_benchmark_with_occupancy(
     return subprocess.CompletedProcess(
         command, process.returncode, stdout or "", stderr or "",
     ), timed_out, evidence
+
+
+def _run_benchmark_with_occupancy(
+    command: Sequence[str], *, device: int, timeout: int,
+) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
+    conflicts: list[dict[str, object]] = []
+    while True:
+        conflicts.extend(_wait_for_gpu_sm_idle(device))
+        completed, timed_out, evidence = _run_benchmark_once_with_occupancy(
+            command, device=device, timeout=timeout,
+        )
+        foreign = evidence.get("foreign_active_sm_pids", [])
+        if not foreign:
+            evidence["sm_conflict_retries"] = conflicts
+            return completed, timed_out, evidence
+        event = {
+            "detected_utc": utc_now(),
+            "foreign_active_sm_pids": list(foreign),
+            "retry_seconds": SM_CONFLICT_RETRY_SECONDS,
+            "during_benchmark": True,
+        }
+        conflicts.append(event)
+        print(
+            "[cuda-tactic] external SM work interrupted the benchmark on GPU " +
+            str(device) + "; discarding the measurement and retrying in " +
+            f"{SM_CONFLICT_RETRY_SECONDS:g}s",
+            file=sys.stderr, flush=True,
+        )
+        time.sleep(SM_CONFLICT_RETRY_SECONDS)
 
 
 def scan_command(
@@ -6612,7 +6793,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     artifact.add_argument("--space", required=True)
     artifact.add_argument("--binary", required=True)
-    artifact.add_argument("--manifests", nargs="+", required=True)
+    artifact.add_argument("--manifests", nargs="*", default=[])
     artifact.add_argument("--output", required=True)
     artifact.set_defaults(function=command_artifact_bundle)
 
