@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-incremental-tactic-evidence",
+  "stage": "02c",
+  "tactic": "planar_fused_qk_rope",
+  "status": "retained",
+  "config_delta": {
+    "cudaUseFusedQKRoPE": true,
+    "cudaUseBatchSharedRoPE": false,
+    "cudaUseBatchSharedRoPEUnrolledSm120": false,
+    "cudaUseFusedQKRoPEHalf2Sm120": false
+  },
+  "incumbent": {
+    "name": "rmsnorm_c384_warp4_vec8",
+    "samples_nn_evals_per_sec": [
+      5978.789799,
+      5969.539899
+    ],
+    "median_nn_evals_per_sec": 5974.164849000001
+  },
+  "challenger": {
+    "samples_nn_evals_per_sec": [
+      6497.882942,
+      6492.744926
+    ],
+    "median_nn_evals_per_sec": 6495.313934,
+    "relative_spread": 0.0007910342829012027,
+    "gain_percent": 8.723379722058278
+  },
+  "measurement": {
+    "batch": 29,
+    "streams": 2,
+    "iterations_per_sample": 1000,
+    "warmup": 80,
+    "binary_sha256": "b514d85c5e4d8b33dc0ab2eb26a26030d199d6a5d53a1c48b6b66c21bb3f8738"
+  },
+  "activation_marker": "SM103 portable backend: fused Q/K learnable RoPE active",
+  "whole_graph_attribution": {
+    "official_kernel_instances": 8052,
+    "official_kernel_total_ns": 103731177,
+    "portable_kernel_instances": 4026,
+    "portable_kernel_total_ns": 44269752,
+    "grouped_speedup": 2.343161466095405,
+    "portable_kernel": "Sm120Backend::fusedQKRoPE19HalfKernel"
+  },
+  "accuracy_closure": "final accumulated portable set passed the 8192-row aggregate and TRT16-relative request gates",
+  "retained": true
+}

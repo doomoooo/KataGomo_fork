@@ -27,6 +27,7 @@
   },
   "portable_tactics": {
     "cudaRMSNormTacticSm120": "warp4-vec8",
+    "cudaUseFusedQKRoPE": true,
     "cudaUseFusedResidual": true,
     "cudaUseFusedResidualGemmSm120": true
   },
@@ -46,9 +47,9 @@
     "cudaUseFusedValueTerminalSm120": false
   },
   "latest_gate": {
-    "name": "rmsnorm_c384_warp4_vec8",
-    "median_nn_evals_per_sec": 5974.164849000001,
-    "gain_vs_previous_percent": 6.675804623924897,
-    "relative_spread": 0.00154831683319688
+    "name": "planar_fused_qk_rope",
+    "median_nn_evals_per_sec": 6495.313934,
+    "gain_vs_previous_percent": 8.723379722058278,
+    "relative_spread": 0.0007910342829012027
   }
 }
