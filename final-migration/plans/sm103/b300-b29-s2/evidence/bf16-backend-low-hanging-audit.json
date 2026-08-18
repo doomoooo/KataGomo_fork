@@ -1,0 +1,373 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-bf16-backend-low-hanging-audit",
+  "timestamp_utc": "2026-08-18T12:49:07Z",
+  "status": "cpu_static_only_no_drop_in_one_bounded_kill_test_recommended",
+  "scope": {
+    "target": "NVIDIA B300 SXM6 AC, CC10.3, sm_103a, B29/S2, M=10469",
+    "included": [
+      "Transformer Engine BF16 C/C++ GEMM implementation",
+      "DeepGEMM exact dense BF16 implementation",
+      "MSLK grouped BF16 implementation",
+      "native cuBLASLt BF16 reference path",
+      "K/N values 384, 768, 1152 and 2304",
+      "steady-state FP16-to-BF16 activation and one-time weight conversion accounting"
+    ],
+    "excluded": [
+      "FP8",
+      "INT8",
+      "FP4 and INT4",
+      "GPU execution",
+      "core or CMake changes",
+      "whole-network BF16 implementation"
+    ],
+    "evidence_class": "D_static_source_and_contract_audit_only"
+  },
+  "environment": {
+    "repository_head_at_audit": "6766a8b4ca8b7b9fc3340c9bc2e745f2059b11c7",
+    "cuda_toolkit": "13.3.1, nvcc 13.3.73",
+    "pytorch": "2.13.0+cu132, torch CUDA metadata 13.2",
+    "nvidia_cublas_distribution": "13.6.0.2",
+    "nvidia_cublas_header_version": "13.6.0",
+    "installed": {
+      "mslk": "1.3.0+cu132",
+      "transformer_engine": false,
+      "deep_gemm": false
+    },
+    "environment_policy": {
+      "path": "final-migration/environment/README.md",
+      "sha256": "cd3566cd6fe3e4e1c9656dca43cc6365c9cf17832286dee849fa32d731f2ffb0",
+      "statement": "Transformer Engine and DeepGEMM are intentionally excluded from the managed venv because they carry a separate Torch/CUDA native ABI or source-JIT build. MSLK is enabled only as a Python/source oracle because its wheel has no SM103 image."
+    },
+    "local_cublas_headers": [
+      {
+        "path": ".final-migration-env/venv/lib/python3.14/site-packages/nvidia/cu13/include/cublasLt.h",
+        "sha256": "36e8db9e46c95af62bfcd796aa6091d6922adb592a219f6a30957e3cd5ead495"
+      },
+      {
+        "path": ".final-migration-env/venv/lib/python3.14/site-packages/nvidia/cu13/include/cublas_api.h",
+        "sha256": "02cbbd2deb4b5ea373cba2a786ae6244e68a5e791955ec967b9ea3df9c17b7c4"
+      }
+    ]
+  },
+  "official_facts": {
+    "sm100_family_target": {
+      "source": "https://docs.nvidia.com/cuda/archive/13.0.0/cuda-c-programming-guide/index.html",
+      "fact": "sm_100f is a Blackwell family-specific target that runs on compute capability 10.0 and 10.3. It can use the common family feature set but is not an sm_103a-only build."
+    },
+    "cublas_bf16_contract": {
+      "source": "https://docs.nvidia.com/cuda/cublas/",
+      "fact": "The documented regular BF16 Tensor Core row uses CUBLAS_COMPUTE_32F, CUDA_R_32F scale, CUDA_R_16BF A/B and CUDA_R_16BF C. The table has no mixed FP16/BF16 A/B row. Grouped cublasLtMatmul is supported on CC10.x when all matrices use grouped batch mode."
+    },
+    "b300_peak": {
+      "source": "https://www.nvidia.com/en-au/data-center/hgx/",
+      "fact": "NVIDIA publishes one joint FP16/BF16 Tensor Core peak for HGX B300, rather than a higher BF16 speed grade. Both formats occupy 16 bits."
+    },
+    "b300_hbm_bandwidth": {
+      "source": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html",
+      "value": "up to 8 TB/s per B300 GPU",
+      "use_in_this_audit": "A best-case HBM traffic model only. L2 hits can make an individual cast faster than this HBM-only model, so it is planning evidence rather than a measured lower bound."
+    }
+  },
+  "shape_contract": {
+    "m": 10469,
+    "k_or_n_values": [384, 768, 1152, 2304],
+    "all_alignment_compatible": true,
+    "reason": "All four dimensions are multiples of 128 and satisfy the 16-byte Tensor Core alignment contract for 16-bit operands.",
+    "important_boundaries": [
+      "Q/K/V: three M10469 K384 N384 projections sharing one FP16 activation",
+      "FFN input projections: two M10469 K384 N1152 projections followed by SwiGLU",
+      "linear2: M10469 K1152 N384",
+      "attention out projection: M10469 K384 N384 with FP16 residual/RMS consumers"
+    ]
+  },
+  "conversion_accounting": {
+    "numeric_semantics": "BF16 conversion is not an exact representation-preserving relabel of FP16. Activations and weights round from FP16's 10 explicit fraction bits to BF16's 7 fraction bits; a BF16 GEMM plus FP16 output cast therefore needs the normal request-level accuracy gate.",
+    "steady_state_assumptions": [
+      "Convert every weight once during model initialization and retain a BF16 copy; do not time weight conversion per inference.",
+      "The retained graph produces and consumes FP16 activations, so an isolated BF16 GEMM requires a per-call FP16-to-BF16 input cast and BF16-to-FP16 output cast.",
+      "All casts use preallocated buffers; allocation and Python object construction are outside the timed boundary.",
+      "A wider BF16 island could eliminate casts only by changing producer and consumer kernels, including RMS/RoPE/FA4/SwiGLU/residual paths. That is a multi-kernel precision port, not a backend swap."
+    ],
+    "formulas": {
+      "one_m_by_d_tensor_bytes": "2*M*D",
+      "one_fp16_bf16_cast_traffic_bytes": "4*M*D (2-byte read plus 2-byte write)",
+      "one_gemm_roundtrip_runtime_cast_traffic_bytes": "4*M*(K+N)",
+      "one_time_weight_conversion_traffic_bytes": "4*K*N",
+      "extra_persistent_bf16_weight_bytes": "2*K*N"
+    },
+    "per_dimension": [
+      {
+        "dimension": 384,
+        "tensor_bytes": 8040192,
+        "one_cast_traffic_bytes": 16080384,
+        "ideal_hbm_only_microseconds_at_8_tbps": 2.010048
+      },
+      {
+        "dimension": 768,
+        "tensor_bytes": 16080384,
+        "one_cast_traffic_bytes": 32160768,
+        "ideal_hbm_only_microseconds_at_8_tbps": 4.020096
+      },
+      {
+        "dimension": 1152,
+        "tensor_bytes": 24120576,
+        "one_cast_traffic_bytes": 48241152,
+        "ideal_hbm_only_microseconds_at_8_tbps": 6.030144
+      },
+      {
+        "dimension": 2304,
+        "tensor_bytes": 48241152,
+        "one_cast_traffic_bytes": 96482304,
+        "ideal_hbm_only_microseconds_at_8_tbps": 12.060288
+      }
+    ],
+    "runtime_roundtrip_cast_matrix": {
+      "rows_k": [384, 768, 1152, 2304],
+      "columns_n": [384, 768, 1152, 2304],
+      "traffic_bytes": [
+        [32160768, 48241152, 64321536, 112562688],
+        [48241152, 64321536, 80401920, 128643072],
+        [64321536, 80401920, 96482304, 144723456],
+        [112562688, 128643072, 144723456, 192964608]
+      ],
+      "ideal_hbm_only_microseconds_at_8_tbps": [
+        [4.020096, 6.030144, 8.040192, 14.070336],
+        [6.030144, 8.040192, 10.05024, 16.080384],
+        [8.040192, 10.05024, 12.060288, 18.090432],
+        [14.070336, 16.080384, 18.090432, 24.120576]
+      ]
+    },
+    "exact_boundary_examples": [
+      {
+        "boundary": "three Q/K/V K384/N384 projections",
+        "conversion_plan": "one shared input cast plus three output casts",
+        "runtime_cast_traffic_bytes": 64321536,
+        "ideal_hbm_only_microseconds_at_8_tbps": 8.040192,
+        "current_projection_plus_rope_microseconds": 40.3954,
+        "ideal_cast_share_of_current_boundary_percent": 19.903732,
+        "evidence": {
+          "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-04b-qkv-rope-reopen-plan.json",
+          "sha256": "fde6bb4feff8bb30e21d8fbba0e83b121ec2f073b3da21f95027a246d5b0f78c"
+        }
+      },
+      {
+        "boundary": "one K384/N384 attention out projection returning to FP16",
+        "runtime_cast_traffic_bytes": 32160768,
+        "ideal_hbm_only_microseconds_at_8_tbps": 4.020096,
+        "current_complete_outproj_residual_rms_boundary_microseconds": 13.22867202758789,
+        "ideal_cast_share_of_current_complete_boundary_percent": 30.389263,
+        "evidence": {
+          "path": "final-migration/plans/sm103/b300-b29-s2/evidence/outproj-rmsnorm-fusion-profile.json",
+          "sha256": "0c5e212cc7c11efd5a8fd65d5fabf8d8228976c4978e5f981b505bdc08b47c96"
+        }
+      },
+      {
+        "boundary": "two K384/N1152 FFN projections before the retained FP16 SwiGLU",
+        "conversion_plan": "one shared K384 input cast plus two N1152 output casts",
+        "runtime_cast_traffic_bytes": 112562688,
+        "ideal_hbm_only_microseconds_at_8_tbps": 14.070336,
+        "current_fused_no_ab12_ffn_microseconds": 23.288363138834634,
+        "ideal_cast_share_of_current_fused_kernel_percent": 60.417883,
+        "additional_blocker": "Any external BF16 GEMM also gives up the retained one-launch GEMM+FP16-round+SwiGLU fusion.",
+        "evidence": {
+          "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-03-no-ab12-profile.json",
+          "sha256": "85be363a406081f170abe287d406ee0bd6c6b11dbfbfc70f1b4a8dcfda711ba0"
+        }
+      }
+    ],
+    "empirical_b300_anchor": {
+      "observation": "Removing 48,241,152 bytes of AB12 output stores plus their shared/register pipeline reduced the exact fused FFN S1 boundary from 28.600 us to 23.288 us, a 5.312 us gain. A single M10469x1152 cast also moves 48,241,152 bytes but additionally reads its source and requires a distinct launch, so a sub-10-percent cast tax is not a credible default assumption.",
+      "caveat": "The AB12 change also reduced shared memory and registers, so it is a directional empirical anchor rather than a cast microbenchmark."
+    },
+    "ten_percent_verdict": "No audited backend fuses FP16-to-BF16 input conversion or BF16-to-FP16 output conversion into its dense BF16 mainloop. On the retained FP16 graph, the static traffic model already exceeds 10 percent on the important boundaries before cast launch cost and dual-stream contention. A measured exception is possible only if most traffic is L2-resident and the custom BF16 GEMM wins by enough to repay the casts; the one bounded kill test below is designed to falsify that possibility."
+  },
+  "backend_audit": {
+    "transformer_engine": {
+      "source": {
+        "repository": "https://github.com/NVIDIA/TransformerEngine",
+        "audited_commit": "6f83d7472a70f4196b370e3a63badbd1f6532290",
+        "files": [
+          {
+            "path": "transformer_engine/common/gemm/cublaslt_gemm.cu",
+            "sha256": "67a21af24090c9c3416ab09b3728e9d113abfb777f0986b5ab23bf4758925ffa"
+          },
+          {
+            "path": "transformer_engine/common/gemm/cublaslt_grouped_gemm.cu",
+            "sha256": "6937aa77d2f2e75c739475a4955beef9257b5c5d2d51c62"
+          },
+          {
+            "path": "transformer_engine/common/gemm/cutlass_grouped_gemm.cuh",
+            "sha256": "5226cf4d3fd616f7cea50f3640864b4fa59e101f290b9b7fd3924a7eaa2564ff"
+          },
+          {
+            "path": "transformer_engine/common/CMakeLists.txt",
+            "sha256": "5e855c4721bc98eddd6df6d26e92900269f3468ba94bc2fa78b9cc8d247201c6"
+          }
+        ]
+      },
+      "ordinary_bf16_path": "Creates BF16 matrix descriptors with CUBLAS_COMPUTE_32F, obtains a cublasLt heuristic and calls cublasLtMatmul. This is a wrapper around native cuBLASLt, not a distinct SM103 schedule.",
+      "blackwell_grouped_path": "BF16 grouped GEMM requires cuBLAS 13.3+ and ends in one cublasLtMatmul pointer-array grouped call. Direct native cuBLASLt can express the same operation with less dependency surface.",
+      "custom_cutlass_path": "The only TE-owned FP16/BF16 CUTLASS grouped kernel is ArchTag Sm90, tile 128x128x128, cluster 1x2x1, and is compiled only for compute_90a/sm_90a. Runtime selection is explicitly Hopper-only.",
+      "conversion": "No BF16 GEMM path fuses an FP16-to-BF16 activation or weight cast. Any cast is a separate operation.",
+      "classification": "static_reject_redundant_cublas_wrapper_and_uninstalled_native_extension"
+    },
+    "deepgemm": {
+      "source": {
+        "repository": "https://github.com/deepseek-ai/DeepGEMM",
+        "audited_commit": "559d79fb6994a58b8a15b4b93bf13ccc16edf247",
+        "files": [
+          {
+            "path": "csrc/apis/gemm.hpp",
+            "sha256": "508d805a30e16993394c9d292d8e230f6289a8b615c674f782b83486f14bb937"
+          },
+          {
+            "path": "csrc/jit/device_runtime.hpp",
+            "sha256": "b567dbc0cc4882a4030bbb2935edbde454d3820d121388a00b1179dd23c3b9c7"
+          },
+          {
+            "path": "csrc/jit/compiler.hpp",
+            "sha256": "aec70f54bffc693a935ef9775ee9b40bc8857dcb8b464e6732f39a86e3292d62"
+          },
+          {
+            "path": "csrc/jit_kernels/impls/sm100_bf16_gemm.hpp",
+            "sha256": "e843ef0daa337f40f3eaf4841c0a38840203074e88d8e4b604d7f6cddafa8a51"
+          },
+          {
+            "path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_gemm.cuh",
+            "sha256": "d81a9491e791a702975f54a56162430a2a3ae298064724f18bbfa71a04a9e984"
+          },
+          {
+            "path": "csrc/jit_kernels/heuristics/sm100.hpp",
+            "sha256": "487cac2ff19027c781b08e9a0391836e77c03cdffcb7ceb3346d8633c8eb0884"
+          },
+          {
+            "path": "csrc/jit_kernels/impls/smxx_cublaslt.hpp",
+            "sha256": "2ebfe8d3bbd4db27b68e1bf5d5f52cae78bac8c0a499db7d40573d5ab7defa99"
+          }
+        ]
+      },
+      "real_custom_backend": true,
+      "architecture": "On CC10.3, get_arch() maps the JIT target to sm_100f with NVCC >=12.9. The generated kernel is a custom persistent TMA/TMEM/UMMA implementation that includes tcgen05 synchronization and issues SM100_MMA_F16BF16 instructions; it does not call cuBLASLt.",
+      "minor_specificity": "Family-specific sm_100f, not sm_103a. The heuristic has one SM100ArchSpec and no CC10.3-specific branch, but it uses the runtime SM count and the common 10.0/10.3 feature set.",
+      "dtype_abi": {
+        "a": "BF16 only",
+        "b": "BF16 only",
+        "accumulator": "FP32",
+        "d": "BF16 or FP32",
+        "operation": "D = A[M,K] @ B[N,K].T, optionally accumulating in-place D",
+        "layouts": "NT/NN/TN/TT aliases are exported; contiguous row-major A[M,K], B[N,K], D[M,N] is the exact KataGo-friendly NT case"
+      },
+      "shape_compatibility": "All requested K/N values satisfy the BF16 K64 mainloop and TMA alignment. Ragged M10469 is supported by the persistent scheduler and TMA bounds.",
+      "default_exact_k384_n384_source_derived_config": {
+        "assumptions": "num_sms=148, default block-multiple knobs, K-major A and B, BF16 D, no accumulation",
+        "swap_ab": true,
+        "tile_mnk": [224, 128, 64],
+        "cluster": [1, 1, 1],
+        "pipeline_stages": 4,
+        "logical_tiles": 141,
+        "physical_grid_ctas": 148,
+        "threads_per_cta": 256,
+        "dynamic_shared_memory_bytes": 189228,
+        "shared_memory_residency": "one CTA per B300 SM because 2*189228 exceeds 233472 bytes per SM",
+        "dual_stream_risk": "One outer lane can occupy all 148 SMs. The second lane cannot co-reside at CTA granularity, so raw S1 speed does not imply an S2 win."
+      },
+      "integration": "The stock ABI is PyTorch plus a C++ JIT module and per-call tensor/TMA descriptor setup. It is absent from the managed environment. A production standalone caller-owned C ABI would be a separate port even after an oracle win.",
+      "conversion": "The API asserts both A and B are BF16 and offers no FP16 conversion prologue. BF16 D is the lowest-traffic output, after which the retained FP16 graph still needs an output cast.",
+      "upstream_exact_shape_coverage": "The source test suite compares custom BF16 against its cuBLASLt helper, but its enumerated LLM shapes do not include M10469 or K/N384/768/1152/2304.",
+      "classification": "only_real_third_party_sm100f_candidate_but_oracle_only"
+    },
+    "mslk": {
+      "existing_audit": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/mslk-1.3-sm103-low-hanging-audit.json",
+        "sha256": "75c5640b0824f2e5019879951b5054c2f0976bb73e0a5bdb52aeb8fe3ceef64e",
+        "source_commit": "a4182284fbc4c5205d9427b923a0e999c48b03a7"
+      },
+      "wheel": "The installed native library has SM75/80/86/90/100/120 cubins and only SM120 PTX; it has no SM103 or SM103a image and is guarded by MSLK_PYTHON_ONLY=1.",
+      "grouped_kernel": "The source grouped kernel accepts FP16 or BF16 with FP32 accumulation and same-type output. For arch-major 10 and large M it chooses tile 256x256x128, cluster 2x1x1, pointer-array TMA warp-specialized scheduling.",
+      "bf16_specific_advantage": false,
+      "reason": "The identical custom grouped schedule already accepts FP16. Selecting its BF16 instantiation adds activation/weight/output conversions and a less precise boundary without unlocking a new scheduler, epilogue or instruction class.",
+      "fusion": "No beta/C residual, bias, affine, SiLU or SwiGLU epilogue. The stock Torch path also launches argument-setup kernels.",
+      "classification": "static_reject_bf16_strictly_dominated_by_the_same_fp16_schedule"
+    },
+    "native_cublaslt": {
+      "availability": "Installed cuBLAS 13.6.0.2 headers expose CUDA_R_16BF, CUBLAS_COMPUTE_32F, pointer-array grouped mode and algorithm heuristics on CC10.x.",
+      "architecture": "The vendor library is the native B300 reference and may select architecture-tuned internal cubins at runtime. Its exact resource schedule is opaque and must be measured rather than inferred from headers.",
+      "exact_abi": "Use CUDA_R_16BF A/B/C/D, CUBLAS_COMPUTE_32F, CUDA_R_32F alpha/beta, row/column descriptors matching the current FP16 layouts, a persistent handle, cached descriptors/algorithm and per-stream workspace.",
+      "conversion": "No documented mixed FP16/BF16 A/B combination performs the FP16-to-BF16 cast inside the matmul. Weight conversion can be amortized once, but activation and FP16-return conversion remain separate.",
+      "performance_prior": "NVIDIA publishes a joint FP16/BF16 B300 Tensor Core peak. BF16 has the same operand width as FP16, so BF16 has no static throughput or bandwidth advantage; only an incidental algorithm-selection difference could win.",
+      "grouped_qkv": "Native grouped cuBLASLt can express repeated-A Q/K/V pointer arrays on CC10.x. If that scheduling experiment is desired, FP16 is the lower-risk first test because it avoids all BF16 conversions and preserves the retained numeric boundary.",
+      "classification": "reference_control_and_fp16_first_not_a_bf16_backend_opportunity"
+    }
+  },
+  "third_party_verdict": {
+    "real_backend_beyond_cublas": "DeepGEMM only",
+    "real_sm103a_only_bf16_schedule": "none",
+    "real_sm100f_family_bf16_schedule": "DeepGEMM custom tcgen05/TMA/TMEM persistent dense GEMM",
+    "conversion_fused_by_any_backend": false,
+    "drop_in_candidate": "none",
+    "reason": "Transformer Engine delegates Blackwell BF16 to cuBLASLt; MSLK exposes the same schedule in FP16; DeepGEMM is custom but requires BF16-only tensors, a separate Torch/JIT ABI, high one-CTA-per-SM shared memory at the exact shape and external conversions."
+  },
+  "recommended_one_shot": {
+    "count": 1,
+    "candidate_id": "deepgemm-sm100f-bf16-m10469-k384-n384-conversion-inclusive-kill-test",
+    "purpose": "One isolated oracle to determine whether the only genuine third-party custom BF16 kernel has enough raw advantage to repay the mandatory casts. This is not authorization to integrate it into core.",
+    "why_this_shape": "K384/N384 is frequent, has the smallest absolute scratch requirement, has an exact source-derived one-wave custom configuration, and avoids the already-retained fused FFN path. Failure here closes the low-hanging BF16 route; do not sweep the other 15 K/N pairs.",
+    "stock_python_abi": {
+      "call": "deep_gemm.bf16_gemm_nt(a_bf16, w_bf16, d_bf16, c=None, compiled_dims=\"nk\")",
+      "a_bf16": "preallocated contiguous torch.bfloat16 [10469,384]",
+      "w_bf16": "persistent contiguous torch.bfloat16 [384,384], row-major [N,K]",
+      "d_bf16": "preallocated contiguous torch.bfloat16 [10469,384]",
+      "operation": "d_bf16 = a_bf16 @ w_bf16.T",
+      "target": "JIT sm_100f on CC10.3 after one untimed compile/warmup"
+    },
+    "conversion_inclusive_abi": {
+      "input_fp16": "const half* [10469,384]",
+      "weight_bf16": "const nv_bfloat16* [384,384], converted once",
+      "output_fp16": "half* [10469,384]",
+      "input_scratch_bf16": "nv_bfloat16* [10469,384] = 8,040,192 bytes",
+      "output_scratch_bf16": "nv_bfloat16* [10469,384] = 8,040,192 bytes",
+      "stream": "one caller stream; use two independent tensor/scratch sets for coordinated S2"
+    },
+    "conversion_exact": {
+      "one_time_weight_conversion_traffic_bytes": 589824,
+      "extra_persistent_weight_bytes": 294912,
+      "per_call_input_cast_traffic_bytes": 16080384,
+      "per_call_output_cast_traffic_bytes": 16080384,
+      "per_call_total_cast_traffic_bytes": 32160768,
+      "ideal_hbm_only_cast_microseconds_at_8_tbps": 4.020096,
+      "timed_sequence": [
+        "preallocated a_bf16.copy_(input_fp16)",
+        "deep_gemm.bf16_gemm_nt(a_bf16,w_bf16,d_bf16)",
+        "preallocated output_fp16.copy_(d_bf16)"
+      ]
+    },
+    "comparators": [
+      "raw DeepGEMM BF16 versus direct persistent-descriptor native cuBLASLt BF16 at the same BF16 tensors",
+      "conversion-inclusive DeepGEMM boundary versus the current exact FP16 projection boundary",
+      "coordinated two-independent-context S2 round timing; do not infer it from S1 because the default DeepGEMM kernel permits only one resident CTA per SM"
+    ],
+    "hard_gates": [
+      "Warm and authenticate the generated cubin as sm_100f; reject any sm_100a-only artifact on CC10.3.",
+      "Record the actual generated grid, cluster, shared memory and registers before timing; reject a config drift from the source-derived contract unless explained.",
+      "The two preallocated cast kernels together must add no more than 10 percent over raw DeepGEMM BF16 in both S1 and coordinated S2.",
+      "The conversion-inclusive S2 boundary must beat the current FP16 projection boundary. A raw-only BF16 win is insufficient.",
+      "Compare BF16-roundtrip output on model tensors against current FP16 output before any graph integration; a later full request gate is mandatory.",
+      "If all isolated gates pass, NCU one launch and one short full-graph NSYS are still required before considering a standalone C ABI port."
+    ],
+    "stop_conditions": [
+      "raw DeepGEMM BF16 does not beat native cuBLASLt BF16 by more than the measured cast tax",
+      "cast overhead exceeds 10 percent",
+      "S2 serialization from 189,228-byte shared memory removes the S1 advantage",
+      "conversion-inclusive boundary does not beat current FP16",
+      "model-tensor error is plainly outside the existing TensorRT-comparable request gate"
+    ],
+    "do_not_do": [
+      "Do not install DeepGEMM into the managed venv; use an isolated research environment.",
+      "Do not edit KataGo core/CMake for this kill test.",
+      "Do not scan K/N768/1152/2304 after a K384/N384 failure.",
+      "Do not report preconverted raw BF16 timing as an application win."
+    ]
+  },
+  "final_decision": "There is no low-hanging conversion-inclusive BF16 backend swap for the retained FP16 B29 graph. DeepGEMM is the sole audited third-party implementation with a genuine custom Blackwell-family BF16 tcgen05 schedule beyond cuBLAS, but it is sm_100f rather than sm_103a-specific, uninstalled, Torch/JIT-bound, BF16-only at its operands, one-CTA-per-SM at the exact K384/N384 default config, and unable to fuse the mandatory casts. Permit at most the single conversion-inclusive kill test above; otherwise continue the active native FP16 cuBLASLt and FP16 fused-kernel routes."
+}
