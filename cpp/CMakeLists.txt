@@ -82,6 +82,111 @@ if(USE_BACKEND STREQUAL "CUDA")
 
   enable_language(CUDA)
   set(CUDA_STANDARD 11)
+  set(SM103_CUDNN_OSS_B29_AOT_DIR "" CACHE PATH
+    "Exact Variant-A cuDNN OSS B29 AOT artifact directory (default: disabled stub)")
+  set(SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE "" CACHE FILEPATH
+    "Static CUDA dialect runtime archive authenticated by the Variant-A manifest")
+  set(SM103_CUDNN_OSS_B29_SOURCE
+    neuralnet/cudnn_oss_b29_aot_stub.cpp)
+  set(SM103_CUDNN_OSS_B29_OBJECT "")
+  set(SM103_CUDNN_OSS_B29_ARTIFACT_OBJECT "")
+  if(SM103_CUDNN_OSS_B29_AOT_DIR OR SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE)
+    if(NOT SM103_CUDNN_OSS_B29_AOT_DIR OR
+       NOT SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE)
+      message(FATAL_ERROR
+        "SM103 Variant-A AOT requires both SM103_CUDNN_OSS_B29_AOT_DIR and SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE")
+    endif()
+    set(SM103_CUDNN_OSS_B29_HEADER
+      "${SM103_CUDNN_OSS_B29_AOT_DIR}/katago_sm103_b29_cudnn_swiglu.h")
+    set(SM103_CUDNN_OSS_B29_ARTIFACT_OBJECT
+      "${SM103_CUDNN_OSS_B29_AOT_DIR}/katago_sm103_b29_cudnn_swiglu.o")
+    set(SM103_CUDNN_OSS_B29_MANIFEST
+      "${SM103_CUDNN_OSS_B29_AOT_DIR}/aot-manifest.json")
+    if(NOT EXISTS "${SM103_CUDNN_OSS_B29_HEADER}" OR
+       NOT EXISTS "${SM103_CUDNN_OSS_B29_ARTIFACT_OBJECT}")
+      message(FATAL_ERROR
+        "SM103_CUDNN_OSS_B29_AOT_DIR lacks the generated header/object")
+    endif()
+    if(NOT EXISTS "${SM103_CUDNN_OSS_B29_MANIFEST}")
+      message(FATAL_ERROR
+        "SM103 Variant-A sibling aot-manifest.json is required")
+    endif()
+    if(NOT EXISTS "${SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE}")
+      message(FATAL_ERROR
+        "SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE does not exist")
+    endif()
+
+    file(READ "${SM103_CUDNN_OSS_B29_MANIFEST}"
+      SM103_CUDNN_OSS_B29_MANIFEST_CONTENT)
+    foreach(SM103_CUDNN_OSS_B29_REQUIRED_IDENTITY IN ITEMS
+      "\"candidate_id\": \"cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29\""
+      "\"numeric_semantics_selector\": \"projection-fp16-roundtrip\""
+      "\"compile_target\": \"sm_103a\""
+      "\"--gpu-arch=sm_103a\"")
+      string(FIND "${SM103_CUDNN_OSS_B29_MANIFEST_CONTENT}"
+        "${SM103_CUDNN_OSS_B29_REQUIRED_IDENTITY}"
+        SM103_CUDNN_OSS_B29_IDENTITY_OFFSET)
+      if(SM103_CUDNN_OSS_B29_IDENTITY_OFFSET EQUAL -1)
+        message(FATAL_ERROR
+          "SM103 AOT manifest is not the exact Variant A candidate")
+      endif()
+    endforeach()
+
+    file(SHA256 "${SM103_CUDNN_OSS_B29_HEADER}"
+      SM103_CUDNN_OSS_B29_HEADER_SHA256)
+    file(SHA256 "${SM103_CUDNN_OSS_B29_ARTIFACT_OBJECT}"
+      SM103_CUDNN_OSS_B29_OBJECT_SHA256)
+    file(SHA256 "${SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE}"
+      SM103_CUDNN_OSS_B29_RUNTIME_SHA256)
+    string(REGEX MATCH
+      "\"header\"[ \\t\\r\\n]*:[ \\t\\r\\n]*\\{[^}]*\\}"
+      SM103_CUDNN_OSS_B29_HEADER_RECORD
+      "${SM103_CUDNN_OSS_B29_MANIFEST_CONTENT}")
+    string(REGEX MATCH
+      "\"object\"[ \\t\\r\\n]*:[ \\t\\r\\n]*\\{[^}]*\\}"
+      SM103_CUDNN_OSS_B29_OBJECT_RECORD
+      "${SM103_CUDNN_OSS_B29_MANIFEST_CONTENT}")
+    string(REGEX MATCH
+      "\"static_cuda_dialect_runtime\"[ \\t\\r\\n]*:[ \\t\\r\\n]*\\{[^}]*\\}"
+      SM103_CUDNN_OSS_B29_RUNTIME_RECORD
+      "${SM103_CUDNN_OSS_B29_MANIFEST_CONTENT}")
+    string(FIND "${SM103_CUDNN_OSS_B29_HEADER_RECORD}"
+      "\"sha256\": \"${SM103_CUDNN_OSS_B29_HEADER_SHA256}\""
+      SM103_CUDNN_OSS_B29_HEADER_HASH_OFFSET)
+    string(FIND "${SM103_CUDNN_OSS_B29_OBJECT_RECORD}"
+      "\"sha256\": \"${SM103_CUDNN_OSS_B29_OBJECT_SHA256}\""
+      SM103_CUDNN_OSS_B29_OBJECT_HASH_OFFSET)
+    string(FIND "${SM103_CUDNN_OSS_B29_RUNTIME_RECORD}"
+      "\"sha256\": \"${SM103_CUDNN_OSS_B29_RUNTIME_SHA256}\""
+      SM103_CUDNN_OSS_B29_RUNTIME_HASH_OFFSET)
+    if(SM103_CUDNN_OSS_B29_HEADER_HASH_OFFSET EQUAL -1 OR
+       SM103_CUDNN_OSS_B29_OBJECT_HASH_OFFSET EQUAL -1 OR
+       SM103_CUDNN_OSS_B29_RUNTIME_HASH_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "SM103 AOT manifest hash authentication failed for header/object/runtime archive")
+    endif()
+
+    # Never expose the authenticated artifact object to a toolchain link step.
+    # Some CUDA link paths may annotate an input object in place. Link only a
+    # build-private byte-for-byte copy made after the manifest/hash checks.
+    set(SM103_CUDNN_OSS_B29_PRIVATE_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/sm103-cudnn-oss-b29-private")
+    file(MAKE_DIRECTORY "${SM103_CUDNN_OSS_B29_PRIVATE_DIR}")
+    set(SM103_CUDNN_OSS_B29_OBJECT
+      "${SM103_CUDNN_OSS_B29_PRIVATE_DIR}/katago_sm103_b29_cudnn_swiglu.o")
+    configure_file(
+      "${SM103_CUDNN_OSS_B29_ARTIFACT_OBJECT}"
+      "${SM103_CUDNN_OSS_B29_OBJECT}"
+      COPYONLY)
+
+    set(SM103_CUDNN_OSS_B29_SOURCE
+      neuralnet/cudnn_oss_b29_aot_bridge.cpp)
+    set_source_files_properties(
+      neuralnet/cudnn_oss_b29_aot_bridge.cpp PROPERTIES
+      INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${SM103_CUDNN_OSS_B29_AOT_DIR}")
+    set(KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT TRUE)
+  endif()
   set(SM120_SEARCH_FFN_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_ffn_stub.cu"
     CACHE FILEPATH "Exact-batch FFN AOT candidate used by the whole-graph search slot")
@@ -146,6 +251,7 @@ if(USE_BACKEND STREQUAL "CUDA")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm103.cpp
+    ${SM103_CUDNN_OSS_B29_SOURCE}
     neuralnet/cudabackend_sm89.cpp
     neuralnet/cudabackend_sm89_forward.cpp
     neuralnet/cudabackend_sm89_kernels.cu
@@ -651,6 +757,10 @@ if(USE_BACKEND STREQUAL "CUDA")
   if(KATAGO_ENABLE_SM89_TACTIC_SEARCH)
     target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM89_TACTIC_SEARCH)
   endif()
+  if(KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT)
+    target_compile_definitions(katago PRIVATE
+      KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT)
+  endif()
   target_compile_definitions(katago PRIVATE CUDA_TARGET_VERSION=${CMAKE_CUDA_COMPILER_VERSION})
   find_package(CUDAToolkit REQUIRED)
   find_path(CUDNN_INCLUDE_DIR cudnn.h HINTS ${CUDNN_ROOT_DIR} ${CUDAToolkit_INCLUDE_DIRS} PATH_SUFFIXES include)
@@ -663,6 +773,12 @@ if(USE_BACKEND STREQUAL "CUDA")
   # cudnn_frontend's experimental OSS engine headers reference NVRTC symbols at link time
   # (we don't actually use those engines, but the references are pulled in by the header-only includes).
   target_link_libraries(katago CUDA::cublas CUDA::cublasLt ${CUDNN_LIBRARY} CUDA::nvrtc CUDA::cuda_driver)
+  if(KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT)
+    target_link_libraries(katago
+      "${SM103_CUDNN_OSS_B29_OBJECT}"
+      "${SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE}"
+      ${CMAKE_DL_LIBS})
+  endif()
   if(SM120_SEARCH_FA4_OBJECT)
     target_link_libraries(katago ${SM120_SEARCH_FA4_OBJECT})
   endif()

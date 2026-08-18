@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "katago-sm103-b29-portable-baseline",
-  "status": "portable_baseline_qualified",
+  "status": "sm103_native_baseline_qualified",
   "production_ready": false,
   "target": {
     "architecture": "sm103",
@@ -33,6 +33,9 @@
     "cudaUseFusedResidualGemmSm120": true,
     "cudaUseSwiGLU1152Sm120": true
   },
+  "sm103_native_tactics": {
+    "cudaSm103DualFFNTactic": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29"
+  },
   "explicit_negative_choices": {
     "cudaUseBatchSharedRoPE": false,
     "cudaUseBatchSharedRoPEUnrolledSm120": false,
@@ -49,21 +52,21 @@
     "cudaUseFusedValueTerminalSm120": false
   },
   "latest_gate": {
-    "name": "swiglu_c1152_half8",
-    "median_nn_evals_per_sec": 7150.0918305,
-    "gain_vs_previous_percent": 6.11649971357362,
-    "relative_spread": 0.00012426455786331995
+    "name": "cudnn_oss_tcgen05_fused_ffn_fast_roundtrip",
+    "median_nn_evals_per_sec": 8077.636942,
+    "gain_vs_previous_percent": 12.972492290845693,
+    "relative_spread": 0.002189702524018127
   },
   "final_accuracy": {
     "rows": 8192,
     "request_gate_control": "TensorRT 10.16.1.11 vs CUDA FP32",
     "request_gate_passed": true,
     "aggregate_gate_passed": true,
-    "comparison_sha256": "5745c12600a64995b5ac47bbe12ffebd74b2b7eb46f288c4c1086d22ad4a0f0c"
+    "comparison_sha256": "63c073f0a0db9fd53f92bd4ed552e85327c7e59ffd120d1ebface0c46a782f96"
   },
   "comparison_to_tensorrt": {
     "tensorrt_median_nn_evals_per_sec": 6733.719141,
-    "portable_median_nn_evals_per_sec": 7150.0918305,
-    "gain_percent": 6.183398516947447
+    "portable_median_nn_evals_per_sec": 8077.636942,
+    "gain_percent": 19.958031703716415
   }
 }

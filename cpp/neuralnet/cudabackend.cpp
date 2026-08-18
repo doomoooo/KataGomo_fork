@@ -375,6 +375,8 @@ struct CudaHandles {
   void* sm120PersistingL2Context;
   Sm120Backend::Sm120PersistingL2Fn sm120PersistingL2Inner;
   void* sm120PersistingL2InnerContext;
+  Sm103Backend::Sm103FusedFFNFn sm103FusedFFN;
+  void* sm103FusedFFNContext;
 
   CudaHandles(int major, int minor, cudaStream_t stream_, bool ownsStreamForTesting_ = false)
     : stream(stream_),
@@ -429,7 +431,9 @@ struct CudaHandles {
       sm120PersistingL2(NULL),
       sm120PersistingL2Context(NULL),
       sm120PersistingL2Inner(NULL),
-      sm120PersistingL2InnerContext(NULL)
+      sm120PersistingL2InnerContext(NULL),
+      sm103FusedFFN(NULL),
+      sm103FusedFFNContext(NULL)
   {
     if(stream == NULL)
       throw StringError("CudaHandles: external CUDA stream must not be null");
@@ -2589,8 +2593,26 @@ struct TransformerFFNBlock {
 
     // Step 2: linear1 projection
     SizedBuf<void*> ffnBuf(scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
+    bool usedSm103FusedFFN = false;
+    if(cudaHandles->sm103FusedFFN != NULL && matBatchSize == 10469) {
+      SizedBuf<void*> wideFFNBuf(
+        scratch->allocator, (size_t)ffnChannels * 2 * matBatchSize * bytesPerElt);
+      usedSm103FusedFFN = cudaHandles->sm103FusedFFN(
+        cudaHandles->sm103FusedFFNContext,
+        linear1.matBuf,
+        linearGate->matBuf,
+        trunkScratchBuf,
+        wideFFNBuf.buf,
+        ffnBuf.buf,
+        matBatchSize,
+        numChannels,
+        ffnChannels,
+        usingFP16,
+        cudaHandles->stream
+      );
+    }
     bool usedWideFFNSingleGemm = false;
-    if(cudaHandles->sm120FFNSingleGemm != NULL) {
+    if(!usedSm103FusedFFN && cudaHandles->sm120FFNSingleGemm != NULL) {
       SizedBuf<void*> wideFFNBuf(
         scratch->allocator, (size_t)ffnChannels * 2 * matBatchSize * bytesPerElt);
       usedWideFFNSingleGemm = cudaHandles->sm120FFNSingleGemm(
@@ -2607,11 +2629,11 @@ struct TransformerFFNBlock {
         ffnChannels,
         usingFP16);
     }
-    if(!usedWideFFNSingleGemm)
+    if(!usedSm103FusedFFN && !usedWideFFNSingleGemm)
       linear1.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, ffnBuf.buf, workspaceBuf, workspaceBytes);
 
     // Step 3: SwiGLU
-    if(!usedWideFFNSingleGemm) {
+    if(!usedSm103FusedFFN && !usedWideFFNSingleGemm) {
       SizedBuf<void*> gateBuf(scratch->allocator, (size_t)ffnChannels * matBatchSize * bytesPerElt);
       linearGate->apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, gateBuf.buf, workspaceBuf, workspaceBytes);
 
@@ -4353,11 +4375,15 @@ struct ComputeHandle {
     if(isSm103 &&
        context->sm103Options.enabled) {
       sm103Model = std::make_unique<Sm103Backend::Sm103Model>(
-        model.get(), &applyOfficialModel,
+        model.get(), &applyOfficialModel, cudaHandles.get(), maxBatchSize,
         nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
         majorComputeCapability, minorComputeCapability,
         context->sm103Options
       );
+      if(context->sm103Options.dualFfnTactic != "disabled") {
+        cudaHandles->sm103FusedFFN = &Sm103Backend::applyFusedFFN;
+        cudaHandles->sm103FusedFFNContext = sm103Model.get();
+      }
     }
     if(sm120HookOwnerActive) {
       sm120Model = std::make_unique<Sm120Backend::Sm120Model>(

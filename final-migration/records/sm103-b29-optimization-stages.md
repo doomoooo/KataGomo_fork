@@ -332,3 +332,36 @@ baseline. Architecture-bound SM89/SM120 artifacts are not reuse candidates;
 their graph boundaries are hypotheses to reimplement with the expanded SM103
 toolchain (cuDNN Frontend, CUTLASS/CuTe DSL, Triton, TileLang, FlashInfer,
 Liger, MSLK, or hand-written CUDA).
+
+## Stage 03a — SM103 tcgen05 fused FFN
+
+Status: retained; fast FP16-roundtrip variant.
+
+The accumulated portable graph exposed the two FFN projections plus SwiGLU as
+`219.652845 ms` of `753.574298 ms` summed kernel time (`29.15%`). Targeted NCU
+on one current projection found a 420-block 2-CTA launch with 2.84 waves,
+`231.42 KiB` dynamic shared memory, `12.5%` theoretical occupancy, `81.96%`
+no-eligible scheduler cycles, and a 124-block partial-wave tail. This supported
+a one-wave persistent fusion rather than another tile sweep.
+
+The retained cuDNN-Frontend 1.27/CuTe DSL 4.7 derivative performs both tcgen05
+projections, forces each projection through the official FP16 rounding point,
+and applies fast SwiGLU in one 148-block launch. Full-graph NSYS verifies that
+8052 projection/SwiGLU launches disappear; the fused boundary is `1.987x`
+faster and graph throughput rises `13.506%` over the portable baseline.
+
+Five 1000-iteration B29/S2 samples are
+`8071.385110, 8072.391535, 8089.072732, 8077.636942, 8084.336061` nnEval/s;
+median is `8077.636942`, spread `0.219%`. This is `19.958%` above the fixed TRT
+10.16 baseline.
+
+Bad-case study: fast math's worst row is row4124/move358, a real full-B29 row,
+not tail padding. Inputs/targets are byte-identical; the move is legal; raw
+policy-logit correlation remains `0.9999865`; there is no permutation, fixed
+index, or spatial-layout signature. Strict exp/div fixes this row but reduces
+full throughput to `5554` nnEval/s. One Newton reciprocal refinement preserves
+throughput but merely moves the worst case to row7111/move111. The error is an
+accumulated numerical compromise, not an implementation error. Per user
+direction, the implementation-error request guard is calibrated to `2.25x`
+TRT; fast's maximum request ratio is `2.148x`, while the broken no-roundtrip
+implementation remains at `10-20x` and fails closed.

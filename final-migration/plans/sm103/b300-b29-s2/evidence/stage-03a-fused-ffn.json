@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-native-tactic-evidence",
+  "stage": "03a",
+  "tactic": "cudnn_oss_tcgen05_fused_ffn_fast_roundtrip",
+  "status": "retained",
+  "candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29",
+  "config_delta": {
+    "cudaSm103DualFFNTactic": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29"
+  },
+  "artifact": {
+    "target": "sm_103a",
+    "manifest_sha256": "5f6076cbca27dad8bdb99295ab04a1794a8b02dade623fa881fa7ba33679df38",
+    "object_sha256": "ab7d35d5fec9405f83cf5ee63f8b3b0750e74b4d70637bb177b005bc5685352a",
+    "shared_library_sha256": "f19f97a4612586b2220af5ea1b91100c0e1e8ac54b608595cc045efec01adc27",
+    "binary_sha256": "de93cffb22df9b28a88ab0c66f0188d54e54f5e3fdccf4add9f26398ed4b0ff8"
+  },
+  "long_s2": {
+    "batch": 29,
+    "streams": 2,
+    "iterations_per_sample": 1000,
+    "warmup": 200,
+    "samples_nn_evals_per_sec": [
+      8071.38511,
+      8072.391535,
+      8089.072732,
+      8077.636942,
+      8084.336061
+    ],
+    "median_nn_evals_per_sec": 8077.636942,
+    "relative_spread": 0.002189702524018127,
+    "gain_vs_portable_percent": 12.972492290845693,
+    "gain_vs_tensorrt_percent": 19.958031703716415
+  },
+  "whole_graph_nsys": {
+    "portable_nn_evals_per_sec": 6930.278801,
+    "candidate_nn_evals_per_sec": 7866.259705,
+    "throughput_gain_percent": 13.505674603811645,
+    "portable_kernel_time_sum_ns": 753574298,
+    "candidate_kernel_time_sum_ns": 668464118,
+    "kernel_time_reduction_percent": 11.294198889994522,
+    "portable_kernel_instances": 57592,
+    "candidate_kernel_instances": 49540,
+    "kernel_instance_reduction_percent": 13.981108487289905,
+    "old_projection_plus_swiglu_ns": 219652845,
+    "fused_ffn_ns": 110523899,
+    "boundary_speedup": 1.9873787206873692,
+    "report_sha256": "c610b8f9f6338a49e68e040b69131a1ead7f61585431d3e5e263109d4dc50a7a",
+    "kernel_csv_sha256": "f33ea126412ddc98fe14a5b990ef20f94daedde27f535476e71798441f29025c"
+  },
+  "ncu": {
+    "grid_blocks": 148,
+    "block_threads": 192,
+    "waves_per_sm": 1,
+    "registers_per_thread": 74,
+    "dynamic_shared_memory_bytes": 214016,
+    "theoretical_occupancy_percent": 9.38,
+    "achieved_occupancy_percent": 8.88,
+    "memory_throughput_percent": 60.96,
+    "compute_throughput_percent": 38.73,
+    "no_eligible_cycles_percent": 76.04,
+    "local_spilling_requests": 0,
+    "report_sha256": "c1e8244f4b96d469d25ab092c6040ee765b633273648d9f1a80cf543857cc1ab",
+    "note": "NCU kernel replay collected a valid report but its replayed application later returned cuda status 400; NSYS and ordinary executions are clean"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "replay_sha256": "0f3f10196e6235f971d0aef5bc56b0e5b53a08f0f1e135aa3c90345a364d1d7e",
+    "comparison_sha256": "63c073f0a0db9fd53f92bd4ed552e85327c7e59ffd120d1ebface0c46a782f96",
+    "policy_top1_vs_fp32": 0.9981689453125,
+    "policy_probability_rmse": 0.00010128603753400967,
+    "request_ratio_minimum_to_trt16": 0.9493184067842445,
+    "request_ratio_maximum_to_trt16": 2.1481459166588,
+    "implementation_error_gate_multiplier": 2.25,
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true
+  },
+  "bad_case_diagnosis": {
+    "classification": "accumulated numerical compromise, not implementation error",
+    "fast_outlier": "row4124 move358",
+    "tail_padding": false,
+    "input_and_targets_byte_exact": true,
+    "raw_policy_logit_correlation": 0.9999865,
+    "layout_or_index_error_evidence": false,
+    "notes": "Precise math fixes the outlier but is 31 percent slower than the portable graph; Newton moves the outlier to row7111 without improving worst-case behavior"
+  },
+  "retained": true
+}
