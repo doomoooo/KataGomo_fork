@@ -427,6 +427,72 @@ remained limited to two CTAs, and produced `120.27/233.12 us`.  Both failed
 before full-graph execution.  Evidence is recorded in
 `stage-04-qkv-rope-profile.json`; no QKV runtime tactic is retained.
 
+### Stage 04b — static-persistent G148 QKV+RoPE retry
+
+Status: rejected after isolated correctness/NCU, same-binary A-B-B-A, and
+whole-graph NSYS. No long or replay gate was run.
+
+The Stage04 arithmetic was reopened because it had reduced summed QKV work.
+CUTLASS 4.7's pinned `PersistentDenseGemmKernel` mapped the same 738 logical
+M128xN128 tiles onto exactly 148 physical CTAs: 146 CTAs execute five tiles
+and two execute four. The compiled schedule was AB3/ACC2/C2, block192,
+`114.82 KiB` dynamic shared memory and 62 registers/thread. NCU proved two
+resident CTAs/SM, 18.75% theoretical occupancy, zero spills, and exactly one
+executed CTA/SM in S1. This was the intended one-CTA-per-lane resource shape.
+
+Correctness matched Stage04: Q/K differed from the FP16 projection-round plus
+FP32-RoPE oracle by at most one FP16 ULP (268/266 elements), and V was
+bitwise. Isolated S1/S2 were `24.649/41.119 us`; relative to the old
+nonpersistent one-launch candidate S1 regressed 8.32%, while coordinated S2
+regressed only 1.36%. The isolated same-kernel pairing therefore behaved as
+predicted.
+
+The full graph did not. Same-binary B29/S2 A-B-B-A was
+`8938.254 / 8512.087 / 8534.050 / 8947.018`, a `-4.692%` center regression.
+NSYS still showed real local work reduction: QKV boundary sum fell
+`189.732 -> 177.060 ms` (-6.68%) and its union fell 13.34%. But overlap-covered
+QKV time halved `104.978 -> 50.685 ms`; exposed QKV time rose
+`69.509 -> 100.533 ms` (+44.63%). Whole-graph kernel sum rose 0.56%, union rose
+2.82%, and overlap fell 3.86%. FFN covered time fell 62.73%, its exclusive
+time rose 41.86%, and one-SM GEMM exclusive time rose 222.33%.
+
+This establishes the missing distinction: two repeated G148 grids can occupy
+the two slots, but the real peer is often FA4 (`232 KiB`), no-AB12 FFN
+(`181 KiB`), or another resource-heavy GEMM, none of which can co-reside with
+the `114.82 KiB` QKV CTA. A persistent CTA on every SM lengthens that
+heterogeneous blocking interval. No G148 parameter sweep followed. Complete
+evidence is in `stage-04b-qkv-rope-persistent-g148-result.json`.
+
+### Stage 04c — ordered split Q+RoPE / K+RoPE / V
+
+Status: rejected after correctness, same-binary A-B-B-A, and whole-graph
+NSYS. The QKV route is closed; packed layout was not attempted.
+
+The one remaining scheduling hypothesis kept the pair-major table, arithmetic,
+M128xN128 tile, AB3/C2 resource budget, planar outputs, and sequential DAG,
+but emitted three `(82,3,1)=246`-CTA kernels. It still removed the separate
+RoPE launch and did not introduce aux streams. Q/K retained the one-ULP
+envelope and V remained bitwise. Isolated S1 was `31.378 us`, 1.277x faster
+than the production four-launch S1 boundary; coordinated repeated S2 was
+`56.688 us`.
+
+Same-binary B29/S2 A-B-B-A was
+`8947.306 / 7981.823 / 8239.891 / 8941.532`; centers were
+`8944.419 / 8110.857`, or `-9.319%`. NSYS explains why shorter grids did not
+transfer. Global overlap did increase `245.334 -> 297.987 ms` (+21.46%), and
+QKV union fell 6.60%, so the scheduler did exploit the added boundaries.
+However, Q/K/V summed service time grew `192.195 -> 259.449 ms` (+34.99%):
+the boundary expanded from `40.445` to `54.598 us` under real contention,
+despite its `31.378 us` isolated result. FA4 slowed 6.63%, one-SM GEMMs slowed
+22.59%, and QKV-to-FFN overlap collapsed `17.045 -> 0.046 ms`. Whole-graph
+kernel sum rose 12.14%, union rose 7.40%, and trace span rose 5.98%.
+
+Thus the split recovered 52.65ms of overlap but created 88.39ms of extra
+kernel service time. Both the long persistent and short-grid forms have now
+failed for measured heterogeneous resource contention, not lookup layout,
+numerical error, or lack of scheduler visibility. Complete evidence is in
+`stage-04c-qkv-rope-split3-result.json`.
+
 ## Stage 05 — fused FFN two-resident-CTA boundary
 
 Status: dropped after NCU proof and full-graph A/B/B/A.

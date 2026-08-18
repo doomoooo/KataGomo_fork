@@ -1,0 +1,224 @@
+{
+  "schema": 1,
+  "stage": "04b-sm103-persistent-planar-qkv-rope-g148",
+  "timestamp_utc": "2026-08-18T12:58:00Z",
+  "status": "whole_graph_rejected_root_cause_proven",
+  "candidate_id": "cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-static-persistent-g148",
+  "hypothesis": "Map the 738 logical QKV+RoPE tiles onto exactly 148 persistent CTAs. With the proven two-resident resource class, each outer lane can contribute one CTA per SM instead of one lane filling both slots.",
+  "artifact": {
+    "directory": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-persistent-g148",
+    "manifest_sha256": "8d5c8dcc138523e7c20cb275489ea15bddb933e5903e1e3cd5a29a4e94510c88",
+    "object_sha256": "786231849c64541aa418b7f63770d689c11b709e37b181f5212a9f8037ce6682",
+    "library_sha256": "a6538f38d29ee4f1900758bc1610deae3ff10afe336aff7d8dd9c101aa5d7fc1",
+    "compiled_schedule": {
+      "grid_ctas": 148,
+      "threads_per_cta": 192,
+      "ab_stages": 3,
+      "accumulator_stages": 2,
+      "epilogue_stages": 2,
+      "target_resident_ctas_per_sm": 2
+    },
+    "work_distribution": {
+      "logical_tiles": 738,
+      "five_tiles_per_cta": 146,
+      "four_tiles_per_cta": 2
+    }
+  },
+  "isolated": {
+    "validation_sha256": "4bc480f9accc9eba09aaba7acb4c21e2d9938abcbe51841c0a3699c4cc953b4b",
+    "correctness": {
+      "q_max_abs": 0.0000152587890625,
+      "q_different_elements": 268,
+      "k_max_abs": 0.0000152587890625,
+      "k_different_elements": 266,
+      "v_bitwise_equal": true,
+      "output_elements": 12060288
+    },
+    "s1_median_microseconds": 24.649248123168945,
+    "s1_samples_microseconds": [
+      24.661663055419922,
+      24.645280838012695,
+      24.649248123168945,
+      24.647327423095703,
+      24.652448654174805
+    ],
+    "s2_round_median_microseconds": 41.11894226074219,
+    "s2_round_samples_microseconds": [
+      41.141727447509766,
+      41.126686096191406,
+      41.10940933227539,
+      41.11894226074219,
+      41.09347152709961
+    ],
+    "delta_vs_nonpersistent_occ6": {
+      "s1_percent": 8.3197796236839,
+      "s2_round_percent": 1.3563173970754
+    },
+    "interpretation": "The deliberate single-lane S1 cost is mostly recovered when the same persistent kernel repeats on two aligned streams. This isolated test does not cover heterogeneous full-graph phase compatibility."
+  },
+  "ncu": {
+    "report": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-persistent-g148/persistent-g148-full.ncu-rep",
+    "report_sha256": "5db8621ad4e14864892bec27efdd69e4ad971886090d93ecbfee3e2600f7ec0c",
+    "grid": 148,
+    "block_threads": 192,
+    "registers_per_thread": 62,
+    "dynamic_shared_memory_bytes": 117576,
+    "driver_shared_memory_bytes": 1024,
+    "block_limit_shared_memory": 2,
+    "block_limit_registers": 5,
+    "theoretical_active_warps_per_sm": 12,
+    "theoretical_occupancy_percent": 18.75,
+    "single_stream_achieved_active_warps_per_sm": 5.86,
+    "single_stream_achieved_occupancy_percent": 9.16,
+    "waves_per_sm_relative_to_two_cta_capacity": 0.5,
+    "local_spilling_requests": 0,
+    "no_eligible_percent": 89.66,
+    "l1tex_scoreboard_stall_percent": 78.85,
+    "l2_hit_rate_percent": 79.03,
+    "global_load_sector_utilization_bytes_per_32": 29.0,
+    "shared_store_bank_conflict_fraction_percent": 54.55,
+    "instrumented_duration_microseconds": 51.9,
+    "conclusion": "The resource hypothesis compiled exactly: a single stream runs one CTA/SM while a second compatible QKV stream could occupy the other slot."
+  },
+  "integration": {
+    "binary": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4-qkv-persistent-g148/katago",
+    "binary_sha256": "6ef71d3cfbf72e7255b4767b9a1c4970494cbf2901d513fee2047cf30b387440",
+    "control_and_candidate_same_binary": true,
+    "fixed_parent": [
+      "no-AB12 fused FFN",
+      "native SM103a FA4 FP32",
+      "portable residual/RMSNorm/RoPE/pointwise tactics",
+      "cudaUseProjectionGemmLt=false"
+    ],
+    "activation_marker_both_lanes": "SM103 backend: persistent planar QKV+RoPE active, tactic=cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-static-persistent-g148"
+  },
+  "short_abba": {
+    "method": "same binary; exact B29/S2; 50 warmups and 300 timed forwards per lane; A=QKV tactic disabled, B=G148",
+    "order": ["A", "B", "B", "A"],
+    "nn_evals_per_sec": [
+      8938.254078,
+      8512.086996,
+      8534.050315,
+      8947.018428
+    ],
+    "control_center": 8942.636253,
+    "candidate_center": 8523.0686555,
+    "delta_percent": -4.691782647954693,
+    "independent_coordinator_replication": "approximately 8520-8541 versus 8931; same conclusion"
+  },
+  "whole_graph_nsys": {
+    "method": "same binary; exact B29/S2; cudaWarmupOnlyMaxBatchSize=true; 20 warmups and 50 timed forwards per lane; trace contains 72 forward instances per lane",
+    "control": {
+      "profiled_nn_evals_per_sec": 8650.639371,
+      "report": ".final-migration-env/profiles/sm103-b29/stage-04b-qkv-persistent-g148/full-graph-control.nsys-rep",
+      "report_sha256": "4107f40f163be303a793bd6cd28f6bd99a5d14ec3da2300edee12e799eb03999",
+      "sqlite_sha256": "cc5803572144b4a965b2081cecfa500eeb376e68099d801588d25c83da543aa4",
+      "kernel_events": 58476,
+      "kernel_sum_ms": 730.291868,
+      "kernel_union_ms": 483.641653,
+      "overlap_savings_ms": 246.650215,
+      "overlap_ge2_ms": 243.292677,
+      "trace_span_ms": 596.062609,
+      "weighted_concurrency": 1.5099854685179483
+    },
+    "candidate": {
+      "profiled_nn_evals_per_sec": 8394.216363,
+      "report": ".final-migration-env/profiles/sm103-b29/stage-04b-qkv-persistent-g148/full-graph-candidate.nsys-rep",
+      "report_sha256": "42165c9316bbfa241c114418bf17027754e1a48c5d831bc1ab9b23f3e1abeb2a",
+      "sqlite_sha256": "a7ed0d7c1489929302b187237fa3207ae85c261c27844573b741bce06022591b",
+      "kernel_events": 44286,
+      "kernel_sum_ms": 734.408338,
+      "kernel_union_ms": 497.274634,
+      "overlap_savings_ms": 237.133704,
+      "overlap_ge2_ms": 236.70138,
+      "trace_span_ms": 611.289849,
+      "weighted_concurrency": 1.4768666804749988
+    },
+    "delta_percent": {
+      "kernel_sum": 0.5636746320718977,
+      "kernel_union": 2.8188186264428206,
+      "overlap_savings": -3.858302333123853,
+      "overlap_ge2": -2.7092048479535613,
+      "trace_span": 2.5546376790093195,
+      "weighted_concurrency": -2.1933183287820457
+    }
+  },
+  "critical_union_attribution_ms": {
+    "qkv_boundary": {
+      "control": {
+        "events": 19008,
+        "per_block_sum_average_us": 39.92766856060606,
+        "sum": 189.732281,
+        "union": 174.487106,
+        "covered": 104.977771,
+        "exclusive": 69.509335
+      },
+      "candidate": {
+        "events": 4752,
+        "per_block_sum_average_us": 37.26016687710438,
+        "sum": 177.060313,
+        "union": 151.217988,
+        "covered": 50.684705,
+        "exclusive": 100.533283
+      },
+      "delta_percent": {
+        "sum": -6.6788676830380815,
+        "union": -13.335723500394348,
+        "covered": -51.71863098522067,
+        "exclusive": 44.63277917994755
+      }
+    },
+    "fa4": {
+      "average_us_control": 23.13574558080808,
+      "average_us_candidate": 25.239113005050506,
+      "average_delta_percent": 9.091418372041748,
+      "covered_ms_control": 33.107579,
+      "covered_ms_candidate": 29.392277,
+      "exclusive_ms_control": 76.833484,
+      "exclusive_ms_candidate": 79.042922
+    },
+    "fused_ffn": {
+      "average_us_control": 23.17130218855219,
+      "average_us_candidate": 22.217064604377104,
+      "average_delta_percent": -4.118187128242301,
+      "covered_ms_control": 53.738085,
+      "covered_ms_candidate": 20.029049,
+      "exclusive_ms_control": 54.559444,
+      "exclusive_ms_candidate": 77.399714,
+      "exclusive_delta_percent": 41.86309156669559
+    },
+    "one_sm_gemm": {
+      "average_us_control": 17.769887152777778,
+      "average_us_candidate": 21.23342234848485,
+      "average_delta_percent": 19.491036526732543,
+      "covered_ms_control": 92.064843,
+      "covered_ms_candidate": 59.319237,
+      "exclusive_ms_control": 12.831192,
+      "exclusive_ms_candidate": 41.358218,
+      "exclusive_delta_percent": 222.32561090193337
+    }
+  },
+  "selected_pair_overlap_ms": {
+    "qkv_with_fa4": {"control": 13.339, "candidate": 18.504166},
+    "qkv_with_ffn": {"control": 14.163996, "candidate": 0.02336},
+    "qkv_with_one_sm_gemm": {"control": 30.885496, "candidate": 21.068006},
+    "qkv_with_other_two_sm_gemm": {"control": 15.379552, "candidate": 0.010528},
+    "fa4_with_ffn": {"control": 6.722433, "candidate": 0.014625}
+  },
+  "root_cause": {
+    "finding": "G148 solves same-kernel residency but not heterogeneous full-graph compatibility.",
+    "explanation": "The isolated S2 loop keeps both lanes on the same QKV kernel, so their 114.82KiB CTAs can occupy the two proven slots. In the real graph the lanes frequently reach QKV against FA4 (about 232KiB), no-AB12 FFN (about 181KiB), or other resource-heavy GEMMs. A 148-CTA persistent grid spreads one long-lived CTA over every SM; those heterogeneous peers cannot co-reside with it. The scheduler can overlap only partial-grid tails as SMs become free. Valuable QKV-to-FFN and QKV-to-other-2SM overlap therefore collapses even though the QKV boundary itself does 6.68% less summed work.",
+    "why_not_more_g148_tuning": "Grid/stage changes would retest already-closed resource points or abandon the one-CTA/lane hypothesis. The failure is heterogeneous kernel lifetime, not G148 load imbalance, lookup layout, spills, or numerical correctness."
+  },
+  "decision": {
+    "isolated_correctness_gate": "pass",
+    "isolated_s2_gate": "pass_for_full_graph_trial",
+    "ncu_resource_gate": "pass",
+    "whole_graph_throughput_gate": "fail",
+    "whole_graph_union_gate": "fail",
+    "long_gate": "not_run",
+    "replay_gate": "not_run",
+    "retained": false,
+    "next_ranked_route": "split Q+RoPE, K+RoPE, V into three shorter exact kernels; preserve planar output and no separate RoPE launch"
+  }
+}

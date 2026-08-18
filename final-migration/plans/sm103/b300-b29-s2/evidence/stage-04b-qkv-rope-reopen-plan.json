@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "stage": "04b-sm103-qkv-rope-reopen",
+  "timestamp_utc": "2026-08-18T12:32:27Z",
+  "status": "executed_g148_and_split3_both_rejected",
+  "scope": {
+    "goal": "Recover the proven QKV+RoPE work reduction without recreating Stage04's long exclusive two-CTA wave.",
+    "current_accumulated_parent": {
+      "stage": "06-fa4-native-sm103a-d32",
+      "median_nn_evals_per_sec": 8949.114828,
+      "attention_candidate": "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32"
+    },
+    "forbidden_repeats": [
+      "AB2/C1 low-SMEM TMA-store retry",
+      "AB2 direct register-to-global store retry",
+      "blind tile or stage sweep"
+    ],
+    "precision": "QKV projection remains FP16 input/output with FP32 tcgen05 accumulation; RoPE remains FP32-table arithmetic after the FP16 projection round. FA4 QK/PV accumulation is an independent tactic."
+  },
+  "stage04_root_cause": {
+    "logical_tiles": 738,
+    "launch": {
+      "grid": [82, 3, 3],
+      "block_threads": 128,
+      "dynamic_shared_memory_bytes": 117576,
+      "registers_per_thread": 58,
+      "resident_ctas_per_sm": 2,
+      "waves_per_sm": 2.49
+    },
+    "isolated_s1_microseconds": 22.75600051879883,
+    "whole_graph_boundary_average_microseconds": 33.4984,
+    "kernel_sum_delta_percent": -2.3137963271592232,
+    "kernel_union_delta_percent": 5.016582511427625,
+    "overlap_savings_delta_percent": -17.185565063195053,
+    "fused_exclusive_milliseconds": 101.48,
+    "conclusion": "The arithmetic/work reduction is real. Rejection came from grid lifetime and cross-stream phase displacement, not correctness or a failed fusion premise."
+  },
+  "lookup_and_epilogue_accounting": {
+    "plain_planar_qkv_no_rope": {
+      "s1_microseconds": 19.953,
+      "s2_round_microseconds": 36.957,
+      "correctness": "bitwise equal to three preallocated torch.mm outputs"
+    },
+    "position_major_fp32_table": {
+      "s1_microseconds": 39.01196670532227,
+      "s2_round_microseconds": 73.05030059814453,
+      "global_load_sector_utilization_bytes_per_32": 8.0,
+      "global_excessive_sectors": 3022848,
+      "global_total_sectors": 4030464,
+      "scoreboard_stall_percent": 71.1
+    },
+    "pair_major_fp32_table_same_early_schedule": {
+      "s1_microseconds": 35.766910552978516,
+      "s2_round_microseconds": 66.82707214355468,
+      "global_load_sector_utilization_bytes_per_32": 29.0,
+      "global_excessive_sectors": 102816,
+      "global_total_sectors": 1110432,
+      "s1_saving_vs_position_major_microseconds": 3.245056152343754,
+      "s1_saving_vs_position_major_percent": 8.317913764716071,
+      "excessive_sector_reduction_percent": 96.59896772712555
+    },
+    "pair_major_two_resident_schedule": {
+      "s1_microseconds": 22.75600051879883,
+      "s2_round_microseconds": 40.56870269775391,
+      "s1_saving_vs_pair_major_early_schedule_microseconds": 13.010910034179686,
+      "s1_saving_vs_pair_major_early_schedule_percent": 36.37698027150952,
+      "s1_delta_vs_plain_control_microseconds": 2.803000518798828,
+      "warning": "The final delta versus the plain control mixes RoPE epilogue cost with a different stage/resource schedule; it is not a pure lookup measurement."
+    },
+    "conclusion": "Pair-major coalescing is proven and must be retained, but table layout explains only 3.245 us of the progression. Resource scheduling explains 13.011 us and the whole-graph loss remains an inter-stream lifetime problem. Do not reopen lookup layout first."
+  },
+  "historical_reuse_audit": {
+    "sm89": [
+      "Precomputed standalone RoPE reduced local latency by 3.6% but did not produce a stable whole-network win.",
+      "Batch-grouped sincos reuse reduced local latency by 4.5% but did not produce a stable whole-network win.",
+      "QKV GEMM epilogue RoPE was retained; a model-lifetime float2 table was locally positive in its epilogue.",
+      "The split QKV/RoPE route was retained default-off after a 10.77% S1 result; native-half plain QKV was another 0.34% local latency reduction."
+    ],
+    "sm120": [
+      "Scalar, half2, packed batch-shared, and exact-batch unrolled RoPE all have positive history; half2, batch-shared, and unrolled increments were 0.630%, 1.52%, and 0.284% respectively.",
+      "Packed CuTe wide-QKV atom4x2 was locally positive by 0.373%.",
+      "Packed QKV plus precomputed static-register RoPE recorded a 4.099% boundary reduction, but the final B16 plan instead retained packed wide-QKV plus a separate unrolled batch-shared RoPE kernel. This is direct evidence that maximal fusion is not automatically the best full-graph schedule."
+    ],
+    "sm103_decision": "Retain pair-major precomputation and the official FP16 projection round. Reuse the historical split/packed ideas only as scheduling alternatives after the static-persistent retry, not as lookup micro-optimizations."
+  },
+  "cutlass_api_audit": {
+    "revision": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+    "static_persistent_dense": {
+      "path": ".final-migration-env/third_party/cutlass/examples/python/CuTeDSL/cute/blackwell/kernel/dense_gemm/dense_gemm_persistent.py",
+      "sha256": "d59344faf902cb215a2cee3f2ae6415a14589c6ad8f93e5e74e2612c1e6a0810",
+      "class": "PersistentDenseGemmKernel",
+      "scheduler": "StaticPersistentTileScheduler",
+      "supports": [
+        "FP16 A/B/C with FP32 accumulation",
+        "tcgen05/TMEM/TMA",
+        "warp-specialized TMA, MMA, and four-warp epilogue",
+        "fixed max_active_clusters grid cap"
+      ],
+      "threads_per_cta": 192
+    },
+    "epilogue_helper": {
+      "path": ".final-migration-env/third_party/cutlass/python/CuTeDSL/cutlass/utils/gemm/sm100.py",
+      "sha256": "2804d40b3d8ee139c067183b36e4d15d04eb106c5b09d0b5fb624007db1611a2",
+      "transform": "A private derivative can insert the existing adjacent-pair FP32 RoPE between FP16 projection conversion and the existing register-to-shared/TMA store."
+    },
+    "static_scheduler_helper": {
+      "path": ".final-migration-env/third_party/cutlass/python/CuTeDSL/cutlass/utils/static_persistent_tile_scheduler.py",
+      "sha256": "143262db20907312199961a5eb73827b3d549ed56d81694a715e8a651950cb4b"
+    },
+    "clc_dynamic_available_but_not_first": {
+      "path": ".final-migration-env/third_party/cutlass/examples/python/CuTeDSL/cute/blackwell/kernel/dense_gemm/dense_gemm_persistent_dynamic.py",
+      "scheduler": "ClcDynamicPersistentTileScheduler",
+      "threads_per_cta": 224,
+      "launch_grid_for_this_problem": [82, 3, 3],
+      "reason": "CLC submits the full 738-CTA grid and adds a scheduler warp plus response pipeline. It improves irregular load balance but does not enforce one CTA per lane per SM. The fixed G148 mapping already differs by only one tile between CTAs, so static scheduling is the lower-risk test of the actual overlap hypothesis."
+    }
+  },
+  "ranked_implementation_plan": [
+    {
+      "rank": 1,
+      "id": "cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-static-persistent-g148",
+      "implementation": "Derive from pinned CUTLASS PersistentDenseGemmKernel. Preserve the exact parent tensors, planar output, pair-major FP32 table, and numeric order. Set the persistent pipeline occupancy parameter to 2 so the expected AB3/C2 resource class remains capable of two resident CTAs. Pass max_active_clusters=148 as a compile-time constant.",
+      "logical_work": {
+        "tile_domain": [82, 3, 3],
+        "logical_tiles": 738,
+        "physical_ctas": 148,
+        "work_count_histogram": {
+          "5": 146,
+          "4": 2
+        },
+        "projection_histogram_q_k_v": {
+          "2/2/1": 48,
+          "2/1/2": 50,
+          "1/2/2": 48,
+          "1/2/1": 2
+        }
+      },
+      "resource_intent": "Each inference contributes one persistent CTA per B300 SM. Because the parent resource class admits two CTAs/SM, two outer lanes can occupy one slot each instead of one lane filling both slots with its 738-CTA grid.",
+      "g296_diagnostic_only": {
+        "physical_ctas": 296,
+        "work_count_histogram": {
+          "3": 146,
+          "2": 150
+        },
+        "use": "Run only if G148 proves a single-stream pipeline-throughput deficit. G296 deliberately lets one lane occupy both slots and therefore does not test the primary phase-recovery mechanism."
+      },
+      "stop_conditions": [
+        "compiled grid is not exactly 148",
+        "NCU reports fewer than two possible resident CTAs/SM, spills, or a new TMEM/register residency cap",
+        "coordinated isolated S2 does not beat the retained four-launch boundary",
+        "whole-graph NSYS does not reduce QKV exclusive time and recover overlap versus Stage06"
+      ]
+    },
+    {
+      "rank": 2,
+      "id": "cute47-sm103-b29-split-qrope-krope-v-planar",
+      "prerequisite": "Rank 1 fails its profiler gate for a concrete persistent-lifetime or warp-specialization reason.",
+      "implementation": "Generate three exact one-plane kernels: Q projection plus RoPE, K projection plus RoPE, and plain V projection. Each has grid (82,3,1)=246 CTAs and writes the existing planar plane directly. No separate RoPE launch remains. The current batched kernel does not share A data between projection CTAs, so splitting loses launch amortization but not an implemented cross-plane CTA reuse mechanism.",
+      "scheduling_sequence": [
+        "First test the three shorter kernels sequentially to isolate lifetime shortening from DAG changes.",
+        "Only if sequential split preserves enough local saving, combine it with the already-audited per-lane Q/K/V aux-stream fork/join so Q, K, and V become sibling nodes.",
+        "Join before FA4; do not change buffers, math, or FA4 in this experiment."
+      ],
+      "expected_tradeoff": "Two extra launches and repeated descriptor/TMEM setup buy three shorter scheduling boundaries. This directly reuses the successful SM89 split principle while avoiding its separate-RoPE work.",
+      "stop_conditions": [
+        "sum of Q+K+V isolated S2 exceeds the current four-launch boundary",
+        "shorter grids still execute as long exclusive intervals in whole-graph NSYS",
+        "aux events/handles add more union time than they recover"
+      ]
+    },
+    {
+      "rank": 3,
+      "id": "cute47-sm103-b29-packed-qkv-rope-plus-fa4-strided-abi",
+      "prerequisite": "Ranks 1 and 2 fail with profiler evidence; do not start this as a parallel speculative branch.",
+      "implementation": "Change only physical output layout to row-interleaved [B,S,3,H,D]. Q/K/V pointers are base, base+384, base+768 half elements with B/S strides S*1152 and 1152. Extend the authenticated SM103 FA4 bridge to accept these dynamic strides, matching the already-proven SM120 FA4 ABI pattern. RoPE and projection arithmetic remain unchanged.",
+      "static_feasibility": "The generated SM103 FA4 tensor ABI already carries dynamic B/S/H strides; the current bridge rejects packedQKV by policy and fills planar strides. This is an ABI/contract extension, not proof of a performance win.",
+      "why_last": "Current planar output already has zero transpose cost, and the SM120 final plan preferred packed wide-QKV plus separate unrolled RoPE over maximal packed QKV+RoPE fusion. Packed layout must therefore earn its FA4/cache and epilogue effects end to end.",
+      "stop_conditions": [
+        "packed FA4 isolated latency or NCU resources regress by 10% or more",
+        "QKV TMA stores become uncoalesced",
+        "whole-graph kernel sum improves but union/overlap repeats Stage04"
+      ]
+    }
+  ],
+  "gpu_validation_order_after_authorization": [
+    "Compile only G148 from the authenticated persistent source derivative.",
+    "Validate all 12,060,288 outputs against FP16 projection-round plus FP32 adjacent-pair RoPE; require bitwise V and the existing one-FP16-ULP Q/K envelope.",
+    "Measure isolated S1 and coordinated independent-context S2; record G148 work balance.",
+    "NCU one launch: grid, registers, dynamic shared memory, TMEM/resource block limits, spills, no-eligible, scoreboard, bank conflicts, and per-tile duration.",
+    "Short accumulated B29/S2 NSYS against retained Stage06: kernel sum, union, overlap, QKV exclusive/covered time, FA4 exclusive/covered time, FFN displacement, and lane-to-lane overlap.",
+    "Only after a union win: five-by-1000 long B29/S2 and full replay/request gate."
+  ],
+  "new_device_free_contract": {
+    "source": "python/sm103_cute_b29_qkv_rope_persistent.py",
+    "tests": "python/tests/test_sm103_cute_b29_qkv_rope_persistent.py",
+    "tests_passed": 7,
+    "source_sha256": "0bde9290ab30d5427fcc7b9f24a4b9c100287cc66beefc93921ef910c18fa30a",
+    "tests_sha256": "7d8907f3f7f2772ed1c3152cab7102f5df9d7d0fd9fee1eb92ae039ebc342a8f",
+    "properties": [
+      "imports no CUDA-facing package",
+      "authenticates CUTLASS revision and three source hashes",
+      "requires a clean CUTLASS worktree",
+      "proves complete nonduplicated G148/G296 tile mappings",
+      "marks compilation, GPU execution, and production readiness false"
+    ]
+  },
+  "next_action": "QKV route closed after profiler-proven heterogeneous contention in both G148 and ordered split3; retain independent infrastructure/evidence only and keep runtime wiring removed."
+}

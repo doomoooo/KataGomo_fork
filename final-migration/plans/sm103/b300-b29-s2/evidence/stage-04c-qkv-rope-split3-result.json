@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "stage": "04c-sm103-split-qrope-krope-v",
+  "timestamp_utc": "2026-08-18T13:12:00Z",
+  "status": "whole_graph_rejected_root_cause_proven",
+  "candidate_id": "cute47-sm103-b29-planar-qrope-krope-v-tcgen05-fp16-pairmajor-occ6-split3",
+  "hypothesis": "Replace the long fused grid by ordered Q+RoPE, K+RoPE, and V grids. Preserve all math, table, tile, and resource choices while adding two scheduling boundaries and still removing the separate RoPE launch.",
+  "artifact": {
+    "directory": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-split3",
+    "manifest_sha256": "4cdd83ae77185f750dd8d6f528780b022dfff54450833c2ace86a3bfecf0332b",
+    "object_sha256": "7f53a33e18b4012551dc01209381c4503f41f714e733a14ab2afc2cb20f184df",
+    "library_sha256": "3f021c5e04ab33a75db5fa2082a56b57fba518fe2ba81ee3f932e3cc58331d38",
+    "compiled_schedule": {
+      "launch_order": ["q_rope", "k_rope", "v"],
+      "grid_each": [82, 3, 1],
+      "ctas_each": 246,
+      "block_threads": 128,
+      "ab_stages": 3,
+      "accumulator_stages": 1,
+      "epilogue_stages": 2,
+      "dynamic_shared_memory_bytes": 117576
+    }
+  },
+  "isolated": {
+    "validation_sha256": "e667c581c740e0759b198727e83ed5b87286cd6a9ad1b761b95806e5d40df046",
+    "correctness": {
+      "q_max_abs": 0.0000152587890625,
+      "q_different_elements": 268,
+      "k_max_abs": 0.0000152587890625,
+      "k_different_elements": 266,
+      "v_bitwise_equal": true
+    },
+    "s1_median_microseconds": 31.378080368041993,
+    "s1_speedup_vs_current_four_launch": 1.2773247926543254,
+    "s2_round_median_microseconds": 56.68809509277344,
+    "note": "The recorded production control had only an S1 isolated value. The obsolete one-launch occ6 candidate is not a valid production S2 control, so the route proceeded to an explicitly authorized same-binary full-graph trial."
+  },
+  "integration": {
+    "binary": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4-qkv-split3/katago",
+    "binary_sha256": "25748e9a229b6a726da0fd09993a901725b601c592c0f12a346e8d4a03acd41a",
+    "control_and_candidate_same_binary": true,
+    "aux_streams": false,
+    "fixed_parent": "native FA4 FP32 plus no-AB12 FFN; cudaUseProjectionGemmLt=false",
+    "activation_marker": "SM103 backend: split planar Q+RoPE/K+RoPE/V active, tactic=cute47-sm103-b29-planar-qrope-krope-v-tcgen05-fp16-pairmajor-occ6-split3"
+  },
+  "short_abba": {
+    "method": "same binary, B29/S2, 50 warmups and 300 timed forwards per lane",
+    "order": ["A", "B", "B", "A"],
+    "nn_evals_per_sec": [8947.305623, 7981.822753, 8239.891119, 8941.532321],
+    "control_center": 8944.418972,
+    "candidate_center": 8110.856936,
+    "delta_percent": -9.31936040876404,
+    "candidate_relative_spread": 0.03186256729465365
+  },
+  "whole_graph_nsys": {
+    "method": "same binary, B29/S2, 20 warmups and 50 timed forwards per lane; 72 forward instances per lane in each complete trace",
+    "control": {
+      "profiled_nn_evals_per_sec": 8656.56831,
+      "report": ".final-migration-env/profiles/sm103-b29/stage-04c-qkv-split3/full-graph-control.nsys-rep",
+      "report_sha256": "342b9e30553b092588b7e462bf95eb356f00d3e9a95c60d868c2e0b2f4033c17",
+      "sqlite_sha256": "2c0d01675516931cffaca1616162c817e33e624acacf3597e8efb0959fca174c",
+      "kernel_events": 58476,
+      "kernel_sum_ms": 728.232632,
+      "kernel_union_ms": 482.899004,
+      "overlap_ms": 245.333628,
+      "overlap_ge2_ms": 241.803566,
+      "span_ms": 596.783451,
+      "weighted_concurrency": 1.5080433506133304
+    },
+    "candidate": {
+      "profiled_nn_evals_per_sec": 8059.99762,
+      "report": ".final-migration-env/profiles/sm103-b29/stage-04c-qkv-split3/full-graph-candidate.nsys-rep",
+      "report_sha256": "cb548fef3777761929945677a77a85a47f02f6437db95215af2e3c3676f95542",
+      "sqlite_sha256": "3e40b53e83febce2c1d4e4686b103ddde079d9ebf0c060353b97cc0ccd7c2731",
+      "kernel_events": 53790,
+      "kernel_sum_ms": 816.619486,
+      "kernel_union_ms": 518.632697,
+      "overlap_ms": 297.986789,
+      "overlap_ge2_ms": 297.58666,
+      "span_ms": 632.468816,
+      "weighted_concurrency": 1.5745622879615706
+    },
+    "delta_percent": {
+      "kernel_sum": 12.137172946680042,
+      "kernel_union": 7.399827438865447,
+      "overlap": 21.461860499613206,
+      "overlap_ge2": 23.06959112422684,
+      "span": 5.979617052082098,
+      "weighted_concurrency": 4.410943314141891
+    }
+  },
+  "critical_union_attribution_ms": {
+    "qkv_boundary": {
+      "control_per_block_sum_average_us": 40.445003998316496,
+      "candidate_per_block_sum_average_us": 54.59788783670034,
+      "control": {"sum": 192.194659, "union": 178.712784, "covered": 113.530643, "exclusive": 65.182141},
+      "candidate": {"sum": 259.449165, "union": 166.914471, "covered": 48.145458, "exclusive": 118.769013},
+      "delta_percent": {"sum": 34.99291101528477, "union": -6.601829335275755, "covered": -57.592543539104234, "exclusive": 82.21097248094382}
+    },
+    "fa4": {
+      "average_us_control": 23.102849326599327,
+      "average_us_candidate": 24.634617634680133,
+      "average_delta_percent": 6.630213816601449,
+      "exclusive_ms_control": 77.252165,
+      "exclusive_ms_candidate": 86.565505
+    },
+    "fused_ffn": {
+      "average_us_control": 23.090199494949495,
+      "average_us_candidate": 22.24598569023569,
+      "average_delta_percent": -3.6561563917992923,
+      "covered_ms_control": 55.44495,
+      "covered_ms_candidate": 20.318762,
+      "exclusive_ms_control": 53.144085,
+      "exclusive_ms_candidate": 77.160509
+    },
+    "one_sm_gemm": {
+      "average_us_control": 17.09209169823232,
+      "average_us_candidate": 20.953692234848484,
+      "average_delta_percent": 22.592907906148984,
+      "covered_ms_control": 92.192458,
+      "covered_ms_candidate": 58.145002,
+      "exclusive_ms_control": 10.962304,
+      "exclusive_ms_candidate": 40.996021
+    }
+  },
+  "selected_pair_overlap_ms": {
+    "qkv_with_fa4": {"control": 11.413601, "candidate": 10.346049},
+    "qkv_with_ffn": {"control": 17.044948, "candidate": 0.046369},
+    "qkv_with_one_sm_gemm": {"control": 35.050659, "candidate": 20.118864},
+    "fa4_with_ffn": {"control": 6.431908, "candidate": 0.005632}
+  },
+  "root_cause": {
+    "finding": "Shorter grids increase scheduler-visible overlap but do not preserve kernel service time under heterogeneous contention.",
+    "explanation": "The split does exactly what the scheduling hypothesis requested: overlap grows by 52.65ms and the QKV union shrinks by 11.80ms. However Q/K/V summed service time grows by 67.25ms; FA4 and one-SM GEMMs also slow. Across the graph, extra kernel work grows by 88.39ms while overlap recovers only 52.65ms, so union still grows by 35.73ms. The QKV boundary expands from 40.45us to 54.60us under real competition despite its 31.38us isolated S1 result.",
+    "implication": "Neither one long persistent grid nor three short occupancy-2 grids makes this fusion transferable. The remaining packed-layout route is not justified because planar output already has no conversion cost and both scheduling variants fail before layout becomes the limiter."
+  },
+  "decision": {
+    "correctness_gate": "pass",
+    "isolated_s1_gate": "pass",
+    "whole_graph_throughput_gate": "fail",
+    "whole_graph_union_gate": "fail",
+    "long_gate": "not_run",
+    "replay_gate": "not_run",
+    "retained": false,
+    "qkv_route_closed": true,
+    "packed_route": "not_run by coordinator decision"
+  }
+}
