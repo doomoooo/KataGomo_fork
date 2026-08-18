@@ -296,6 +296,12 @@ struct Options {
   // Master switch. When false, SM120 keeps the official backend path entirely (A/B control).
   bool enabled = true;
 
+  // Internal discriminator set only by makeSm103PortableOptions(). It is not
+  // parsed from configuration. It changes diagnostics and documents that this
+  // owner may launch generic CUDA/library tactics only; all architecture-bound
+  // choices have already been rejected and cleared.
+  bool portableSm103Adapter = false;
+
   // The plan owns every optimization switch. Defaults are an explicit
   // official-equivalent control state, never an implicit historical winner.
   bool useFlashAttention = false;
@@ -379,6 +385,12 @@ bool launchSplitValueTerminal(
 
 // Reads all cuda*Sm120* / cuda* config keys relevant to the SM120 path. Unknown accum values throw.
 Options parseOptions(ConfigParser& cfg);
+
+// Validate an SM120 option set for reuse by the explicit CC10.3 portable
+// adapter. Any FA/AOT/CUTLASS or engine-ID selection is a startup error; the
+// returned copy is defensively scrubbed as well. Generic CUDA, cuBLAS,
+// cuBLASLt and runtime-only choices are preserved.
+Options makeSm103PortableOptions(const Options& requested);
 
 // Attention hook implementation (FA4 AOT on SM120, see fa4_aot/).
 bool applyAttention(
@@ -875,6 +887,8 @@ class Sm120Model {
   );
 
  private:
+  std::string logMessage(const std::string& message) const;
+
   void* officialApplyContext;
   OfficialApplyFn officialApply;
   CudaHandles* cudaHandles;

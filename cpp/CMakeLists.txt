@@ -145,6 +145,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     CACHE FILEPATH "Generated exact-batch FA4 fat-scan registry, or its empty stub")
   set(NEURALNET_BACKEND_SOURCES
     neuralnet/cudabackend.cpp
+    neuralnet/cudabackend_sm103.cpp
     neuralnet/cudabackend_sm89.cpp
     neuralnet/cudabackend_sm89_forward.cpp
     neuralnet/cudabackend_sm89_kernels.cu

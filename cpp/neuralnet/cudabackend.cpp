@@ -30,6 +30,7 @@
 #include "../neuralnet/sgfmetadata.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/desc.h"
+#include "../neuralnet/cudabackend_sm103.h"
 #include "../neuralnet/cudabackend_sm120.h"
 #include "../neuralnet/cudabackend_sm89.h"
 
@@ -357,6 +358,10 @@ struct CudaHandles {
   int sm120FullBoardCapacity;
   bool sm120UseHeadBNHalfToFloat;
   bool loggedSm120HeadBNHalfToFloat;
+  // True when the Sm120Model object owns generic CUDA/library hooks for an
+  // explicitly opted-in SM103 handle. Used only to keep activation logs
+  // architecture-honest; portability validation happens before construction.
+  bool sm120PortableForSm103;
   bool sm120ShareModelWeights;
   bool sm120SharedModelWeightsActive;
   bool loggedSm120SharedModelWeights;
@@ -411,6 +416,7 @@ struct CudaHandles {
       sm120FullBoardCapacity(0),
       sm120UseHeadBNHalfToFloat(false),
       loggedSm120HeadBNHalfToFloat(false),
+      sm120PortableForSm103(false),
       sm120ShareModelWeights(false),
       sm120SharedModelWeightsActive(false),
       loggedSm120SharedModelWeights(false),
@@ -3366,6 +3372,8 @@ struct PolicyHead {
       if(usedHeadBNHalfToFloat && !cudaHandles->loggedSm120HeadBNHalfToFloat) {
         if(cudaHandles->logger != NULL)
           cudaHandles->logger->write(
+            cudaHandles->sm120PortableForSm103 ?
+            "SM103 portable backend: head BN direct FP32 output active" :
             "SM120 backend: head BN direct FP32 output active");
         cudaHandles->loggedSm120HeadBNHalfToFloat = true;
       }
@@ -3638,6 +3646,8 @@ struct ValueHead {
       if(usedHeadBNHalfToFloat && !cudaHandles->loggedSm120HeadBNHalfToFloat) {
         if(cudaHandles->logger != NULL)
           cudaHandles->logger->write(
+            cudaHandles->sm120PortableForSm103 ?
+            "SM103 portable backend: head BN direct FP32 output active" :
             "SM120 backend: head BN direct FP32 output active");
         cudaHandles->loggedSm120HeadBNHalfToFloat = true;
       }
@@ -3684,6 +3694,8 @@ struct ValueHead {
       if(usedFusedTerminal && !cudaHandles->loggedSm120FusedValueTerminal) {
         if(cudaHandles->logger != NULL)
           cudaHandles->logger->write(
+            cudaHandles->sm120PortableForSm103 ?
+            "SM103 portable backend: fused value/score terminal active" :
             "SM120 backend: fused value/score terminal active");
         cudaHandles->loggedSm120FusedValueTerminal = true;
       }
@@ -3854,6 +3866,8 @@ struct Model {
        !cudaHandles->loggedSm120SharedModelWeights) {
       if(cudaHandles->logger != NULL)
         cudaHandles->logger->write(
+          cudaHandles->sm120PortableForSm103 ?
+          "SM103 portable backend: per-device model-weight sharing active" :
           "SM120 backend: per-device model-weight sharing active");
       cudaHandles->loggedSm120SharedModelWeights = true;
     }
@@ -4177,6 +4191,8 @@ struct ComputeContext {
   Sm89Backend::Options sm89Options;
   // SM120-specific backend options; only used when a server thread is on a SM120 device.
   Sm120Backend::Options sm120Options;
+  // SM103 scaffold options; default-off until real B300 tactics are registered.
+  Sm103Backend::Options sm103Options;
 };
 
 ComputeContext* NeuralNet::createComputeContext(
@@ -4210,6 +4226,7 @@ ComputeContext* NeuralNet::createComputeContext(
     cfg.contains("cudaUse1x1Matmul") ? cfg.getEnabled("cudaUse1x1Matmul") : enabled_t::Auto;
   context->sm89Options = Sm89Backend::parseOptions(cfg);
   context->sm120Options = Sm120Backend::parseOptions(cfg);
+  context->sm103Options = Sm103Backend::parseOptions(cfg);
   return context;
 }
 
@@ -4248,8 +4265,12 @@ struct ComputeHandle {
   cudaEvent_t outputReadyEvent;
   cudaGraph_t eventPipelineGraph;
   cudaGraphExec_t eventPipelineGraphExec;
-  // Set only on SM120 devices; routes apply() to the SM120-specific path.
+  // Native SM120 forward adapter, or generic hook owner on SM103 when the
+  // explicit portable-tactic adapter is enabled.
   std::unique_ptr<Sm120Backend::Sm120Model> sm120Model;
+  // Set by explicit scaffold or portable-tactic configurations on SM103.
+  // The adapter retains the official traversal and replaces selected hooks.
+  std::unique_ptr<Sm103Backend::Sm103Model> sm103Model;
   // Set only on SM89 devices; routes apply() to the SM89-specific path.
   std::unique_ptr<Sm89Backend::Sm89Model> sm89Model;
 
@@ -4287,24 +4308,38 @@ struct ComputeHandle {
     eventPipelineGraphExec(NULL)
   {
     cudaHandles = std::make_unique<CudaHandles>(majorComputeCapability,minorComputeCapability,stream);
+    const bool isSm103 =
+      Sm103Backend::isSm103Arch(majorComputeCapability, minorComputeCapability);
+    const bool isSm120 =
+      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability);
+    if(context->sm103Options.enabled &&
+       !isSm103)
+      throw StringError("cudaSm103Backend requires an exact compute capability 10.3 device");
+    const bool sm103PortableTacticsActive =
+      isSm103 && context->sm103Options.enabled &&
+      context->sm103Options.reusePortableTactics;
+    const bool nativeSm120BackendActive =
+      isSm120 && context->sm120Options.enabled;
+    Sm120Backend::Options activeSm120Options = context->sm120Options;
+    if(sm103PortableTacticsActive)
+      activeSm120Options =
+        Sm120Backend::makeSm103PortableOptions(context->sm120Options);
+    const bool sm120HookOwnerActive =
+      nativeSm120BackendActive || sm103PortableTacticsActive;
     // Must be set before building the model: ConvLayer reads it at construction to pick the 1x1 conv path.
     cudaHandles->use1x1MatmulMode = context->use1x1MatmulMode;
     cudaHandles->sm120InitialConvFrontendEngine = 0;
+    cudaHandles->sm120PortableForSm103 = sm103PortableTacticsActive;
     cudaHandles->sm120ShareModelWeights =
-      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
-      context->sm120Options.enabled && context->sm120Options.shareModelWeights;
+      sm120HookOwnerActive && activeSm120Options.shareModelWeights;
     cudaHandles->sm120UseFusedValueTerminal =
-      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
-      context->sm120Options.enabled &&
-      context->sm120Options.useFusedValueTerminal;
+      sm120HookOwnerActive && activeSm120Options.useFusedValueTerminal;
     cudaHandles->sm120UseHeadBNHalfToFloat =
-      Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
-      context->sm120Options.enabled && context->sm120Options.useHeadBNHalfToFloat;
-    if(Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
-       context->sm120Options.enabled) {
-      if(context->sm120Options.initialConvFrontendPlan == "eng45-tile0-stages2")
+      sm120HookOwnerActive && activeSm120Options.useHeadBNHalfToFloat;
+    if(nativeSm120BackendActive) {
+      if(activeSm120Options.initialConvFrontendPlan == "eng45-tile0-stages2")
         cudaHandles->sm120InitialConvFrontendEngine = 45;
-      else if(context->sm120Options.initialConvFrontendPlan ==
+      else if(activeSm120Options.initialConvFrontendPlan ==
               "eng47-k2-2-k6-1-k13-1-k14-0-k22-2")
         cudaHandles->sm120InitialConvFrontendEngine = 47;
     }
@@ -4315,12 +4350,20 @@ struct ComputeHandle {
     scratch = std::make_unique<ScratchBuffers>(maxBatchSize, nnXLen, nnYLen, useFP16);
     buffers = std::make_unique<Buffers>(cudaHandles.get(), *model, *scratch);
 
-    if(Sm120Backend::isSm120Arch(majorComputeCapability, minorComputeCapability) &&
-       context->sm120Options.enabled) {
+    if(isSm103 &&
+       context->sm103Options.enabled) {
+      sm103Model = std::make_unique<Sm103Backend::Sm103Model>(
+        model.get(), &applyOfficialModel,
+        nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
+        majorComputeCapability, minorComputeCapability,
+        context->sm103Options
+      );
+    }
+    if(sm120HookOwnerActive) {
       sm120Model = std::make_unique<Sm120Backend::Sm120Model>(
         model.get(), &applyOfficialModel, cudaHandles.get(), &(loadedModel->modelDesc),
         maxBatchSize, nnXLen, nnYLen, inputsUseNHWC_, useFP16, useNHWC,
-        context->sm120Options
+        activeSm120Options
       );
       cudaHandles->sm120FullBoardAreaBuf = sm120Model->getFullBoardAreaBuf();
       if(cudaHandles->sm120FullBoardAreaBuf != NULL)
@@ -4333,61 +4376,65 @@ struct ComputeHandle {
         cudaHandles->sm120PersistingL2Inner = &Sm120Backend::applyPersistingL2Window;
         cudaHandles->sm120PersistingL2InnerContext = sm120Model.get();
       }
-      cudaHandles->sm120Attention = &Sm120Backend::applyAttention;
-      cudaHandles->sm120AttentionContext = sm120Model.get();
-      if(context->sm120Options.useFusedFFN || context->sm120Options.useWideFFNSingleGemm) {
+      // Only native SM120 may install attention: the sole implementation is
+      // FA AOT. The portable validator rejects that route on CC10.3.
+      if(nativeSm120BackendActive) {
+        cudaHandles->sm120Attention = &Sm120Backend::applyAttention;
+        cudaHandles->sm120AttentionContext = sm120Model.get();
+      }
+      if(activeSm120Options.useFusedFFN || activeSm120Options.useWideFFNSingleGemm) {
         cudaHandles->sm120FFNSingleGemm = &Sm120Backend::applyFFNSingleGemm;
         cudaHandles->sm120FFNSingleGemmContext = sm120Model.get();
       }
-      if(context->sm120Options.useProjectionGemmLt) {
+      if(activeSm120Options.useProjectionGemmLt) {
         cudaHandles->sm120MatMul = &Sm120Backend::applyMatMulLt;
         cudaHandles->sm120MatMulContext = sm120Model.get();
       }
-      if(context->sm120Options.outerProjectionDownTactic != "disabled" ||
-         context->sm120Options.outerProjectionUpTactic != "disabled") {
+      if(activeSm120Options.outerProjectionDownTactic != "disabled" ||
+         activeSm120Options.outerProjectionUpTactic != "disabled") {
         cudaHandles->sm120Conv1x1 = &Sm120Backend::applyConv1x1;
         cudaHandles->sm120Conv1x1Context = sm120Model.get();
       }
-      if(context->sm120Options.useInitialGlobalMatMulAdd) {
+      if(activeSm120Options.useInitialGlobalMatMulAdd) {
         cudaHandles->sm120InitialGlobal = &Sm120Backend::applyInitialGlobal;
         cudaHandles->sm120InitialGlobalContext = sm120Model.get();
       }
-      if(context->sm120Options.useQKVStrided ||
-         (context->sm120Options.useWideQKV && context->sm120Options.useQKVGemmAot)) {
+      if(activeSm120Options.useQKVStrided ||
+         (activeSm120Options.useWideQKV && activeSm120Options.useQKVGemmAot)) {
         cudaHandles->sm120QKVStrided = &Sm120Backend::applyQKVStrided;
         cudaHandles->sm120QKVStridedContext = sm120Model.get();
       }
-      if(context->sm120Options.useFusedResidualGemm) {
+      if(activeSm120Options.useFusedResidualGemm) {
         cudaHandles->sm120FusedResidualGemm = &Sm120Backend::applyFusedResidualGemm;
         cudaHandles->sm120FusedResidualGemmContext = sm120Model.get();
       }
-      if(context->sm120Options.rmsNorm384Tactic != "disabled") {
+      if(activeSm120Options.rmsNorm384Tactic != "disabled") {
         cudaHandles->sm120RMSNorm = &Sm120Backend::applyRMSNorm;
         cudaHandles->sm120RMSNormContext = sm120Model.get();
       }
-      if(context->sm120Options.useFusedQKRoPE) {
+      if(activeSm120Options.useFusedQKRoPE) {
         cudaHandles->sm120FusedQKRoPE = &Sm120Backend::applyFusedQKRoPE;
         cudaHandles->sm120FusedQKRoPEContext = sm120Model.get();
       }
-      if(context->sm120Options.useSwiGLU1152) {
+      if(activeSm120Options.useSwiGLU1152) {
         cudaHandles->sm120SwiGLU = &Sm120Backend::applySwiGLU;
         cudaHandles->sm120SwiGLUContext = sm120Model.get();
       }
-      if(context->sm120Options.affineSiluTactic != "disabled") {
+      if(activeSm120Options.affineSiluTactic != "disabled") {
         cudaHandles->sm120AffineSilu = &Sm120Backend::applyAffineSilu;
         cudaHandles->sm120AffineSiluContext = sm120Model.get();
       }
-      if(context->sm120Options.usePostConvBNSilu) {
+      if(activeSm120Options.usePostConvBNSilu) {
         cudaHandles->sm120PostConvBNSilu = &Sm120Backend::applyPostConvBNSilu;
         cudaHandles->sm120PostConvBNSiluContext = sm120Model.get();
       }
-      if(context->sm120Options.useFusedPolicyP1) {
+      if(activeSm120Options.useFusedPolicyP1) {
         cudaHandles->sm120FusedPolicyP1 = &Sm120Backend::applyFusedPolicyP1;
         cudaHandles->sm120FusedPolicyP1Context = sm120Model.get();
       }
-      if(context->sm120Options.wideHeadProjectionTactic != "disabled" &&
-         context->sm120Options.useFusedPolicyP1 &&
-         context->sm120Options.useHeadBNHalfToFloat) {
+      if(activeSm120Options.wideHeadProjectionTactic != "disabled" &&
+         activeSm120Options.useFusedPolicyP1 &&
+         activeSm120Options.useHeadBNHalfToFloat) {
         cudaHandles->sm120WideHeadProjection =
           &Sm120Backend::applyWideHeadProjection;
         cudaHandles->sm120WideHeadProjectionContext = sm120Model.get();
@@ -4493,7 +4540,20 @@ struct ComputeHandle {
     cudaEvent_t inputConsumedEvent_ = nullptr,
     cudaEvent_t outputConsumedEvent_ = nullptr
   ) const {
-    if(sm120Model != nullptr) {
+    if(sm103Model != nullptr) {
+      if(outputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaStreamWaitEvent(cudaHandles_->stream,outputConsumedEvent_,0));
+      sm103Model->apply(
+        cudaHandles_, scratch_, batchSize, requireExactNNLen_,
+        inputBuf, inputGlobalBuf, inputMetaBuf,
+        policyPassBuf, policyBuf,
+        valueBuf, scoreValueBuf, ownershipBuf,
+        workspaceBuf, workspaceBytes
+      );
+      if(inputConsumedEvent_ != nullptr)
+        CUDA_ERR("ComputeHandle::apply",cudaEventRecord(inputConsumedEvent_,cudaHandles_->stream));
+    }
+    else if(sm120Model != nullptr) {
       if(outputConsumedEvent_ != nullptr)
         CUDA_ERR("ComputeHandle::apply",cudaStreamWaitEvent(cudaHandles_->stream,outputConsumedEvent_,0));
       sm120Model->apply(
@@ -4654,6 +4714,8 @@ ComputeHandle* NeuralNet::createComputeHandle(
   );
   gpuHandle->cudaHandles->logger = logger;
   gpuHandle->cudaHandles->cudaDisableGraphSDPA = context->cudaDisableGraphSDPA;
+  if(gpuHandle->sm103Model != nullptr)
+    gpuHandle->sm103Model->setLogger(logger);
   if(gpuHandle->sm120Model != nullptr)
     gpuHandle->sm120Model->setLogger(logger);
   if(gpuHandle->sm89Model != nullptr)

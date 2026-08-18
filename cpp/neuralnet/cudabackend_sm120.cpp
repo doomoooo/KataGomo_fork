@@ -363,6 +363,70 @@ Options parseOptions(ConfigParser& cfg) {
   return o;
 }
 
+Options makeSm103PortableOptions(const Options& requested) {
+  const auto reject = [](bool selected, const char* key) {
+    if(selected)
+      throw StringError(
+        "cudaSm103ReusePortableTactics rejects architecture-specific SM120 option " +
+        string(key));
+  };
+
+  // These routes either dispatch a fixed SM120 artifact, depend on a
+  // platform-specific cuDNN engine ID, or construct a CUTLASS kernel handle.
+  // Reject instead of silently falling back so a copied SM120 plan cannot
+  // appear active on B300 while actually running a different implementation.
+  reject(requested.useFlashAttention, "cudaUseFlashAttentionSm120");
+  reject(requested.flashAttentionAccum != "none", "cudaFlashAttentionSm120Accum");
+  reject(requested.fa4AotTactic != "disabled", "cudaFlashAttentionAotTacticSm120");
+  reject(requested.useWideQKV, "cudaUseWideQKV");
+  reject(requested.useQKVGemmAot, "cudaUseQKVGemmAot");
+  reject(requested.qkvRopeAotTactic != "disabled", "cudaQKVRopeAotTacticSm120");
+  reject(requested.useFusedFFN, "cudaUseFusedFFN");
+  reject(requested.fusedFFNAotTactic != "disabled", "cudaFusedFFNAotTacticSm120");
+  reject(requested.useLinear2ResidualAot, "cudaUseLinear2ResidualAot");
+  reject(requested.useOutProjectionResidualAot, "cudaUseOutProjectionResidualAot");
+  reject(requested.outProjectionAotTactic != "disabled", "cudaOutProjectionAotTacticSm120");
+  reject(requested.outerProjectionDownTactic != "disabled", "cudaOuterProjectionDownTacticSm120");
+  reject(requested.outerProjectionUpTactic != "disabled", "cudaOuterProjectionUpTacticSm120");
+  reject(requested.usePostConvBNSilu, "cudaUsePostConvBNSiluSm120");
+  reject(requested.wideQKVAotTactic != "disabled", "cudaWideQKVAotTacticSm120");
+  reject(requested.linear2AotTactic != "disabled", "cudaLinear2AotTacticSm120");
+  reject(requested.initialConvFrontendPlan != "disabled", "cudaInitialConvFrontendPlanSm120");
+  reject(requested.wideHeadProjectionTactic != "disabled", "cudaWideHeadProjectionTacticSm120");
+
+  Options portable = requested;
+  portable.enabled = true;
+  portable.portableSm103Adapter = true;
+
+  // Defense in depth: keep every architecture-bound route disabled even if a
+  // future parser introduces an alias that bypasses one of the checks above.
+  portable.useFlashAttention = false;
+  portable.flashAttentionAccum = "none";
+  portable.fa4AotTactic = "disabled";
+  portable.fa4AotTacticExplicit = false;
+  portable.useWideQKV = false;
+  portable.useQKVGemmAot = false;
+  portable.qkvRopeAotTactic = "disabled";
+  portable.qkvRopeAotTacticExplicit = false;
+  portable.useFusedFFN = false;
+  portable.fusedFFNAotTactic = "disabled";
+  portable.fusedFFNAotTacticExplicit = false;
+  portable.useLinear2ResidualAot = false;
+  portable.useOutProjectionResidualAot = false;
+  portable.outProjectionAotTactic = "disabled";
+  portable.outProjectionAotTacticExplicit = false;
+  portable.outerProjectionDownTactic = "disabled";
+  portable.outerProjectionUpTactic = "disabled";
+  portable.usePostConvBNSilu = false;
+  portable.wideQKVAotTactic = "disabled";
+  portable.wideQKVAotTacticExplicit = false;
+  portable.linear2AotTactic = "disabled";
+  portable.linear2AotTacticExplicit = false;
+  portable.initialConvFrontendPlan = "disabled";
+  portable.wideHeadProjectionTactic = "disabled";
+  return portable;
+}
+
 bool applyAttention(
   void* ctx,
   CudaHandles* cudaHandles,
@@ -785,7 +849,8 @@ Sm120Model::Sm120Model(
   wideHeadProjectionWeights = NULL;
   wideHeadProjectionHandle = NULL;
   dualFfnSharedAHandle = NULL;
-  if(options.fusedFFNAotTactic ==
+  if(!options.portableSm103Adapter &&
+     options.fusedFFNAotTactic ==
      "dual_ffn-cutlass-shared-a-m128-n64-k32-s3-swizzle2") {
     dualFfnSharedAHandle = katago_create_dual_ffn_shared_a_sm120();
     if(dualFfnSharedAHandle == NULL)
@@ -795,7 +860,8 @@ Sm120Model::Sm120Model(
   wideHeadP1Offset = -1;
   wideHeadG1Offset = -1;
   wideHeadV1Offset = -1;
-  if(options.wideHeadProjectionTactic != "disabled" &&
+  if(!options.portableSm103Adapter &&
+     options.wideHeadProjectionTactic != "disabled" &&
      options.useFusedPolicyP1 &&
      options.useHeadBNHalfToFloat && useFP16 && useNHWC &&
      nnXLen == 19 && nnYLen == 19) {
@@ -850,32 +916,34 @@ Sm120Model::Sm120Model(
   wideQKVRopeAotByBatch.resize(maxBatchSize + 1, nullptr);
   linear2AotByBatch.resize(maxBatchSize + 1, nullptr);
   outProjectionAotByBatch.resize(maxBatchSize + 1, nullptr);
-  for(int batch = 1; batch <= maxBatchSize; batch++) {
-    fa4AotByBatch[batch] = findFA4AotTactic(
-      batch, options.fa4AotTactic.c_str());
-    if(options.useFusedFFN) {
-      fusedFFNAotByBatch[batch] = findFusedFFNAotTactic(
-        batch, sm120NumSms, options.persistingL2Streams,
-        options.fusedFFNAotTactic.c_str());
-    }
-    if(options.useWideQKV && options.useQKVGemmAot) {
-      wideQKVAotByBatch[batch] = findWideQKVAotTactic(
-        batch, sm120NumSms, options.persistingL2Streams,
-        options.wideQKVAotTactic.c_str());
-    }
-    if(options.qkvRopeAotTactic != "disabled") {
-      wideQKVRopeAotByBatch[batch] = findWideQKVRopeAotTactic(
-        batch, options.qkvRopeAotTactic.c_str());
-    }
-    if(options.useLinear2ResidualAot) {
-      linear2AotByBatch[batch] = findResidualGemmAotTactic(
-        batch, sm120NumSms, options.persistingL2Streams, 1152,
-        options.linear2AotTactic.c_str());
-    }
-    if(options.useOutProjectionResidualAot) {
-      outProjectionAotByBatch[batch] = findResidualGemmAotTactic(
-        batch, sm120NumSms, options.persistingL2Streams, 384,
-        options.outProjectionAotTactic.c_str());
+  if(!options.portableSm103Adapter) {
+    for(int batch = 1; batch <= maxBatchSize; batch++) {
+      fa4AotByBatch[batch] = findFA4AotTactic(
+        batch, options.fa4AotTactic.c_str());
+      if(options.useFusedFFN) {
+        fusedFFNAotByBatch[batch] = findFusedFFNAotTactic(
+          batch, sm120NumSms, options.persistingL2Streams,
+          options.fusedFFNAotTactic.c_str());
+      }
+      if(options.useWideQKV && options.useQKVGemmAot) {
+        wideQKVAotByBatch[batch] = findWideQKVAotTactic(
+          batch, sm120NumSms, options.persistingL2Streams,
+          options.wideQKVAotTactic.c_str());
+      }
+      if(options.qkvRopeAotTactic != "disabled") {
+        wideQKVRopeAotByBatch[batch] = findWideQKVRopeAotTactic(
+          batch, options.qkvRopeAotTactic.c_str());
+      }
+      if(options.useLinear2ResidualAot) {
+        linear2AotByBatch[batch] = findResidualGemmAotTactic(
+          batch, sm120NumSms, options.persistingL2Streams, 1152,
+          options.linear2AotTactic.c_str());
+      }
+      if(options.useOutProjectionResidualAot) {
+        outProjectionAotByBatch[batch] = findResidualGemmAotTactic(
+          batch, sm120NumSms, options.persistingL2Streams, 384,
+          options.outProjectionAotTactic.c_str());
+      }
     }
   }
   if(options.useProjectionGemmLt)
@@ -957,6 +1025,11 @@ void Sm120Model::setLogger(Logger* logger_) {
   logger = logger_;
 }
 
+string Sm120Model::logMessage(const string& message) const {
+  return string(options.portableSm103Adapter ?
+    "SM103 portable backend: " : "SM120 backend: ") + message;
+}
+
 bool Sm120Model::hasPersistingL2Trunk() const {
   return persistingL2TrunkActive;
 }
@@ -1008,7 +1081,7 @@ void Sm120Model::apply(
 
   if(!loggedFallback) {
     if(logger != NULL)
-      logger->write("SM120 backend: official forward adapter active");
+      logger->write(logMessage("official forward adapter active"));
     loggedFallback = true;
   }
 
@@ -1241,7 +1314,7 @@ bool Sm120Model::ffnSingleGemm(
 
   if(!loggedWideFFNSingleGemm) {
     if(logger != NULL)
-      logger->write("SM120 backend: single-wide FFN projection active");
+      logger->write(logMessage("single-wide FFN projection active"));
     loggedWideFFNSingleGemm = true;
   }
   return true;
@@ -1295,7 +1368,7 @@ bool Sm120Model::matMulLt(
 
   if(!loggedProjectionGemmLt) {
     if(logger != NULL)
-      logger->write("SM120 backend: shape-keyed autotuned cuBLASLt FP16 MatMul active");
+      logger->write(logMessage("shape-keyed autotuned cuBLASLt FP16 MatMul active"));
     loggedProjectionGemmLt = true;
   }
   return true;
@@ -1402,8 +1475,8 @@ bool Sm120Model::initialGlobal(
   CUDA_ERR("Sm120InitialGlobal", cudaPeekAtLastError());
   if(!loggedInitialGlobal) {
     if(logger != NULL)
-      logger->write(
-        "SM120 backend: fused global-feature matmul+broadcast add active");
+      logger->write(logMessage(
+        "fused global-feature matmul+broadcast add active"));
     loggedInitialGlobal = true;
   }
   return true;
@@ -1571,7 +1644,7 @@ bool Sm120Model::qkvStrided(
 
   if(!loggedQKVStrided) {
     if(logger != NULL)
-      logger->write("SM120 backend: strided-batched QKV projection active");
+      logger->write(logMessage("strided-batched QKV projection active"));
     loggedQKVStrided = true;
   }
   return true;
@@ -1664,7 +1737,7 @@ bool Sm120Model::fusedResidualGemm(
 
   if(!loggedFusedResidualGemm) {
     if(logger != NULL)
-      logger->write("SM120 backend: GEMM beta residual fusion active");
+      logger->write(logMessage("GEMM beta residual fusion active"));
     loggedFusedResidualGemm = true;
   }
   return true;
@@ -1707,12 +1780,14 @@ bool Sm120Model::rmsNorm(
   }
   CUDA_ERR("Sm120RMSNorm384", cudaPeekAtLastError());
   if(!loggedRMSNorm384) {
-    if(logger != NULL)
-      logger->write(options.rmsNorm384Tactic == "warp4-vec8" ?
-        "SM120 backend: vec8 C384 RMSNorm active" :
+    if(logger != NULL) {
+      const string tacticMessage = options.rmsNorm384Tactic == "warp4-vec8" ?
+        "vec8 C384 RMSNorm active" :
         (options.rmsNorm384Tactic == "ordered-ept3" ?
-          "SM120 backend: ordered-EPT3 C384 RMSNorm active" :
-          "SM120 backend: one-warp C384 RMSNorm active"));
+          "ordered-EPT3 C384 RMSNorm active" :
+          "one-warp C384 RMSNorm active");
+      logger->write(logMessage(tacticMessage));
+    }
     loggedRMSNorm384 = true;
   }
   return true;
@@ -1756,17 +1831,17 @@ bool Sm120Model::fusedQKRoPE(
         (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
     if(!loggedBatchSharedQKRoPE) {
       if(logger != NULL)
-        logger->write(
+        logger->write(logMessage(
           options.useBatchSharedRoPEUnrolled && packedQKV ?
-          "SM120 backend: unrolled packed batch-shared fused Q/K RoPE active" :
-          "SM120 backend: batch-shared fused Q/K RoPE active");
+          "unrolled packed batch-shared fused Q/K RoPE active" :
+          "batch-shared fused Q/K RoPE active"));
       loggedBatchSharedQKRoPE = true;
     }
     if(options.useBatchSharedRoPEUnrolled && packedQKV &&
        !loggedBatchSharedQKRoPEAtMaxBatch) {
       if(logger != NULL)
-        logger->write(
-          "SM120 backend: unrolled packed batch-shared fused Q/K RoPE active");
+        logger->write(logMessage(
+          "unrolled packed batch-shared fused Q/K RoPE active"));
       loggedBatchSharedQKRoPEAtMaxBatch = true;
     }
   }
@@ -1775,7 +1850,7 @@ bool Sm120Model::fusedQKRoPE(
       (half*)qBuf, (half*)kBuf, freqs, batchSize, stream);
     if(!loggedFusedQKRoPEHalf2) {
       if(logger != NULL)
-        logger->write("SM120 backend: half2 fused Q/K RoPE active");
+        logger->write(logMessage("half2 fused Q/K RoPE active"));
       loggedFusedQKRoPEHalf2 = true;
     }
   }
@@ -1786,7 +1861,7 @@ bool Sm120Model::fusedQKRoPE(
   CUDA_ERR("Sm120FusedQKRoPE", cudaPeekAtLastError());
   if(!loggedFusedQKRoPE) {
     if(logger != NULL)
-      logger->write("SM120 backend: fused Q/K learnable RoPE active");
+      logger->write(logMessage("fused Q/K learnable RoPE active"));
     loggedFusedQKRoPE = true;
   }
   return true;
@@ -1814,7 +1889,7 @@ bool Sm120Model::swiGLU(
   CUDA_ERR("Sm120SwiGLU1152", cudaPeekAtLastError());
   if(!loggedSwiGLU1152) {
     if(logger != NULL)
-      logger->write("SM120 backend: contiguous half8 C1152 SwiGLU active");
+      logger->write(logMessage("contiguous half8 C1152 SwiGLU active"));
     loggedSwiGLU1152 = true;
   }
   return true;
@@ -1859,12 +1934,12 @@ bool Sm120Model::affineSilu(
   CUDA_ERR("Sm120AffineSiluHalf2", cudaPeekAtLastError());
   if(!loggedAffineSiluHalf2) {
     if(logger != NULL)
-      logger->write(
+      logger->write(logMessage(
         options.affineSiluTactic == "flat-vec8-c768" ?
-        "SM120 backend: flat vec8 C768 affine SiLU active" :
+        "flat vec8 C768 affine SiLU active" :
         options.affineSiluTactic == "half2x3" ?
-        "SM120 backend: half2x3 C384/C768 affine SiLU active" :
-        "SM120 backend: half2 C384/C768 affine SiLU active");
+        "half2x3 C384/C768 affine SiLU active" :
+        "half2 C384/C768 affine SiLU active"));
     loggedAffineSiluHalf2 = true;
   }
   return true;
@@ -1939,7 +2014,7 @@ bool Sm120Model::fusedPolicyP1(
   CUDA_ERR("Sm120FusedPolicyP1", cudaPeekAtLastError());
   if(!loggedFusedPolicyP1) {
     if(logger != NULL)
-      logger->write("SM120 backend: fused 19x19 policy P1 active");
+      logger->write(logMessage("fused 19x19 policy P1 active"));
     loggedFusedPolicyP1 = true;
   }
   return true;
@@ -2006,12 +2081,12 @@ void Sm120Model::persistingL2Window(
       stream, basePtr, numBytes, persistingL2TrunkHitRatio);
     if(!loggedPersistingL2Trunk) {
       if(logger != NULL) {
-        logger->write(
-          "SM120 backend: persisting-L2 C768 trunk active, window=" +
+        logger->write(logMessage(
+          "persisting-L2 C768 trunk active, window=" +
           Global::uint64ToString((uint64_t)persistingL2TrunkWindowBytes) +
           " requested=" + Global::uint64ToString((uint64_t)persistingL2RequestedBytes) +
           " actual=" + Global::uint64ToString((uint64_t)persistingL2ActualBytes) +
-          " hitRatio=" + Global::doubleToString(persistingL2TrunkHitRatio));
+          " hitRatio=" + Global::doubleToString(persistingL2TrunkHitRatio)));
       }
       loggedPersistingL2Trunk = true;
     }
@@ -2023,12 +2098,12 @@ void Sm120Model::persistingL2Window(
       stream, basePtr, numBytes, persistingL2InnerHitRatio);
     if(!loggedPersistingL2Inner) {
       if(logger != NULL) {
-        logger->write(
-          "SM120 backend: persisting-L2 C384 inner active, window=" +
+        logger->write(logMessage(
+          "persisting-L2 C384 inner active, window=" +
           Global::uint64ToString((uint64_t)persistingL2InnerWindowBytes) +
           " requested=" + Global::uint64ToString((uint64_t)persistingL2RequestedBytes) +
           " actual=" + Global::uint64ToString((uint64_t)persistingL2ActualBytes) +
-          " hitRatio=" + Global::doubleToString(persistingL2InnerHitRatio));
+          " hitRatio=" + Global::doubleToString(persistingL2InnerHitRatio)));
       }
       loggedPersistingL2Inner = true;
     }
