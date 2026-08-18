@@ -26,6 +26,7 @@
     "cudaSm89Forward": false
   },
   "portable_tactics": {
+    "cudaAffineSiluTacticSm120": "half2",
     "cudaRMSNormTacticSm120": "warp4-vec8",
     "cudaUseFusedQKRoPE": true,
     "cudaUseFusedResidual": true,
@@ -47,9 +48,9 @@
     "cudaUseFusedValueTerminalSm120": false
   },
   "latest_gate": {
-    "name": "planar_fused_qk_rope",
-    "median_nn_evals_per_sec": 6495.313934,
-    "gain_vs_previous_percent": 8.723379722058278,
-    "relative_spread": 0.0007910342829012027
+    "name": "affine_silu_half2",
+    "median_nn_evals_per_sec": 6737.9642655,
+    "gain_vs_previous_percent": 3.7357752676100198,
+    "relative_spread": 0.007679272991240894
   }
 }
