@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-request-error-case-study",
+  "status": "numerical_compromise_not_implementation_error",
+  "method": "compare_replay_krnn-compatible float32 stable softmax; byte-exact target/input audit",
+  "cases": [
+    {
+      "row": 4124,
+      "move": 358,
+      "coordinate": "R1",
+      "batch_thread": 1,
+      "batch_slot": 28,
+      "real_batch_size": 29,
+      "tail_padding": false,
+      "legal": true,
+      "fp32_top1_probability": 0.585242331,
+      "fp32_top1_top2_margin": 0.37807369,
+      "fp32_logit_margin": 1.038493,
+      "variants": {
+        "official_fp16": {
+          "probability": 0.585772932,
+          "delta": 0.000530601,
+          "row_rmse": 0.000042901
+        },
+        "tensorrt_10_16": {
+          "probability": 0.582983017,
+          "delta": -0.002259314,
+          "row_rmse": 0.000136223
+        },
+        "portable_best": {
+          "probability": 0.583315432,
+          "delta": -0.001926899,
+          "row_rmse": 0.000130226
+        },
+        "fast_a": {
+          "probability": 0.604031265,
+          "delta": 0.018788934,
+          "row_rmse": 0.001336507,
+          "raw_logit_correlation": 0.9999865
+        },
+        "newton_c": {
+          "probability": 0.585543811,
+          "delta": 0.00030148,
+          "row_rmse": 0.000032707
+        },
+        "precise_b": {
+          "probability": 0.586070418,
+          "delta": 0.000828087,
+          "row_rmse": 0.000062038
+        }
+      }
+    },
+    {
+      "row": 7111,
+      "move": 111,
+      "coordinate": "R14",
+      "batch_thread": 1,
+      "batch_slot": 28,
+      "real_batch_size": 29,
+      "tail_padding": false,
+      "legal": true,
+      "fp32_top1_probability": 0.402284771,
+      "fp32_top1_top2_margin": 0.18225391,
+      "fp32_logit_margin": 0.60339,
+      "variants": {
+        "official_fp16": {
+          "probability": 0.402708143,
+          "delta": 0.000423372,
+          "row_rmse": 0.000178162
+        },
+        "tensorrt_10_16": {
+          "probability": 0.401945114,
+          "delta": -0.000339657,
+          "row_rmse": 0.000046598
+        },
+        "portable_best": {
+          "probability": 0.403207421,
+          "delta": 0.00092265,
+          "row_rmse": 0.000113259
+        },
+        "fast_a": {
+          "probability": 0.401243716,
+          "delta": -0.001041055,
+          "row_rmse": 0.000107918
+        },
+        "newton_c": {
+          "probability": 0.377050579,
+          "delta": -0.025234193,
+          "row_rmse": 0.001633491,
+          "raw_logit_correlation": 0.9999944
+        },
+        "precise_b": {
+          "probability": 0.402921379,
+          "delta": 0.000636607,
+          "row_rmse": 0.000128571
+        }
+      }
+    }
+  ],
+  "layout_audit": {
+    "sections_5_through_11_byte_exact": true,
+    "actual_tail_ranges": [
+      "4089..4095",
+      "8185..8191"
+    ],
+    "slot_28_systematic_inflation": false,
+    "fixed_index_error_signature": false,
+    "spatial_permutation_signature": false
+  },
+  "diagnosis": {
+    "implementation_error": false,
+    "classification": "per-row nonlinear amplification of small arithmetic-path differences",
+    "reason": "precise math fixes both outliers; Newton fixes one but creates another while keeping coherent logits, proving end-to-end error is not monotone in an isolated arithmetic refinement"
+  }
+}
