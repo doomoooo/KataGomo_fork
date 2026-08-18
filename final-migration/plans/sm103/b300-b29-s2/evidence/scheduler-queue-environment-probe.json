@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-scheduler-environment-probe",
+  "status": "diagnostic_complete_no_runtime_override_retained",
+  "production_ready": false,
+  "target": {
+    "gpu": "NVIDIA B300 SXM6 AC",
+    "compute_capability": [10, 3],
+    "batch": 29,
+    "streams": 2,
+    "board": [19, 19],
+    "dtype": "FP16"
+  },
+  "graph": {
+    "baseline": "committed portable + no-AB12 FFN + native FA4",
+    "cuda_projection_gemm_lt": false,
+    "sm103_qkv_rope_tactic": "disabled",
+    "binary_sha256": "012696a8ec4d4303c655b14e9370e6800f80676a06fd4c761991a5228a4ad8c5"
+  },
+  "method": {
+    "command": "benchmarknn --batch-size 29 --boardsize 19 --warmup 80 --iterations 300 --json",
+    "gpu_serialization": "final-migration/environment/with-gpu-lock.sh --gpu 0",
+    "process_scope": "each environment value was set before CUDA initialization in a fresh process",
+    "sample_count_per_value": 1,
+    "interpretation": "short diagnostic only; differences below normal run-to-run noise are not performance claims"
+  },
+  "launch_queue_scale": {
+    "environment": "CUDA_SCALE_LAUNCH_QUEUES",
+    "samples_nn_evals_per_sec": {
+      "0.25x": 8940.264949,
+      "default": 8947.71182,
+      "2x": 8938.820285,
+      "4x": 8939.481688
+    },
+    "result": "default, 2x, and 4x are indistinguishable; enlarging the pending command buffer does not improve B29/S2"
+  },
+  "hyper_q_connections": {
+    "environment": "CUDA_DEVICE_MAX_CONNECTIONS",
+    "samples_nn_evals_per_sec": {
+      "1": 8826.945471,
+      "2": 8938.15257,
+      "8": 8950.19766,
+      "16": 8947.071642
+    },
+    "result": "one connection regresses, two restores most throughput, and the default eight is already sufficient; sixteen adds no benefit"
+  },
+  "related_timeline_evidence": {
+    "pending_descriptors_per_outer_stream": 1024,
+    "median_launch_api_lead_ms": 17.45,
+    "plan": "scheduler-submission-window-qkv-aux-plan.json"
+  },
+  "decision": {
+    "retain_cuda_scale_launch_queues_override": false,
+    "retain_cuda_device_max_connections_override": false,
+    "reason": "The default queue capacity and eight Hyper-Q connections already saturate this two-stream workload. Larger values do not create additional ready grids or improve throughput."
+  }
+}
