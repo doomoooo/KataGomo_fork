@@ -1,0 +1,306 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-mslk-low-hanging-audit",
+  "timestamp_utc": "2026-08-18T11:59:44Z",
+  "status": "cpu_only_read_only_audit_one_isolated_candidate_recommended",
+  "scope": {
+    "included": [
+      "installed MSLK 1.3.0+cu132 wheel architecture and native ABI",
+      "Blackwell FMHA FP16/BF16 D32 exact B29/S361/H12/D32 feasibility",
+      "dense FP16/BF16 GEMM and fusion compatibility for K/N 384, 768, 1152 and 2304",
+      "source-build versus wheel capability",
+      "one bounded source-derived grouped-QKV candidate"
+    ],
+    "excluded": [
+      "FP8",
+      "INT8",
+      "FP4 and INT4",
+      "GPU execution",
+      "core or CMake changes"
+    ]
+  },
+  "installed_wheel": {
+    "distribution": "mslk==1.3.0+cu132",
+    "python": "CPython 3.14",
+    "wheel_tag": "cp314-cp314-manylinux_2_28_x86_64",
+    "site_packages": ".final-migration-env/venv/lib/python3.14/site-packages",
+    "native_library": ".final-migration-env/venv/lib/python3.14/site-packages/mslk/mslk.so",
+    "native_library_bytes": 315039304,
+    "native_library_sha256": "a80263f308ed4ce664323644e1b8a8cbb9f374c0e36f2c4d413847346bb940a6",
+    "native_dependencies": [
+      "libtorch.so",
+      "libc10.so",
+      "libc10_cuda.so",
+      "libtorch_cpu.so",
+      "libtorch_cuda.so",
+      "libcublas.so.13",
+      "libcublasLt.so.13",
+      "libcudart.so.13"
+    ],
+    "activation_guard": "final-migration/environment/activate-sm103.sh exports MSLK_PYTHON_ONLY=1, so the unsupported native image is not loaded in the managed SM103 environment.",
+    "fatbin_cuobjdump": {
+      "tool": "cuobjdump --list-elf/--list-ptx",
+      "cubin_images_by_arch": {
+        "sm_75": 311,
+        "sm_80": 311,
+        "sm_86": 311,
+        "sm_90": 311,
+        "sm_100": 311,
+        "sm_120": 311
+      },
+      "ptx_images_by_arch": {
+        "sm_120": 311
+      },
+      "sm_103_images": 0,
+      "sm_103a_images": 0,
+      "conclusion": "The wheel has neither an SM103 cubin nor SM103 PTX. An SM100 cubin may be a compatibility oracle only; it is not an architecture-exact B300 artifact and is not a production candidate."
+    },
+    "source_release_matrix": "The official MSLK release table lists compiled CUDA architectures 8.0, 9.0a, 10.0a and 12.0a for 1.3.0; it does not list 10.3a.",
+    "official_repository": "https://github.com/meta-pytorch/MSLK"
+  },
+  "source_identity": {
+    "audited_tag": "v1.3.0-rc1",
+    "peeled_commit": "a4182284fbc4c5205d9427b923a0e999c48b03a7",
+    "temporary_checkout": "/tmp/mslk-audit.ls1En1/source",
+    "cutlass_submodule_commit": "8677ac2cc059abbb87ec672fda01a102c2d9ec36",
+    "identity_method": "Relevant installed Python files were compared byte-for-byte with the tagged source checkout; native dynamic symbols agree with the source instantiation list.",
+    "identical_python_files": [
+      {
+        "path": "mslk/attention/cutlass_blackwell_fmha/cutlass_blackwell_fmha_interface.py",
+        "sha256": "7249e7af531de6af9f084282ef69c1ffe875bdfe2d2ade245cc480f0cb4afb55"
+      },
+      {
+        "path": "mslk/attention/fmha/cutlass_blackwell.py",
+        "sha256": "f1a84b08b3263128483b4e8e4a54f51f725038a05e5f1d527ea7da4386c50c8c"
+      },
+      {
+        "path": "mslk/gemm/triton/grouped_gemm.py",
+        "sha256": "a1c0636b82fab630c7e5842de12214a4f38c165b0168c996819f08376cbf4b94"
+      },
+      {
+        "path": "mslk/gemm/blackwell_mixed_input_gemm/mixed_input_gemm.py",
+        "sha256": "11a9af6911634b6e9ff15b62342383bb8966b073ffba246804af2ef61aed85c4"
+      },
+      {
+        "path": "mslk/gemm/_meta.py",
+        "sha256": "4c7fb5b768d55b6c375b5d1b81e0ae0ac2d28aa557978f47ead34df7c54cb528"
+      }
+    ],
+    "local_cutlass_4_7": {
+      "checkout": ".final-migration-env/third_party/cutlass",
+      "commit": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+      "example_77_readme_sha256": "d6aad89d8346654b1f39bb01b83581734a24f419ca6119430018c98d471726fc",
+      "example_77_source_sha256": "63853adce7e7e0a06a3154d8a449e791c1ca325e79d66ad6607ef63473ed5d93"
+    }
+  },
+  "fmha_d32_audit": {
+    "installed_high_level": {
+      "path": ".final-migration-env/venv/lib/python3.14/site-packages/mslk/attention/fmha/cutlass_blackwell.py",
+      "supported_dtypes": ["FP16", "BF16"],
+      "supported_head_dims": [64, 128],
+      "minimum_head_dim": 64,
+      "maximum_head_dim": 128,
+      "compute_capability_gate": "major >= 10"
+    },
+    "installed_native_symbols": {
+      "fp16_bf16_forward_template_symbols": 20,
+      "head_dim_32": 0,
+      "head_dim_64": 4,
+      "head_dim_128": 16
+    },
+    "production_source": {
+      "dispatch_path": "csrc/attention/cuda/cutlass_blackwell_fmha/blackwell_fmha_fwd.cu",
+      "template_path": "csrc/attention/cuda/cutlass_blackwell_fmha/blackwell_fmha_fwd_template.cuh",
+      "fp16_instantiation_path": "csrc/attention/cuda/cutlass_blackwell_fmha/blackwell_fmha_fwd_fp16_inst.cu",
+      "dispatch_head_dims": [64, 128],
+      "fp16_instantiated_head_dims": [64, 128],
+      "tile": [256, 128],
+      "scheduler": "static persistent",
+      "qk_accumulator": "FP32",
+      "pv_accumulator": "FP32",
+      "output": "FP16 plus mandatory FP32 LSE tensor allocated through ATen"
+    },
+    "sample_source_contradiction": {
+      "path": ".final-migration-env/third_party/cutlass/examples/77_blackwell_fmha/77_blackwell_fmha.cu",
+      "readme_claim": "D32/D64/D128 with FP8/FP16/BF16",
+      "actual_d32_guard": "run_fwd_32 instantiates its 256x128 kernel only under #ifdef FP8",
+      "fp16_d32_sample_result": "No kernel is instantiated in the FP16 sample binary."
+    },
+    "exact_b29_contract": {
+      "shape": [29, 361, 12, 32],
+      "layout": "BSHD planar Q/K/V",
+      "dtype": "FP16",
+      "scale": "1/sqrt(32)",
+      "causal": false,
+      "sequence_tail": "361 % 128 != 0, so MSLK dispatch requires ResidualMask rather than NoMask"
+    },
+    "minimum_source_experiment_patch": [
+      "Add D32 to dispatch_head_dim.",
+      "Instantiate fmha_fwd<half_t,half_t,32,false,ResidualMask>.",
+      "Relax the Python FwOp minimum/_TEST_K checks for D32."
+    ],
+    "production_blockers": [
+      "D32 FP16 is uninstantiated and untested in both the wheel and copied CUTLASS sample.",
+      "The API allocates output and LSE through ATen instead of accepting KataGo's caller-owned output.",
+      "The kernel always materializes LSE while the retained FA4 path requests no LSE.",
+      "There is no standalone AOT C-header/object exporter; normal build output is a Torch-dependent 315 MB shared library.",
+      "The wheel is SM100/SM120, not SM103a."
+    ],
+    "comparison_to_retained_fa4": {
+      "retained_evidence": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-06-fa4-native-profile.json",
+      "fa4_target": "exact sm_103a",
+      "fa4_tile": [128, 128],
+      "fa4_grid_ctas": 148,
+      "fa4_output": "caller-owned FP16 O with no LSE",
+      "fa4_s1_microseconds": 21.243999004364014,
+      "fa4_s2_round_microseconds": 37.701120376586914,
+      "fa4_long_nn_evals_per_sec": 8949.114828,
+      "decision": "Drop MSLK FMHA as a low-hanging swap. Matching the retained path requires a large port with no concrete reason to beat the already-qualified FA4 kernel."
+    },
+    "classification": "large_port"
+  },
+  "dense_and_fusion_audit": {
+    "native_grouped_fp16_bf16": {
+      "dispatcher": "csrc/gemm/cutlass/bf16bf16bf16_grouped.cu",
+      "common_template": "csrc/gemm/cutlass/bf16bf16bf16_grouped/bf16bf16bf16_grouped_common.cuh",
+      "misleading_name_note": "Despite the bf16 name, source and wheel dispatch accept at::kHalf and at::kBFloat16.",
+      "types": {
+        "A": "FP16 or BF16",
+        "B": "same as A",
+        "accumulator": "FP32",
+        "output": "same as A"
+      },
+      "layouts": "row-major X[M,K], row-major W[N,K] through the ptr-array transpose mapping, row-major output[M,N]",
+      "epilogue": "overwrite only; no beta/C input, residual, bias, SiLU, SwiGLU or affine fusion",
+      "shape_alignment": {
+        "tile_k": 128,
+        "compatible_k_n_values": [384, 768, 1152, 2304],
+        "reason": "all are multiples of 128 and satisfy the 128-bit alignment contract"
+      },
+      "arch10_large_m_heuristic": {
+        "condition": "arch major 10 and total_M > 2048 outside the two Llama-specific shapes",
+        "selected_kernel": "bf16bf16bf16_grouped_256_256_128_2_1_1_10_f",
+        "tile": [256, 256, 128],
+        "cluster": [2, 1, 1],
+        "schedule": "SM100 2-SM ptr-array TMA warp-specialized"
+      },
+      "source_hashes": {
+        "dispatcher": "a3fae536c456e99c7a64658e7a2e9e975ad3ec9f28a3b930e74c944ace2fccef",
+        "common_template": "06199153b14068869a1e2e704cbecf2cce12d6e4ada3f8cedbc82788e4caf3e3",
+        "exact_arch10_kernel_wrapper": "102ef1f0057164ef61391bfc7533db599cbed3d8ccce680d005acb4d2f113287"
+      }
+    },
+    "boundary_matrix": [
+      {
+        "boundary": "Q/K/V projections",
+        "shape": "three times M10469 K384 N384 with one common X",
+        "math_match": true,
+        "constraint": "TensorList can repeat the same X pointer, but the stock path launches three argument-setup kernels and allocates through ATen; stacked API partitions X and cannot reuse it without copying.",
+        "classification": "small_oracle_patch_large_production_port"
+      },
+      {
+        "boundary": "single K384/N384, N768, N1152 or N2304 projection",
+        "math_match": true,
+        "constraint": "No advantage is established over cuBLAS/CuTe; stock entry still carries Torch allocation and argument setup.",
+        "classification": "large_production_port"
+      },
+      {
+        "boundary": "dual FFN projections plus SwiGLU",
+        "shape": "M10469 K384 N1152 twice",
+        "math_match": false,
+        "constraint": "Grouped GEMM emits two tensors but does not fuse SwiGLU; retained no-AB12 kernel already fuses both projections, FP16 round-trip and SwiGLU in one 148-CTA launch.",
+        "classification": "reject"
+      },
+      {
+        "boundary": "linear2/out projection plus beta=1 residual",
+        "shape": "K1152/N384 or K384/N384",
+        "math_match": false,
+        "constraint": "MSLK grouped epilogue has no C input or beta=1 path.",
+        "classification": "large_evt_port_reject_as_low_hanging"
+      },
+      {
+        "boundary": "affine-SiLU or SwiGLU pointwise",
+        "math_match": false,
+        "constraint": "MSLK silu_mul is a separate Triton launch, not a GEMM epilogue. For T10469 it selects BLOCK_D_INNER=1024 and asserts D % 1024 == 0, so KataGo D1152 and D384 do not satisfy its own wrapper.",
+        "classification": "reject"
+      }
+    ],
+    "triton_grouped": {
+      "path": ".final-migration-env/venv/lib/python3.14/site-packages/mslk/gemm/triton/grouped_gemm.py",
+      "output_dtype": "hard-coded BF16 for the ordinary grouped path",
+      "same_x_qkv": "unsupported without replicating/partitioning the input rows",
+      "fusion": "bias and token scaling only; no residual or SiLU/SwiGLU",
+      "classification": "reject_for_exact_fp16"
+    },
+    "bf16_swap": {
+      "kernel_availability": "Native grouped source supports BF16 with FP32 accumulation.",
+      "katago_compatibility": "The retained network stores FP16 weights and activations. A BF16 swap requires weight conversion and either per-boundary activation conversion or a whole-network precision migration.",
+      "decision": "Not an exact backend swap and not low-hanging."
+    },
+    "mixed_input": {
+      "path": ".final-migration-env/venv/lib/python3.14/site-packages/mslk/gemm/blackwell_mixed_input_gemm/mixed_input_gemm.py",
+      "constraint": "The CuTe DSL kernel requires a narrow INT4/INT8 operand with FP16/BF16 as the wider operand; it is outside the allowed precision scope and is not a plain FP16/BF16 GEMM."
+    }
+  },
+  "classification_summary": {
+    "drop_in": [],
+    "small_patch": [
+      "D32 dispatch plus one fixed-length FP16 ResidualMask instantiation can make an MSLK Torch oracle compile, but does not make it production-usable.",
+      "The installed SM100 grouped-QKV TensorList op can serve only as a compatibility oracle if its non-SM103 wheel is explicitly allowed in an isolated subprocess."
+    ],
+    "large_port": [
+      "MSLK FMHA D32 to standalone exact-SM103a caller-output/no-LSE C ABI",
+      "MSLK grouped GEMM to standalone exact-SM103a C ABI with persistent argument/workspace ownership",
+      "any residual, affine, SiLU or SwiGLU epilogue fusion",
+      "whole-model BF16 migration"
+    ]
+  },
+  "recommended_one_shot": {
+    "count": 1,
+    "candidate_id": "mslk13-source-sm103a-fp16-grouped-qkv-m10469-n384-k384-g3-m256n256k128-c2",
+    "purpose": "Isolated oracle only; do not wire into core until it wins S2 and profiler gates.",
+    "source_recipe": "csrc/gemm/cutlass/bf16bf16bf16_grouped/bf16bf16bf16_grouped_256_256_128_2_1_1_10_f.cu",
+    "exact_contract": {
+      "architecture": "sm_103a source build using CUTLASS 4.7",
+      "dtype_a_b_c": "FP16",
+      "accumulator": "FP32",
+      "groups": 3,
+      "m": 10469,
+      "n": 384,
+      "k": 384,
+      "tile": [256, 256, 128],
+      "cluster": [2, 1, 1],
+      "input_pointers": ["X", "X", "X"],
+      "weight_pointers": ["Wq", "Wk", "Wv"],
+      "output_order": ["Q", "K", "V"],
+      "output_layout": "the existing three planar buffers",
+      "rope": "not fused; retain the accepted planar Q/K RoPE kernel"
+    },
+    "argument_ownership": "Remove ATen/Torch from the experimental launch wrapper. Allocate problem shapes, pointer arrays, strides and CUTLASS workspace once; update only pointers if required. The timed boundary must contain one grouped GEMM launch and no argument-setup kernels or allocations.",
+    "wave_hypothesis": {
+      "b300_sms": 148,
+      "two_sm_clusters_per_wave": 74,
+      "current_projection_grid": "252 CTAs = 126 two-SM clusters; each of Q, K and V rounds to two waves, six waves total",
+      "candidate_clusters_per_group": "ceil(10469/256) * ceil(384/256) = 41 * 2 = 82",
+      "candidate_total_clusters": 246,
+      "candidate_lower_bound_waves": 4,
+      "hypothesis": "The grouped recipe may replace six rounded cluster waves with four while preserving three FP16 projection boundaries."
+    },
+    "falsification_risks": [
+      "A four-wave 2-SM grouped grid is a longer exclusive interval and may reduce cross-stream overlap, repeating the failure mode of the dropped fused QKV+RoPE candidate.",
+      "The MSLK heuristic was tuned by architecture major and LLM shapes, not B29 K384/N384 on SM103.",
+      "Porting from the tagged MSLK CUTLASS fork to CUTLASS 4.7 may change builder APIs or resource use.",
+      "The raw layout mapping must be proven bitwise against three cublasHgemm calls."
+    ],
+    "gate_order": [
+      "CPU compile and C ABI identity audit for exact sm_103a; reject any SM100-only artifact.",
+      "Bitwise Q/K/V comparison against the current FP16 projections, including planar order and tail rows.",
+      "Isolated S1 and coordinated S2 boundary timing against exactly three current projection calls.",
+      "NCU resource proof: actual cluster, shared memory, registers, spills and waves.",
+      "Only if isolated S2 wins, one short accumulated B29/S2 NSYS run measuring QKV union and FFN/FA4 overlap.",
+      "Only if whole-graph union wins, long and accuracy gates under the normal stage process."
+    ],
+    "stop_condition": "Drop immediately if it does not beat the three-projection S2 boundary or if its longer exclusive interval increases whole-graph union. Do not scan other MSLK dense shapes afterward."
+  },
+  "final_decision": "MSLK 1.3 supplies no drop-in SM103a backend for the retained FP16 graph. Its FMHA is not a D32 competitor to FA4 without a large port. The only source pattern with a plausible low-cost performance hypothesis is the exact FP16 grouped-QKV recipe above, and it merits at most one isolated/profiler-guided attempt."
+}
