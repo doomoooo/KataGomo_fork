@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-profiler-guided-negative-result",
+  "boundary": "attention-outproj-beta1-residual-to-next-ffn-pre-rmsnorm",
+  "status": "closed_after_isolated_s2_hard_gate",
+  "production_ready": false,
+  "current_cumulative_baseline": {
+    "lineage": "retained no-AB12 fused FFN plus retained native FA4",
+    "profile": ".final-migration-env/profiles/sm103-b29/stage-06-fa4-native/full-graph-fa4.sqlite",
+    "profile_sha256": "9bbf2633220e52ed04276d6f08205244360116ca28b1f91dc517d824e010b9a7",
+    "kernel_events": 58476,
+    "profile_forwards": 144,
+    "adjacency": {
+      "same_stream_immediate_fa4_outproj_rms_triples": 4752,
+      "triples_per_forward": 33,
+      "unmatched_attention_launches": 0,
+      "outproj_grid_block": [6, 42, 1, 256, 1, 1],
+      "rmsnorm_grid_block": [2618, 1, 1, 128, 1, 1]
+    },
+    "boundary_per_forward_ms": {
+      "raw_kernel_sum": 0.5773672013888889,
+      "selected_union": 0.5741209444444445,
+      "covered_by_other_kernel_families": 0.45921147222222225,
+      "exclusive_exposed_union": 0.11490947222222223,
+      "same_stream_launch_gap": 0.0960571875
+    },
+    "opportunity": {
+      "boundary_share_of_kernel_sum_percent": 11.394288631543679,
+      "boundary_exposed_share_of_kernel_union_percent": 3.4280347516924445,
+      "boundary_union_covered_by_other_families_percent": 79.98514540635409,
+      "launches_removed_per_forward_by_fusion": 33
+    }
+  },
+  "semantic_contract": {
+    "shape": {
+      "batch": 29,
+      "rows": 10469,
+      "k": 384,
+      "n": 384,
+      "dtype": "FP16",
+      "accumulator": "FP32",
+      "mask": null
+    },
+    "operation": "P=half(Attn@W); T=half(float(old_trunk)+float(P)); S=fp32_xor_sum(T*T); Y=half(float(T)*rsqrt(S/384+1e-6)*gamma+beta)",
+    "trunk_update": "in-place FP16",
+    "normalized_output": "separate FP16 scratch",
+    "production_beta": "allocated all-zero FP16 vector",
+    "rms_reduction": "incumbent six half2 groups per lane followed by the 32-lane XOR tree",
+    "cpp_and_model_proof": "python/sm103_cute_b29_outproj_rmsnorm.py"
+  },
+  "implementation": {
+    "provider": "NVIDIA CUTLASS/CuTe DSL 4.7.0",
+    "cutlass_commit": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+    "dense_source_sha256": "f99bc4cc1e0aea8990e2929d7c703dfc8196d797b7c9f5a889eabcd3c4ff67ec",
+    "compile_target": "sm_103a",
+    "mainloop": "one-CTA tcgen05/TMEM/TMA FP32 GEMM per N192 CTA with a (1,2) N cluster and multicast A",
+    "epilogue": "FP16 projection round, FP16 beta1 residual round, TMA store",
+    "rms_handoff": "full TMA-store wait plus async/global proxy fence and cluster barrier; cluster CTAs remap from N halves to disjoint M-row halves",
+    "rms_tail": "each warp reloads a complete C384 updated-trunk row with incumbent uint4+uint2 ownership; no cross-CTA numeric reduction",
+    "external_abi": "one trunk pointer is both old residual and output; alias cannot drift",
+    "core_or_cmake_modified": false,
+    "compile_debug": [
+      {
+        "failure": "RMS tail accidentally consumed the TMA destination coordinate tensor",
+        "fix": "consume the separately retained raw in-place trunk tensor"
+      },
+      {
+        "failure": "CuTe verifier rejected a space attribute on async.global proxy fence",
+        "fix": "use fence_proxy(\"async.global\") and the explicit cluster barrier for cluster synchronization"
+      }
+    ]
+  },
+  "candidate_m64n192_occ6": {
+    "candidate_id": "cute47-sm103-b29-outproj-beta1-rmsnorm-m64n192-clustern2-rowremap-exact-occ6",
+    "artifact_dir": ".final-migration-env/artifacts/cute-sm103-b29-outproj-rmsnorm-m64n192-clustern2-exact-occ6",
+    "manifest_sha256": "5b39825b15e8bb5d12d1163bb40f9cf9bdd178e6cc211e10889a53799b2cbcc5",
+    "derivative_sha256": "e554f31a92325167e77f864c798321458485d4134a4ae50673bb7e3b06fb103d",
+    "object_sha256": "d1b6e6946d7ded1e93847ad89dec7433fd64802c9ba9c80827440c056a751a9c",
+    "library_sha256": "abf4c2212c5d4384e96cd14f9ae762122066f94c03feb77505a899527cd2b8db",
+    "schedule": {
+      "mma_tile": [64, 192],
+      "cluster": [1, 2],
+      "dense_occupancy_knob": 6,
+      "ab_stages": 3,
+      "epilogue_stages": 2,
+      "grid": [164, 2, 1],
+      "threads": 128
+    },
+    "correctness": {
+      "trunk_max_abs": 0.0,
+      "trunk_rmse": 0.0,
+      "normalized_max_abs": 0.0,
+      "normalized_rmse": 0.0,
+      "rms_tail_only_max_abs": 0.0,
+      "rms_tail_only_rmse": 0.0,
+      "interpretation": "candidate is elementwise identical to the strict projection/residual/Vec8-RMS control"
+    },
+    "isolated_confirm": {
+      "record": ".final-migration-env/profiles/sm103-b29/outproj-rmsnorm-occ6/validation-confirm.json",
+      "record_sha256": "2bfbd66e4bb876bf1aefe9dc8b9c2cab2dc04f9a69df322ad8328af274c974bd",
+      "warmup": 40,
+      "iterations": 500,
+      "samples": 5,
+      "s1_candidate_us": 24.74176025390625,
+      "s1_incumbent_us": 13.22867202758789,
+      "s2_candidate_round_us": 28.50899124145508,
+      "s2_incumbent_round_us": 26.277120590209962,
+      "s2_regression_percent": 8.493589103810129,
+      "candidate_two_stream_speedup_vs_serial": 1.7357162899491947,
+      "candidate_parallel_efficiency_percent": 86.78581449745974
+    },
+    "ncu": {
+      "report": ".final-migration-env/profiles/sm103-b29/outproj-rmsnorm-occ6/candidate-full.ncu-rep",
+      "report_sha256": "33d17303070d6c6c0bd133e792c5f47c0a5999307c4c4fb4ba6f9012fa359de4",
+      "passes": 20,
+      "grid_blocks": 328,
+      "threads_per_block": 128,
+      "registers_per_thread": 52,
+      "dynamic_shared_kib": 114.82,
+      "driver_shared_kib": 1.02,
+      "block_limit_shared_memory": 2,
+      "theoretical_occupancy_percent": 12.5,
+      "achieved_occupancy_percent": 9.36,
+      "waves_per_sm": 1.11,
+      "partial_wave_blocks": 32,
+      "no_eligible_percent": 86.8,
+      "long_scoreboard_stall_percent": 60.4,
+      "compute_throughput_percent": 10.53,
+      "memory_throughput_percent": 13.78,
+      "l2_hit_rate_percent": 54.08,
+      "local_memory_spilling_requests": 0,
+      "replay_duration_us": 48.29,
+      "conclusion": "the two-resident-CTA resource prediction is exact, but the kernel remains latency/scoreboard bound and its 32-block partial wave contributes tail"
+    },
+    "decision": "one profiler-guided M128 revision allowed because S2 nearly recovered despite the large S1 loss"
+  },
+  "candidate_m128n192_occ6": {
+    "candidate_id": "cute47-sm103-b29-outproj-beta1-rmsnorm-m128n192-clustern2-rowremap-exact-occ6",
+    "hypothesis": "halve cluster count and S2 block waves while preserving physical two-CTA residency; accept S1 underfill",
+    "artifact_dir": ".final-migration-env/artifacts/cute-sm103-b29-outproj-rmsnorm-m128n192-clustern2-exact-occ6",
+    "manifest_sha256": "6123067f2cb91d8ee220947e04d470ba88b79a37b73aa7672b4344ff1e06a35a",
+    "derivative_sha256": "6ae1e74a97cb006acbcdb7bfe8bcf99d3d27489a51d4fe46ebd8ca74f8f0b8c0",
+    "object_sha256": "77ba64bba7138fa55ecf9467f017bc62678da5699bda39f629a5a4732a0d4e6e",
+    "library_sha256": "a547843417a44b163ffff9c5d8f0f9ad114c95a901936d48a1c1ece119c104a7",
+    "schedule": {
+      "mma_tile": [128, 192],
+      "cluster": [1, 2],
+      "dense_occupancy_knob": 6,
+      "ab_stages": 2,
+      "epilogue_stages": 2,
+      "expected_dynamic_shared_bytes": 99328,
+      "expected_driver_shared_bytes": 1024,
+      "expected_two_resident_headroom_bytes": 32768,
+      "grid": [82, 2, 1],
+      "threads": 128
+    },
+    "correctness": {
+      "trunk_max_abs": 0.0,
+      "trunk_rmse": 0.0,
+      "normalized_max_abs": 0.0,
+      "normalized_rmse": 0.0,
+      "rms_tail_only_max_abs": 0.0,
+      "rms_tail_only_rmse": 0.0
+    },
+    "isolated": {
+      "record": ".final-migration-env/profiles/sm103-b29/outproj-rmsnorm-m128-occ6/validation.json",
+      "record_sha256": "22d313aaa614132ce3210224ab7cbb0b108d6ea32ff198c9a70d1f51d7f1a104",
+      "warmup": 20,
+      "iterations": 100,
+      "samples": 5,
+      "s1_candidate_us": 76.24224185943604,
+      "s1_incumbent_us": 13.766080141067505,
+      "s2_candidate_round_us": 78.8268804550171,
+      "s2_incumbent_round_us": 27.05375909805298,
+      "approved_hard_gate_us": 26.277120590209962,
+      "hard_gate_passed": false
+    },
+    "ncu": "not run after isolated hard-gate failure",
+    "whole_graph": "not run after isolated hard-gate failure",
+    "decision": "drop"
+  },
+  "source_snapshot": {
+    "contract": {
+      "path": "python/sm103_cute_b29_outproj_rmsnorm.py",
+      "sha256": "d5ac842f4cb8bbdb01042d7b55cc1a74db17e0d8903081edacf226c426101634"
+    },
+    "generator": {
+      "path": "python/sm103_generate_cute_b29_outproj_rmsnorm_aot.py",
+      "sha256": "da4dcf81b484cf8eb002b71fbad106de444ea848fbb26cc0d91f2a26cc1c6a98"
+    },
+    "validator": {
+      "path": "python/sm103_cute_b29_outproj_rmsnorm_validate.py",
+      "sha256": "2361ba5e7806aedf2f74e438da22815d8ca077907355d448d1af8b72302920b0"
+    },
+    "tests": {
+      "path": "python/tests/test_sm103_cute_b29_outproj_rmsnorm.py",
+      "sha256": "13e25bbb3171db9f5233f19e6da1470e56f8aea6c327d29df26c5df11ef1a4c6"
+    }
+  },
+  "final_decision": {
+    "outcome": "close_boundary",
+    "retained_runtime": "incumbent cublasHgemm beta1 outproj plus rmsNorm384Vec8Kernel",
+    "core_or_cmake_integration": false,
+    "long_gate": "not entered",
+    "accuracy_request_gate": "not entered because isolated S2 failed",
+    "reason": "M64 proved the resource cliff and exact arithmetic but remained 8.49% slower in S2; the only profiler-guided M128 rounding was catastrophically slower and failed its explicit S2 hard gate"
+  }
+}
