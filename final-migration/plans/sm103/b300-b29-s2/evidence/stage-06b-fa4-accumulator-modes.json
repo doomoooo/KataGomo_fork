@@ -1,0 +1,218 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-isolated-negative-result",
+  "stage": "06b-fa4-accumulator-modes",
+  "status": "closed_after_fixed_four-mode-isolated-s2-gate",
+  "production_ready": false,
+  "parent": {
+    "candidate_id": "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32",
+    "retained_commit": "230dd195c24d0ed89cf9597171409f7dba5ba726",
+    "retained_evidence": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-06-fa4-native-profile.json"
+  },
+  "hypothesis": {
+    "statement": "Test whether SM89/SM120's reduced QK/PV accumulator choices transfer to the native SM103a FA4 D32 kernel and improve two-stream execution.",
+    "fixed_matrix": ["fp32", "qk16", "pv16", "both16"],
+    "fixed_schedule": "sm103a/B29/S361/H12/D32/M128N128/q2/kv24/static-persistent",
+    "invariants": {
+      "batch": 29,
+      "sequence": 361,
+      "heads": 12,
+      "head_dim": 32,
+      "qk_scale": "1/sqrt(32)",
+      "causal": false,
+      "planar_qkv": true,
+      "output_dtype": "fp16",
+      "tile_m": 128,
+      "tile_n": 128,
+      "q_stages": 2,
+      "kv_stages": 24,
+      "static_persistent": true
+    },
+    "excluded_search_axes": ["tile shape", "pipeline stages", "CGA shape", "scheduler", "subtiling"]
+  },
+  "upstream_audit": {
+    "flash_attention_checkout": "0251105a2fb19d2957484b7f023cd8c115286ced",
+    "flash_fwd_sm100_path": ".final-migration-env/venv/lib/python3.14/site-packages/flash_attn/cute/flash_fwd_sm100.py",
+    "flash_fwd_sm100_sha256": "f5928a15a7aa559084d14aa12cc2c95efdc89c7b3a1f0d20219b24103a32456f",
+    "public_accumulator_switch": false,
+    "hardcoded_sites": {
+      "qk_accumulator_fp32_line": 202,
+      "pv_accumulator_fp32_line": 203,
+      "qk_to_probability_fp32_width_line": 1152,
+      "pv_packed_fp32_correction_lines": [2922, 3001]
+    },
+    "conclusion": "The upstream SM100/SM103 FA4 path has no supported accumulator-mode interface. Post-construction dtype substitution is only a compile probe; valid FP16 modes require a typed derivative that covers every TMEM copy, pointer, probability-store, online-correction, and softmax arithmetic boundary."
+  },
+  "attribute_only_compile_probes": {
+    "fp32": {
+      "status": "compiled",
+      "manifest": ".final-migration-env/artifacts/fa4-sm103a-b29-accum-fp32/accum-manifest.json",
+      "manifest_sha256": "613e3ae6bbaec7687562b0f0611b8e8460456215d3e76656ec26c0101cd58440"
+    },
+    "qk16": {
+      "status": "compile_failed",
+      "failure": ".final-migration-env/artifacts/fa4-sm103a-b29-accum-qk16/compile-failure.json",
+      "failure_sha256": "c50cbc57bb05b0579f19e0b94fdecc7bd474e9d1eec6d7c761ff938057174e38",
+      "typed_site": "Ld32 QK layout (64,32) is incompatible with the packed FP16 accumulator layout (2,32,32)."
+    },
+    "pv16": {
+      "status": "compile_failed",
+      "failure": ".final-migration-env/artifacts/fa4-sm103a-b29-accum-pv16/compile-failure.json",
+      "failure_sha256": "1b68eed2c47fc162c6a5dd14d596068431751476959eda1ca3b2bc5cd6f9b8e8",
+      "typed_site": "Ld32 PV layout (32,32) is incompatible with the packed FP16 accumulator layout (2,16,32)."
+    },
+    "both16": {
+      "status": "compile_failed",
+      "failure": ".final-migration-env/artifacts/fa4-sm103a-b29-accum-both16/compile-failure.json",
+      "failure_sha256": "65a30350bbee70ce13dea0e3e1d9153be44a54a854652077ecf0d962508cae13",
+      "typed_site": "The first QK typed-layout mismatch is identical to qk16."
+    }
+  },
+  "typed_derivative": {
+    "parent_sha256": "f5928a15a7aa559084d14aa12cc2c95efdc89c7b3a1f0d20219b24103a32456f",
+    "final_superset_sha256": "2d8dcb7fb9b2934de6fdde4fa2647e488da5561595d81796e503e5b019e2e576",
+    "hash_locked": true,
+    "physical_tmem_layout": {
+      "unit": "32-bit physical columns",
+      "score_stage_offsets": [0, 128],
+      "probability_stage_offsets": [64, 192],
+      "output_stage_offsets": [256, 288],
+      "total_columns_all_modes": 320,
+      "lesson": "TCGen05 FP16's leading-2 layout dimension packs the M/datapath mode; it does not halve the physical N-column footprint."
+    },
+    "required_transforms": {
+      "typed_tmem_pointer_alignment": 1,
+      "pv_typed_pointer_width": 1,
+      "pv16_rescale_threshold_zero": 1,
+      "qk_tmem_pack_load": 1,
+      "qk_raw_p_store_view": 1,
+      "qk_softmax_upcast": 1,
+      "dead_fp32_scale_store_removed": 1,
+      "dead_qk_scale_load_removed": 1,
+      "pv_tmem_pack_unpack": 1,
+      "pv_typed_correction_subtile_stride": 2,
+      "pv_typed_rescale_sites": 2
+    },
+    "numeric_contract": {
+      "qk16": "QK tcgen05 accumulation rounds in FP16, then the score fragment is immediately upcast to FP32 for mask, max, exp2, and row-sum arithmetic.",
+      "probability_store": "P remains two FP16 probabilities packed in raw FP32 TMEM cells, using a separate FP32-cell view for the store.",
+      "pv16": "PV tcgen05 accumulation and each online rescale correction round in FP16; the final output remains FP16.",
+      "pv16_overflow_guard": "rescale_threshold=0 keeps unnormalized P at or below one and prevents the 361-term FP16 PV accumulation from overflowing after a 2^8 probability scale.",
+      "correction_iterator": "The D16 correction subtile advances 32 typed FP16 units per physical 16-column step; 16 aliases D16-31 onto D0-15."
+    },
+    "artifact_version_note": "FP32 and QK16 were compiled after their typed paths were closed. The subsequent source revisions are guarded PV16-only pointer/correction branches, so their earlier derivative hashes are recorded per artifact rather than mislabeled as the final superset. PV16 and both16 use the final superset hash."
+  },
+  "implementation_error_case_studies": [
+    {
+      "case": "qk16 probability view/offset mismatch",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-qk16-native-repeat.json",
+      "record_sha256": "f68244245d7788672680732656d0204c3d29d7c9e42ee51ae3ed1c37beb06e08",
+      "observed": {"max_abs": 3.672774076461792, "rmse": 0.09176968038082123, "correlation": 0.06908028572797775},
+      "classification": "implementation error",
+      "resolution": "Keep the upstream physical score/probability offsets and create an explicit raw FP32-cell probability-store view for qk16."
+    },
+    {
+      "case": "pv16 online probability scaling overflow",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-pv16-native-repeat.json",
+      "record_sha256": "58fe352486cec6009c940a774b3116655560623f888918e79e4fd712e1d00205",
+      "observed": {"finite_fraction": 0.977924108505249, "nan_count": 88601, "positive_inf_count": 79, "negative_inf_count": 67},
+      "classification": "numeric implementation error",
+      "resolution": "Use rescale_threshold=0 for PV16."
+    },
+    {
+      "case": "zero-Q PV path isolation",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-pv16-zero-q.json",
+      "record_sha256": "83cc2434f97c4401262c56ed17d03cd1188545aea456d217dab8144108a8894e",
+      "arrays_sha256": "84f8a3d5ce7d4bd8e0772ce39db71ba3b915d698badd59497fb1c9fdc7a83353",
+      "observed": {"max_abs": 0.0002679750323295593, "rmse": 0.00003845896935672499, "correlation": 0.9999997615814209},
+      "classification": "PV MMA/base/epilogue mapping validated",
+      "resolution": "With Q=0 the reference is mean(V) and online correction is bypassed. Passing this case isolated the remaining random-input error to the correction iterator, whose typed stride was then fixed."
+    }
+  ],
+  "isolated_matrix": {
+    "method": "Native AOT C ABI, identical seeded planar FP16 Q/K/V, 20 warmups, seven repeats of 200 iterations, CUDA-event S1 and coordinated two-stream S2-round timing.",
+    "fp32": {
+      "status": "benchmark_complete",
+      "artifact_manifest_sha256": "4438590510234f72770685335f0d4510142cf4250e9184f397a084cd8ae85782",
+      "artifact_derivative_sha256": "50771826b8fea298ad3c8aee3127816928eb023bda46fce107dbd711cbc74dc3",
+      "library_sha256": "4ab2199a2dfde9264bd1ecf15ba9676a5cc7e288dd5804fb2e81565d2112ac03",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-fp32-native.json",
+      "record_sha256": "6d8a52054fc2f6a7642ee271cbb4034bd7ff9b7d4ad8fdc544b9cfe27f6dae94",
+      "correctness": {"max_abs": 0.00048804283142089844, "rmse": 0.00002489074904588051, "correlation": 1.0000001192092896, "output_sha256": "ec83f077cd46fe94737373546d1cb50dad2c303c37309b810d5e17c4456f4b29"},
+      "s1_median_us": 21.261439323425293,
+      "s2_round_median_us": 37.68176078796387,
+      "s1_delta_vs_fp32_percent": 0.0,
+      "s2_delta_vs_fp32_percent": 0.0
+    },
+    "qk16": {
+      "status": "benchmark_complete_slower",
+      "artifact_manifest_sha256": "3a22cd96b674f9d3e5c9517b692b6d17155ee74cdf6f427c17f54d6bdb41975c",
+      "artifact_derivative_sha256": "a0ea3e45072a324eb7a1924a2db989cb06afcf2db10bfb7e6cc3eb92cf2f1ede",
+      "library_sha256": "d8bf6f91ac2b33e7a58b559cce1d9c981ed8d3cc85045a54a94fe64e66c6b89f",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-qk16-native.json",
+      "record_sha256": "febea482a0256d5ff4570f1234c7b476df6da9a661adfda0eb92e183d8ef21b8",
+      "correctness": {"max_abs": 0.0013604164123535156, "rmse": 0.00005300208431435749, "correlation": 0.9999998211860657, "output_sha256": "3068000c336fae94730cb93e02f4976c990e3970fcb228dbbe3ee5b9e5934186"},
+      "s1_median_us": 23.610239028930664,
+      "s2_round_median_us": 41.48608207702637,
+      "s1_delta_vs_fp32_percent": 11.047228,
+      "s2_delta_vs_fp32_percent": 10.095922
+    },
+    "pv16": {
+      "status": "benchmark_complete_slower",
+      "artifact_manifest_sha256": "5c98dfade24d3922bb995443bb1ea1f07a1a8f7adc94fd8efbdb5ea6d7038105",
+      "artifact_derivative_sha256": "2d8dcb7fb9b2934de6fdde4fa2647e488da5561595d81796e503e5b019e2e576",
+      "library_sha256": "835de6acdd52849a4647b566fe6496e994302a1d6ad190e0d172086a970b7427",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-pv16-native.json",
+      "record_sha256": "c615c6a54f68686a87343d498611208fa2ed3e3488c20b2ee502f560566b94db",
+      "correctness": {"max_abs": 0.0014650821685791016, "rmse": 0.00006733362533850595, "correlation": 0.9999997019767761, "output_sha256": "84525653bed16bbd033963088d2f49431e0dcd832ee294db497ba29657f21838"},
+      "s1_median_us": 22.488958835601807,
+      "s2_round_median_us": 39.791998863220215,
+      "s1_delta_vs_fp32_percent": 5.773454,
+      "s2_delta_vs_fp32_percent": 5.600158
+    },
+    "both16": {
+      "status": "benchmark_complete_slower",
+      "artifact_manifest_sha256": "5e23bf13e5ec7ad5df84b6ecb1228140d8fd88fcb12d7cd8e705ee49724e7e59",
+      "artifact_derivative_sha256": "2d8dcb7fb9b2934de6fdde4fa2647e488da5561595d81796e503e5b019e2e576",
+      "library_sha256": "80a289b84e6fdd47598ae7a397c57b4fd34d550d31f4df51893e1cee7f7fbf73",
+      "record": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-both16-native.json",
+      "record_sha256": "969f8bec829b863e3ad556d652580bb94e96dac99fb98630abb9baee1343db42",
+      "correctness": {"max_abs": 0.0018487274646759033, "rmse": 0.00008202919707400724, "correlation": 0.9999996423721313, "output_sha256": "103cc4f4afeba76a9baeff00692992653d6265bd73504a697983b4afb90d955c"},
+      "s1_median_us": 24.30527925491333,
+      "s2_round_median_us": 42.77872085571289,
+      "s1_delta_vs_fp32_percent": 14.316246,
+      "s2_delta_vs_fp32_percent": 13.526332
+    }
+  },
+  "performance_interpretation": {
+    "observed": "All three reduced-precision modes pass the isolated correctness guard, but each loses both S1 and S2 to FP32. The losses do not reverse under two-stream contention.",
+    "resource_fact": "All four modes retain the same 320 physical TMEM-column footprint and the same M128N128/q2/kv24 one-wave schedule, so the dtype change does not create the resource-residency reduction that motivated the transfer hypothesis.",
+    "typed_overhead": "QK16 adds a packed TMEM load plus immediate FP32 upcast for softmax. PV16 adds typed pack/unpack and FP32 rescale arithmetic with FP16 RNE writeback. The measured direction is consistent with these boundary costs dominating any narrower accumulator benefit.",
+    "profiling_policy": "Because isolated S2 already regressed by 5.60-13.53%, the fixed gate rejected every FP16 mode before whole-graph NSYS, NCU, long throughput, or request replay. No resource claim beyond the statically invariant physical layout is made."
+  },
+  "experimental_tooling": {
+    "derivative_generator_sha256": "984bf28378cfab6387c849a9ccd577d338c0124190ad24bca74d22310d5b3c3c",
+    "validator_sha256": "665ea300af5b133ceca45c65eedb8659a0e2dabcd0a90d5a576ba064d372c420",
+    "aot_generator_sha256": "270a800c937a392b2a11c74df8904c69ef0913cb711ab0468c16ed9846e5bb1f",
+    "static_test_sha256": "ed800ae70726537aa7fbd738d09b8bf1ad5a407919199b9e269e1e1decf4dcbe",
+    "runtime_integration": false
+  },
+  "validation": {
+    "command": ".final-migration-env/venv/bin/python -m unittest -v python.tests.test_sm103_fa4_native_hook python.tests.test_sm103_flash_attn_b29_accum",
+    "tests_passed": 14,
+    "tests_failed": 0,
+    "json_parse": "passed",
+    "git_diff_check": "passed"
+  },
+  "decision": {
+    "outcome": "drop_qk16_pv16_both16",
+    "retained_mode": "fp32",
+    "retained_candidate": "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32",
+    "enter_full_graph": false,
+    "enter_ncu": false,
+    "enter_long_gate": false,
+    "enter_request_accuracy_gate": false,
+    "core_changed": false,
+    "reason": "The complete typed implementations prove that reduced accumulation is numerically possible on SM103a, but unlike the retained SM89/SM120 choices it does not reduce this FA4 schedule's physical TMEM footprint and loses isolated S2 by at least 5.60%."
+  }
+}

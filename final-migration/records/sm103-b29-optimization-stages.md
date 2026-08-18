@@ -542,3 +542,38 @@ request guard: policy RMSE is `9.5291e-5`, policy top-1 agreement is
 `99.8291%`, and the maximum request ratio is `1.946x`. Complete profiler,
 artifact, ABI-debug, throughput, and replay hashes are recorded in
 `stage-06-fa4-native-profile.json`.
+
+## Stage 06b — native FA4 QK/PV accumulator modes
+
+Status: closed after the fixed four-mode isolated S2 gate; FP32 remains
+retained.
+
+The SM89/SM120 implementations ultimately use reduced QK/PV accumulation, so
+the same control, QK16, PV16, and both16 matrix was tested on the retained
+SM103a FA4 kernel. Every non-accumulator axis remained fixed at
+B29/S361/H12/D32, M128N128, q2/kv24, and static persistence. Upstream
+FlashAttention commit `0251105a` exposes no accumulator switch and hard-codes
+both types to FP32. Attribute-only FP16 substitutions therefore failed at
+the FP32-specific TMEM copy layouts. The compile-failure hashes are
+`c50cbc57` (QK16), `1b68eed2` (PV16), and `65a30350` (both16).
+
+An isolated, hash-locked typed derivative covered the complete data path
+rather than casting around the compiler error. TCGen05's leading-2 FP16
+layout dimension is a packed M/datapath mode, not a halved N-column footprint;
+all modes retain physical TMEM offsets S `0/128`, P `64/192`, O `256/288`, and
+320 total 32-bit columns. QK16 uses a packed TMEM load followed by immediate
+FP32 softmax arithmetic while preserving P as packed FP16 values in raw FP32
+cells. PV16 requires threshold zero to avoid scaled-P overflow and requires
+typed pack/unpack plus FP32 correction arithmetic and FP16 RNE writeback. A
+zero-Q mean(V) case isolated the final correction error to a D16 typed-iterator
+stride, after which every mode passed the random-input correctness guard.
+
+The final S1/S2 medians in microseconds were FP32 `21.261/37.682`, QK16
+`23.610/41.486`, PV16 `22.489/39.792`, and both16 `24.305/42.779`. Relative
+to FP32, the reduced modes lose S2 by `10.10%`, `5.60%`, and `13.53%`.
+Because none reduces the 320-column physical TMEM allocation and every one
+already loses under isolated two-stream contention, they were stopped before
+NCU, whole-graph NSYS, long throughput, and replay. The committed Stage 06
+FP32 core is unchanged. Typed root-cause history, artifact hashes, correctness
+metrics, and the full timing matrix are recorded in
+`stage-06b-fa4-accumulator-modes.json`.
