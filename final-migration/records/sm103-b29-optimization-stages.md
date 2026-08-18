@@ -860,3 +860,46 @@ runtime wiring was removed, core/CMake are byte-clean against HEAD, and the
 current-best binary was rebuilt without the hook. Full identities, isolated
 measurements, A-B-B-A samples, NSYS hashes, union attribution, and cleanup
 proof are in `outproj-rmsnorm-fusion-profile.json`.
+
+## Stage 10 — mixed C384-half2 / C768-flat-vec8 affine SiLU
+
+Status: retained after targeted NCU, same-binary A-B-B-A/NSYS, five-sample
+long gate, and the 8192-row aggregate/request accuracy gate.
+
+The final Stage 08 trace exposed C768 affine SiLU for `10.628 ms`, while the
+C384 affine work was almost entirely covered. Targeted NCU showed that the
+existing C768 flat-vec8 kernel reduced replay duration `26.18 -> 18.75 us`,
+executed instructions by `16.41%`, waves/SM `14.15 -> 3.32`, no-eligible
+cycles `42.68% -> 28.17%`, and long-scoreboard cycles/issue `8.82 -> 3.43`,
+with zero spills and improved achieved occupancy. However, its historical
+selector also returned C384 to the official kernel. Whole-graph NSYS proved
+that coupling erased the local gain: C384 exclusive time rose by `926%`.
+
+The one bounded fix added no device kernel. The exact selector
+`half2-c384-flat-vec8-c768-b29` keeps the retained half2 path for C384 and uses
+the existing flat-vec8 path only for C768. It is default-off and accepts only
+the portable SM103 adapter with exact max/runtime B29 FP16/NHWC; native SM120
+defaults are unchanged.
+
+Same-binary 50-warmup/300-iteration A-B-B-A measured control
+`9228.251092/9153.427883` and candidate `9377.453701/9319.844271` nnEval/s,
+or `+1.7170%` by the two-point centers. Steady last-50 NSYS preserved exactly
+40,596 launches and proved 1,100 C384 half2 calls, 1,200 C768 flat-vec8 calls,
+and zero official C384 fallbacks. C768 union fell `18.022 -> 13.339 ms` and
+exclusive time fell `10.665 -> 2.751 ms`; C384 remained slightly faster. The
+whole-graph union fell `322.543 -> 317.958 ms` (`-1.422%`) while overlap rose
+`4.035%`.
+
+Five 1000-iteration samples were `9260.359321`, `9304.307285`,
+`9307.161993`, `9317.568460`, and `9409.425562` nnEval/s. The median is
+`9307.161993`, spread `1.602%`, `+1.146%` over Stage 08 and `+38.217%` over
+the fixed TensorRT 10.16 median. Every sample exceeds the maximum Stage 08
+sample.
+
+The 8192-row replay kept all input/target sections byte-identical. Aggregate
+policy top1 is `0.998291`, policy probability RMSE `9.5291e-5`, value outcome
+RMSE `0.0021228`, score mean RMSE `0.00183684`, and ownership sigmoid RMSE
+`0.00023349`. Every aggregate gate passes. The largest request ratio is
+ownership max-absolute at `1.94636x`, below the fixed `2.25x` TensorRT-control
+limit. Exact source, binary, NCU, NSYS, replay and comparison identities are in
+`stage-10-mixed-affine-silu.json`.

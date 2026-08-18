@@ -2,9 +2,9 @@
 
 日期：2026-08-18
 
-最终保留的 CUDA 图在 B29/S2 下达到 **9201.745296 combined nnEval/s**，
-相对极差为 **0.842%**。相对于固定的 TensorRT 10.16.1.11 中位数
-**6733.719141 nnEval/s**，提升为 **+36.652%**。这是固定工作负载下的优化
+最终保留的 CUDA 图在 B29/S2 下达到 **9307.161993 combined nnEval/s**，
+相对极差为 **1.602%**。相对于固定的 TensorRT 10.16.1.11 中位数
+**6733.719141 nnEval/s**，提升为 **+38.217%**。这是固定工作负载下的优化
 资格结果；本报告不作部署认证声明。
 
 ## 固定契约
@@ -26,7 +26,7 @@
 
 最终累积谱系为：
 
-`portable tactics -> fused FFN -> no-AB12 -> native FA4 -> pinned QKV cuBLASLt id70 -> QKV aux2`
+`portable tactics -> fused FFN -> no-AB12 -> native FA4 -> pinned QKV cuBLASLt id70 -> QKV aux2 -> mixed affine`
 
 | 阶段 | 累积变更 | nnEval/s 中位数 | 极差 | 相对父阶段 | 相对 TRT 10.16 | 保留提交 |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -41,7 +41,8 @@
 | 03b | 删除 fused FFN 未使用的 AB12 输出与存储路径 | 8587.808904 | 0.831% | +6.316% | +27.534% | `38fe3334` |
 | 06 | native FA4 D32 attention，FP32 QK/PV accumulation | 8949.114828 | 0.333% | +4.207% | +32.900% | `230dd195` |
 | 07a | 精确固定的 QKV cuBLASLt id70 tuple | 9058.808862 | 0.414% | +1.226% | +34.529% | `d40282a2` |
-| 08 | Q 在主流，K/V 分别在两个辅助流 | **9201.745296** | **0.842%** | **+1.578%** | **+36.652%** | `b5e17d76` |
+| 08 | Q 在主流，K/V 分别在两个辅助流 | 9201.745296 | 0.842% | +1.578% | +36.652% | `b5e17d76` |
+| 10 | C384 half2 与 C768 flat-vec8 affine-SiLU | **9307.161993** | **1.602%** | **+1.146%** | **+38.217%** | 本次提交 |
 
 portable 子阶段阶梯的每步使用两个 1000 iteration 样本，并由累积后的 8192 行
 replay 完成精度闭环；Stage 03a 起使用 200 次 warmup 后的 5 个 1000 iteration
@@ -66,6 +67,10 @@ replay 完成精度闭环；Stage 03a 起使用 200 次 warmup 后的 5 个 1000
    `8780.674` nnEval/s。因此显式构造并回读精确的 id70/tile23/stages35/
    cluster5/zero-workspace tuple。最后一步保持此算法完全不变，只调整 Q/K/V
    依赖拓扑。
+6. Targeted NCU 证明现有 C768 flat-vec8 kernel 明显更快，但旧 selector 同时关闭
+   已保留的 C384 half2。唯一 mixed selector 在不新增 device kernel 的前提下解除
+   该耦合：C384 保持 half2，仅 C768 使用 flat-vec8。整图 union 降低 1.422%，
+   长测再增加 1.146%。
 
 ## 本次新发现且值得推广的架构无关优化技巧
 
@@ -144,13 +149,13 @@ policy probability、value probability、raw score 与 ownership probability，
 每个 head 的最坏请求 maximum-absolute error 和 RMSE 均不得超过相应 TensorRT
 10.16 控制的 `2.25x`；除逐请求指标全部通过外，还必须通过聚合门。
 
-| 最终 Stage 08 指标 | 结果 |
+| 最终 Stage 10 指标 | 结果 |
 | --- | ---: |
-| Policy probability RMSE | `9.53026e-5` |
+| Policy probability RMSE | `9.52908e-5` |
 | 相对 FP32 的 policy top-1 一致率 | `99.8291%` |
-| Value outcome RMSE | `0.00213206` |
-| Score mean RMSE | `0.00184150` |
-| Ownership sigmoid RMSE | `0.000233715` |
+| Value outcome RMSE | `0.00212281` |
+| Score mean RMSE | `0.00183684` |
+| Ownership sigmoid RMSE | `0.000233494` |
 | 相对 TensorRT 控制的最大请求比率 | `1.94636x`（通过，上限 `2.25x`） |
 
 输入与 target 相对 reference byte-identical。由于调度变化扰动了累积 FP16
@@ -208,7 +213,8 @@ variant 最大请求比率为 `2.148x`，而损坏的 no-roundtrip variant 仍�
    [no-AB12](../plans/sm103/b300-b29-s2/evidence/stage-03-no-ab12-profile.json)、
    [native attention](../plans/sm103/b300-b29-s2/evidence/stage-06-fa4-native-profile.json)、
    [pinned id70](../plans/sm103/b300-b29-s2/evidence/stage-07-cublaslt-qkv.json)和
-   [aux2](../plans/sm103/b300-b29-s2/evidence/stage-08-qkv-aux-streams.json)。
+   [aux2](../plans/sm103/b300-b29-s2/evidence/stage-08-qkv-aux-streams.json)以及
+   [mixed affine](../plans/sm103/b300-b29-s2/evidence/stage-10-mixed-affine-silu.json)。
 4. 重新构建并运行 tracked source-contract tests，包括
    [FFN](../../python/tests/test_sm103_cudnn_oss_ffn_hook.py)、
    [FA4](../../python/tests/test_sm103_fa4_native_hook.py)、
@@ -235,6 +241,7 @@ f88e423a  planar Q/K RoPE
 230dd195  native FA4
 d40282a2  pinned QKV id70
 b5e17d76  QKV aux2 ready-DAG
+本次提交  mixed C384-half2 / C768-flat-vec8 affine-SiLU
 ```
 
 same-binary A/B/B/A、NSYS interval-union/overlap accounting、targeted NCU

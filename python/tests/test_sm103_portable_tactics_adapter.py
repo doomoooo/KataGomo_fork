@@ -114,6 +114,27 @@ class Sm103PortableTacticsAdapterTests(unittest.TestCase):
             self.core,
         )
 
+    def test_b29_mixed_affine_silu_is_exact_and_fail_closed(self) -> None:
+        tactic = "half2-c384-flat-vec8-c768-b29"
+        self.assertIn(f'o.affineSiluTactic != "{tactic}"', self.sm120)
+        self.assertIn(
+            f'options.affineSiluTactic == "{tactic}"',
+            self.sm120,
+        )
+        self.assertIn(
+            "!options.portableSm103Adapter || maxBatchSize != 29 || "
+            "batchSize != 29",
+            self.sm120,
+        )
+        self.assertIn(
+            "(useB29MixedAffineSilu && channels == 768)",
+            self.sm120,
+        )
+        self.assertIn(
+            "B29 half2 C384 + flat vec8 C768 affine SiLU active",
+            self.sm120,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

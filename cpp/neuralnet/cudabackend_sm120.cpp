@@ -876,10 +876,11 @@ Options parseOptions(ConfigParser& cfg) {
   if(o.affineSiluTactic != "disabled" &&
      o.affineSiluTactic != "half2" &&
      o.affineSiluTactic != "half2x3" &&
-     o.affineSiluTactic != "flat-vec8-c768")
+     o.affineSiluTactic != "flat-vec8-c768" &&
+     o.affineSiluTactic != "half2-c384-flat-vec8-c768-b29")
     throw StringError(
       "cudaAffineSiluTacticSm120 must be disabled, half2, half2x3, "
-      "or flat-vec8-c768");
+      "flat-vec8-c768, or half2-c384-flat-vec8-c768-b29");
   o.usePersistingL2Trunk = getBoolOpt(cfg, "cudaUsePersistingL2Trunk", false);
   o.usePersistingL2Inner = getBoolOpt(cfg, "cudaUsePersistingL2Inner", false);
   o.persistingL2Streams = cfg.contains("cudaPersistingL2StreamsSm120") ?
@@ -2796,10 +2797,16 @@ bool Sm120Model::affineSilu(
     return false;
   if(activation != ACTIVATION_SILU || batchSize < 1 || batchSize > maxBatchSize)
     return false;
+  const bool useB29MixedAffineSilu =
+    options.affineSiluTactic == "half2-c384-flat-vec8-c768-b29";
+  if(useB29MixedAffineSilu &&
+     (!options.portableSm103Adapter || maxBatchSize != 29 || batchSize != 29))
+    return false;
   if(options.affineSiluTactic == "flat-vec8-c768" && channels != 768)
     return false;
 
-  if(options.affineSiluTactic == "flat-vec8-c768")
+  if(options.affineSiluTactic == "flat-vec8-c768" ||
+     (useB29MixedAffineSilu && channels == 768))
     launchAffineSiluFlatVec8C768(
       (const half*)input, (half*)output, (const half*)scale, (const half*)bias,
       batchSize * xySize, stream);
@@ -2815,6 +2822,8 @@ bool Sm120Model::affineSilu(
   if(!loggedAffineSiluHalf2) {
     if(logger != NULL)
       logger->write(logMessage(
+        useB29MixedAffineSilu ?
+        "B29 half2 C384 + flat vec8 C768 affine SiLU active" :
         options.affineSiluTactic == "flat-vec8-c768" ?
         "flat vec8 C768 affine SiLU active" :
         options.affineSiluTactic == "half2x3" ?

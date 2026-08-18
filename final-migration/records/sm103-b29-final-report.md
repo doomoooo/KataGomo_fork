@@ -2,9 +2,9 @@
 
 Date: 2026-08-18
 
-The final retained CUDA graph reaches **9201.745296 combined nnEval/s** at
-B29/S2, with **0.842% relative spread**. Against the fixed TensorRT
-10.16.1.11 median of **6733.719141 nnEval/s**, this is **+36.652%**. The
+The final retained CUDA graph reaches **9307.161993 combined nnEval/s** at
+B29/S2, with **1.602% relative spread**. Against the fixed TensorRT
+10.16.1.11 median of **6733.719141 nnEval/s**, this is **+38.217%**. The
 result is an optimization qualification for this fixed workload; this report
 does not make a deployment-certification claim.
 
@@ -28,7 +28,7 @@ All rates below are the combined rate of both inference streams.
 
 The final accumulated lineage is:
 
-`portable tactics -> fused FFN -> no-AB12 -> native FA4 -> pinned QKV cuBLASLt id70 -> QKV aux2`
+`portable tactics -> fused FFN -> no-AB12 -> native FA4 -> pinned QKV cuBLASLt id70 -> QKV aux2 -> mixed affine`
 
 | Step | Accumulated change | Median nnEval/s | Spread | Increment vs parent | Vs TRT 10.16 | Retained commit |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -43,7 +43,8 @@ The final accumulated lineage is:
 | 03b | remove the unused fused-FFN AB12 output and store path | 8587.808904 | 0.831% | +6.316% | +27.534% | `38fe3334` |
 | 06 | native FA4 D32 attention, FP32 QK/PV accumulation | 8949.114828 | 0.333% | +4.207% | +32.900% | `230dd195` |
 | 07a | exact QKV cuBLASLt id70 tuple | 9058.808862 | 0.414% | +1.226% | +34.529% | `d40282a2` |
-| 08 | Q on primary plus K/V on two auxiliary streams | **9201.745296** | **0.842%** | **+1.578%** | **+36.652%** | `b5e17d76` |
+| 08 | Q on primary plus K/V on two auxiliary streams | 9201.745296 | 0.842% | +1.578% | +36.652% | `b5e17d76` |
+| 10 | C384 half2 plus C768 flat-vec8 affine-SiLU | **9307.161993** | **1.602%** | **+1.146%** | **+38.217%** | this commit |
 
 The portable substage ladder used two 1000-iteration samples per step and was
 closed by the accumulated 8192-row replay; Stage 03a onward used five
@@ -76,6 +77,11 @@ selection is recorded in the
    cluster5/zero-workspace tuple was therefore constructed and read back
    explicitly. The last step kept that exact algorithm and changed only the
    Q/K/V dependency topology.
+6. Targeted NCU showed that the existing C768 flat-vec8 kernel was substantially
+   faster, but its old selector also disabled the retained C384 half2 path. A
+   single mixed selector removed that coupling without adding a device kernel:
+   C384 stays half2 and only C768 uses flat-vec8. Whole-graph union fell 1.422%
+   and the long gate added another 1.146%.
 
 ## New architecture-neutral techniques worth carrying forward
 
@@ -171,16 +177,16 @@ ownership probability, both worst-request maximum-absolute error and RMSE must
 be no more than `2.25x` the corresponding TensorRT 10.16 control; every metric
 must pass, in addition to the aggregate gates.
 
-| Final Stage 08 metric | Result |
+| Final Stage 10 metric | Result |
 | --- | ---: |
-| Policy probability RMSE | `9.53026e-5` |
+| Policy probability RMSE | `9.52908e-5` |
 | Policy top-1 agreement vs FP32 | `99.8291%` |
-| Value outcome RMSE | `0.00213206` |
-| Score mean RMSE | `0.00184150` |
-| Ownership sigmoid RMSE | `0.000233715` |
+| Value outcome RMSE | `0.00212281` |
+| Score mean RMSE | `0.00183684` |
+| Ownership sigmoid RMSE | `0.000233494` |
 | Maximum request ratio vs TensorRT control | `1.94636x` (pass, limit `2.25x`) |
 
-Inputs and targets are byte-identical to the reference. Stage 08 is not
+Inputs and targets are byte-identical to the reference. The Stage 08 schedule was not
 byte-identical to Stage 07 because the changed schedule perturbs accumulated
 FP16 rounding, but policy top-1 agreement between them is 100% and probability
 RMSE is only `2.866e-6`; the fixed FP32/TRT gates pass.
@@ -240,7 +246,8 @@ and [MSLK audit](../plans/sm103/b300-b29-s2/evidence/mslk-1.3-sm103-low-hanging-
    [no-AB12](../plans/sm103/b300-b29-s2/evidence/stage-03-no-ab12-profile.json),
    [native attention](../plans/sm103/b300-b29-s2/evidence/stage-06-fa4-native-profile.json),
    [pinned id70](../plans/sm103/b300-b29-s2/evidence/stage-07-cublaslt-qkv.json),
-   and [aux2](../plans/sm103/b300-b29-s2/evidence/stage-08-qkv-aux-streams.json).
+   [aux2](../plans/sm103/b300-b29-s2/evidence/stage-08-qkv-aux-streams.json),
+   and [mixed affine](../plans/sm103/b300-b29-s2/evidence/stage-10-mixed-affine-silu.json).
 4. Rebuild and run the tracked source-contract tests, including
    [FFN](../../python/tests/test_sm103_cudnn_oss_ffn_hook.py),
    [FA4](../../python/tests/test_sm103_fa4_native_hook.py),
@@ -268,6 +275,7 @@ f88e423a  planar Q/K RoPE
 230dd195  native FA4
 d40282a2  pinned QKV id70
 b5e17d76  QKV aux2 ready-DAG
+this commit  mixed C384-half2 / C768-flat-vec8 affine-SiLU
 ```
 
 Same-binary A/B/B/A runs, NSYS interval-union/overlap accounting, targeted NCU

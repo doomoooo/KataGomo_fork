@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-retained-mixed-affine-silu",
+  "status": "retained_after_ncu_nsys_long_and_accuracy",
+  "production_ready": false,
+  "selector": "half2-c384-flat-vec8-c768-b29",
+  "fixed_contract": {
+    "gpu": "NVIDIA B300 SXM6 AC",
+    "compute_capability": "10.3",
+    "accelerated_target": "sm_103a",
+    "batch": 29,
+    "streams": 2,
+    "board": [19, 19],
+    "precision_layout": "FP16/NHWC",
+    "model_sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "corpus_sha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "parent_median_nn_evals_per_sec": 9201.745296,
+    "tensorrt_10_16_median_nn_evals_per_sec": 6733.719141
+  },
+  "implementation": {
+    "default": "disabled",
+    "activation_guard": "portable SM103 adapter, maxBatchSize=29, runtime batchSize=29, FP16/NHWC",
+    "c384": "existing half2 affine-SiLU kernel",
+    "c768": "existing flat-vec8 C768 affine-SiLU kernel",
+    "new_device_kernel": false,
+    "native_sm120_default_changed": false,
+    "candidate_binary_sha256": "96eb6dd0f2d319282cc924d0053e52895f60a222fda2f2275a4ed138db5f3904",
+    "source_files": {
+      "cpp/neuralnet/cudabackend_sm120.cpp": "595594d30cd946726dd494406c6d6350b7553585bf24b1f4695c4868d42e7684",
+      "cpp/neuralnet/cudabackend_sm120.h": "e1ff2915ec774e6ed1f676ee511d4b71d3137b2c1cfbc7601d014b5b407c1077",
+      "python/tests/test_sm103_portable_tactics_adapter.py": "c215a151c8ca8c567bafa2b484c539209fecb5fe5b361e25b4b4f58d77b29552"
+    }
+  },
+  "profiler_hypothesis": {
+    "observation": "The existing flat-vec8-c768 selector accelerated C768 but silently returned C384 to the official kernel. Preserve the retained C384 half2 route while selecting flat-vec8 only for C768.",
+    "control_ncu": {
+      "report": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine768-half2-2b8f-targeted-kill.ncu-rep",
+      "sha256": "54590d45a6689d141bb260da3cd3b4ce59a76f6f859f10be65cfe52d3ebebd31",
+      "duration_us": 26.18,
+      "executed_instructions": 8040192,
+      "grid_x": 10469,
+      "block_x": 384,
+      "registers_per_thread": 17,
+      "waves_per_sm": 14.15,
+      "achieved_occupancy_percent": 73.70,
+      "no_eligible_percent": 42.68,
+      "long_scoreboard_cycles_per_issue": 8.82,
+      "spills": 0
+    },
+    "flat_vec8_ncu": {
+      "report": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine768-flatvec8-2b8f-targeted-kill.ncu-rep",
+      "sha256": "4e2a4f579d102d16f717f057a8a9f6a673a4da40ec81bf742db926f7865e4f0e",
+      "duration_us": 18.75,
+      "executed_instructions": 6721106,
+      "grid_x": 3926,
+      "block_x": 256,
+      "registers_per_thread": 29,
+      "waves_per_sm": 3.32,
+      "achieved_occupancy_percent": 84.96,
+      "no_eligible_percent": 28.17,
+      "long_scoreboard_cycles_per_issue": 3.43,
+      "spills": 0
+    },
+    "duration_reduction_percent": 28.38,
+    "executed_instruction_reduction_percent": 16.41
+  },
+  "short_abba": {
+    "protocol": "same read-only candidate binary, B29/S2, 50 warmups, 300 iterations, order control-candidate-candidate-control",
+    "control_selector": "half2",
+    "candidate_selector": "half2-c384-flat-vec8-c768-b29",
+    "control_samples": [9228.251092, 9153.427883],
+    "candidate_samples": [9377.453701, 9319.844271],
+    "control_center": 9190.8394875,
+    "candidate_center": 9348.648986,
+    "gain_percent": 1.717030296,
+    "both_adjacent_comparisons_positive": true,
+    "raw_stdout_files": "not retained; exact samples were captured by the benchmark orchestrator output"
+  },
+  "nsys": {
+    "protocol": "same binary, 20 warmups and 50 timed iterations per outer lane; steady last 50 across both lanes",
+    "control": {
+      "report": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine-mixed-96eb-control.nsys-rep",
+      "report_sha256": "7258f51befda40212710256cda57f5df3ff354b53906cddd5356192481602956",
+      "sqlite_sha256": "47ed7c83bcc9c6874c843eb28d91ad300b8ff3f428ae69b23732a9a3abf2ce8d",
+      "kernel_launches": 40596,
+      "kernel_sum_ms": 525.354958,
+      "kernel_union_ms": 322.542911,
+      "kernel_overlap_ms": 202.812047
+    },
+    "candidate": {
+      "report": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine-mixed-96eb-candidate.nsys-rep",
+      "report_sha256": "c769f5a2cf652d428782841e29423ceee68237182f381b93264a8ff727129a18",
+      "sqlite_sha256": "90c34467ed94b3fe81bfa409bdcdc0946e308eefc253fe0d9bbc9c74a5360c64",
+      "kernel_launches": 40596,
+      "kernel_sum_ms": 528.955561,
+      "kernel_union_ms": 317.957719,
+      "kernel_overlap_ms": 210.997842,
+      "c384_half2_calls": 1100,
+      "c768_flat_vec8_calls": 1200,
+      "c384_official_fallback_calls": 0
+    },
+    "delta_percent": {
+      "kernel_sum": 0.685,
+      "kernel_union": -1.422,
+      "kernel_overlap": 4.035
+    },
+    "c768": {
+      "raw_ms": {"control": 18.082997, "candidate": 13.355561, "delta_percent": -26.14},
+      "union_ms": {"control": 18.021877, "candidate": 13.339113, "delta_percent": -25.99},
+      "exclusive_ms": {"control": 10.665226, "candidate": 2.751457, "delta_percent": -74.20},
+      "median_us": {"control": 14.528, "candidate": 10.912}
+    },
+    "c384": {
+      "raw_ms": {"control": 10.377676, "candidate": 10.226132, "delta_percent": -1.46},
+      "median_us": {"control": 9.44, "candidate": 9.12}
+    }
+  },
+  "long_gate": {
+    "protocol": "five independent B29/S2 samples, 200 warmups and 1000 timed iterations",
+    "samples_nn_evals_per_sec": [9260.359321, 9304.307285, 9307.161993, 9317.568460, 9409.425562],
+    "median_nn_evals_per_sec": 9307.161993,
+    "relative_spread": 0.016016294,
+    "gain_vs_stage08_percent": 1.145616333,
+    "gain_vs_tensorrt_10_16_percent": 38.217258518,
+    "all_samples_above_stage08_maximum": true,
+    "raw_stdout_files": "not retained; exact samples were captured by the benchmark orchestrator output"
+  },
+  "accuracy": {
+    "rows": 8192,
+    "reference_sha256": "789a6f927b90d85c67b30766c7a271e1a711954f87bfe61132c0c58e3626a08b",
+    "candidate_replay": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine-mixed-96eb.krnn",
+    "candidate_replay_sha256": "e2a3819b9f0514cb21e35df9e9cd51ef3388e4192b51f451b40ed46b26b76025",
+    "comparison": ".final-migration-env/profiles/sm103-b29/stage-09-kernel-pareto/affine-mixed-96eb-vs-fp32.json",
+    "comparison_sha256": "89de93a49f3554bd30a1d334ada8b3cd76520ab8c0305634ad57e28998ff2174",
+    "input_and_target_sections_byte_exact": true,
+    "aggregate": {
+      "policy_top1": 0.998291015625,
+      "policy_probability_rmse": 0.000095290808531,
+      "policy_weighted_p0loss_delta": -0.000046372414,
+      "value_outcome_rmse": 0.002122806618,
+      "score_mean_rmse": 0.001836839714,
+      "ownership_sigmoid_rmse": 0.000233494095,
+      "passed": true
+    },
+    "request_ratios_vs_tensorrt_10_16": {
+      "policy_abs": 0.863047611,
+      "policy_rmse": 0.856647156,
+      "value_abs": 1.075248445,
+      "value_rmse": 1.075247514,
+      "score_abs": 0.691223616,
+      "score_rmse": 0.725474771,
+      "ownership_abs": 1.946355633,
+      "ownership_rmse": 0.857637099,
+      "maximum": 1.946355633,
+      "limit": 2.25,
+      "passed": true
+    }
+  },
+  "decision": {
+    "outcome": "retain",
+    "reason": "The combined selector keeps the already-retained C384 half2 route while applying the NCU-positive flat-vec8 kernel only to C768. Whole-graph union, long throughput, aggregate accuracy and every request metric pass.",
+    "next_default": "cudaAffineSiluTacticSm120=half2-c384-flat-vec8-c768-b29"
+  }
+}

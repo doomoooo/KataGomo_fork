@@ -341,7 +341,8 @@ struct Options {
   // disabled, ordered-ept3, one-warp-exact, or warp4-vec8.
   std::string rmsNorm384Tactic = "disabled";
   bool useSwiGLU1152 = false;
-  // disabled, half2, half2x3, or flat-vec8-c768.
+  // disabled, half2, half2x3, flat-vec8-c768, or
+  // half2-c384-flat-vec8-c768-b29.
   std::string affineSiluTactic = "disabled";
   bool usePersistingL2Trunk = false;
   bool usePersistingL2Inner = false;

@@ -110,7 +110,7 @@ be compared within one GPU model, not across hosts or models.
 | Official TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
 | Checked-in CUDA plan | RTX 5080 | 16 | 2836.2 | [plan certificate](plans/sm120/rtx5080-b16-s2/README.md) |
 | Official TensorRT baseline | NVIDIA B300 | 29 | 6733.7 | [fixed baseline](plans/sm103/b300-b29-s2/baseline-anchor.json) |
-| Retained CUDA configuration | NVIDIA B300 | 29 | 9201.7 | [final report](records/sm103-b29-final-report.md) |
+| Retained CUDA configuration | NVIDIA B300 | 29 | 9307.2 | [final report](records/sm103-b29-final-report.md) |
 
 TensorRT is shown only as a comparison. The B300 qualification target is
 TensorRT 10.16.1.11 on native CUDA 13.3; it remains separate from the optimized

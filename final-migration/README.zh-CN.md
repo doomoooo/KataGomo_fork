@@ -100,7 +100,7 @@ FP16、双推理 stream，并按
 | 官方 TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 扫描](records/rtx5080-official-backend-baselines-20260811.md) |
 | 已提交 CUDA plan | RTX 5080 | 16 | 2836.2 | [plan 证书](plans/sm120/rtx5080-b16-s2/README.md) |
 | 官方 TensorRT baseline | NVIDIA B300 | 29 | 6733.7 | [固定基线](plans/sm103/b300-b29-s2/baseline-anchor.json) |
-| 保留 CUDA 配置 | NVIDIA B300 | 29 | 9201.7 | [最终报告](records/sm103-b29-final-report.zh-CN.md) |
+| 保留 CUDA 配置 | NVIDIA B300 | 29 | 9307.2 | [最终报告](records/sm103-b29-final-report.zh-CN.md) |
 
 TensorRT 仅作为对比。B300 认证目标是原生 CUDA 13.3 上的 TensorRT
 10.16.1.11；它与优化 CUDA production build、runtime 和 release 包保持隔离。

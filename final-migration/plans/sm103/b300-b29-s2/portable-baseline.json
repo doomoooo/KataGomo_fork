@@ -26,7 +26,7 @@
     "cudaSm89Forward": false
   },
   "portable_tactics": {
-    "cudaAffineSiluTacticSm120": "half2",
+    "cudaAffineSiluTacticSm120": "half2-c384-flat-vec8-c768-b29",
     "cudaRMSNormTacticSm120": "warp4-vec8",
     "cudaUseFusedQKRoPE": true,
     "cudaUseFusedResidual": true,
@@ -56,21 +56,21 @@
     "cudaUseFusedValueTerminalSm120": false
   },
   "latest_gate": {
-    "name": "cublaslt_id70_qkv_aux_stream_dag",
-    "median_nn_evals_per_sec": 9201.745296,
-    "gain_vs_previous_percent": 1.577872281,
-    "relative_spread": 0.008418344728
+    "name": "mixed_c384_half2_c768_flat_vec8",
+    "median_nn_evals_per_sec": 9307.161993,
+    "gain_vs_previous_percent": 1.145616333,
+    "relative_spread": 0.016016294
   },
   "final_accuracy": {
     "rows": 8192,
     "request_gate_control": "TensorRT 10.16.1.11 vs CUDA FP32",
     "request_gate_passed": true,
     "aggregate_gate_passed": true,
-    "comparison_sha256": "561e27267f9a06a81f6f60815aa1d5409c81cca0fc6501e2283db63083d824f8"
+    "comparison_sha256": "89de93a49f3554bd30a1d334ada8b3cd76520ab8c0305634ad57e28998ff2174"
   },
   "comparison_to_tensorrt": {
     "tensorrt_median_nn_evals_per_sec": 6733.719141,
-    "portable_median_nn_evals_per_sec": 9201.745296,
-    "gain_percent": 36.651753709
+    "portable_median_nn_evals_per_sec": 9307.161993,
+    "gain_percent": 38.217258518
   }
 }
