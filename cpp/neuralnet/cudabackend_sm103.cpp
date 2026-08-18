@@ -1,5 +1,6 @@
 #include "../neuralnet/cudabackend_sm103.h"
 #include "../neuralnet/cudnn_oss_b29_aot_bridge.h"
+#include "../neuralnet/fa4_sm103_b29_aot_bridge.h"
 
 #include "../core/global.h"
 #include "../core/logger.h"
@@ -12,6 +13,8 @@ namespace Sm103Backend {
 
 constexpr const char* CudnnOssB29NoAb12FfnTactic =
   "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29";
+constexpr const char* Fa4Sm103B29AttentionTactic =
+  "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32";
 
 namespace {
 
@@ -50,6 +53,8 @@ Options parseOptions(ConfigParser& cfg) {
     getBoolOpt(cfg, "cudaSm103ReusePortableTactics", false);
   options.dualFfnTactic = cfg.contains("cudaSm103DualFFNTactic") ?
     cfg.getString("cudaSm103DualFFNTactic") : "disabled";
+  options.attentionTactic = cfg.contains("cudaSm103AttentionTactic") ?
+    cfg.getString("cudaSm103AttentionTactic") : "disabled";
   options.allowOfficialForwardScaffold =
     getBoolOpt(cfg, "cudaSm103AllowOfficialForwardScaffold", false);
   if(options.allowOfficialForwardScaffold && !options.enabled)
@@ -64,11 +69,21 @@ Options parseOptions(ConfigParser& cfg) {
     throw StringError(
       "cudaSm103DualFFNTactic requires cudaSm103Backend=true"
     );
+  if(options.attentionTactic != "disabled" && !options.enabled)
+    throw StringError(
+      "cudaSm103AttentionTactic requires cudaSm103Backend=true"
+    );
   if(options.dualFfnTactic != "disabled" &&
      options.dualFfnTactic != CudnnOssB29NoAb12FfnTactic)
     throw StringError(
       string("cudaSm103DualFFNTactic must be disabled or ") +
       CudnnOssB29NoAb12FfnTactic
+    );
+  if(options.attentionTactic != "disabled" &&
+     options.attentionTactic != Fa4Sm103B29AttentionTactic)
+    throw StringError(
+      string("cudaSm103AttentionTactic must be disabled or ") +
+      Fa4Sm103B29AttentionTactic
     );
   return options;
 }
@@ -93,10 +108,14 @@ Sm103Model::Sm103Model(
   logger(NULL),
   loggedScaffold(false),
   loggedCudnnOssFfn(false),
+  loggedFa4Attention(false),
   device(-1),
   cudnnOssB29Context(nullptr),
+  fa4Sm103B29Context(nullptr),
   hasLaunchedFfn(false),
-  lastFfnStream(nullptr)
+  lastFfnStream(nullptr),
+  hasLaunchedAttention(false),
+  lastAttentionStream(nullptr)
 {
   (void)cudaHandles;
   if(officialApplyContext == NULL || officialApply == NULL)
@@ -107,11 +126,19 @@ Sm103Model::Sm103Model(
     throw StringError("SM103 optimized backend requires exact CC10.3");
   if(!options.allowOfficialForwardScaffold &&
      !options.reusePortableTactics &&
-     options.dualFfnTactic == "disabled")
+     options.dualFfnTactic == "disabled" &&
+     options.attentionTactic == "disabled")
     throw StringError(
       "SM103 optimized backend has no registered tactics yet; "
       "cudaSm103AllowOfficialForwardScaffold=true is required for wiring tests"
     );
+
+  if(options.dualFfnTactic != "disabled" ||
+     options.attentionTactic != "disabled") {
+    cudaError_t cudaStatus = cudaGetDevice(&device);
+    if(cudaStatus != cudaSuccess)
+      throwCudaError("SM103 native AOT cudaGetDevice",cudaStatus);
+  }
 
   if(options.dualFfnTactic == CudnnOssB29NoAb12FfnTactic) {
     if(maxBatchSize != 29 || !useFP16 ||
@@ -120,9 +147,6 @@ Sm103Model::Sm103Model(
         "SM103 cuDNN OSS no-AB12 fast candidate requires exact B29/CC10.3 "
         "R10469/K384/N2304->1152 FP16"
       );
-    cudaError_t cudaStatus = cudaGetDevice(&device);
-    if(cudaStatus != cudaSuccess)
-      throwCudaError("SM103 cuDNN OSS cudaGetDevice",cudaStatus);
     int32_t status = KATAGO_CUDNN_OSS_B29_MODULE_LOAD_FAILED;
     cudnnOssB29Context = katagoCudnnOssB29Create(device,&status);
     if(cudnnOssB29Context == nullptr || status != KATAGO_CUDNN_OSS_B29_SUCCESS)
@@ -130,6 +154,27 @@ Sm103Model::Sm103Model(
         "SM103 cuDNN OSS no-AB12 fast AOT module unavailable, status=" +
         Global::intToString(status)
       );
+  }
+  if(options.attentionTactic == Fa4Sm103B29AttentionTactic) {
+    if(maxBatchSize != 29 || !useFP16 ||
+       !isSm103Arch(majorComputeCapability,minorComputeCapability))
+      throw StringError(
+        "SM103 FA4 native candidate requires exact B29/CC10.3 "
+        "S361/H12/D32 planar FP16"
+      );
+    int32_t status = KATAGO_FA4_SM103_B29_MODULE_LOAD_FAILED;
+    fa4Sm103B29Context = katagoFa4Sm103B29Create(device,&status);
+    if(fa4Sm103B29Context == nullptr ||
+       status != KATAGO_FA4_SM103_B29_SUCCESS) {
+      katagoFa4Sm103B29Destroy(fa4Sm103B29Context);
+      fa4Sm103B29Context = nullptr;
+      katagoCudnnOssB29Destroy(cudnnOssB29Context);
+      cudnnOssB29Context = nullptr;
+      throw StringError(
+        "SM103 FA4 native AOT module unavailable, status=" +
+        Global::intToString(status)
+      );
+    }
   }
 }
 
@@ -140,12 +185,64 @@ Sm103Model::~Sm103Model() {
     cudaSetDevice(device);
   if(hasLaunchedFfn)
     cudaStreamSynchronize(lastFfnStream);
+  if(hasLaunchedAttention)
+    cudaStreamSynchronize(lastAttentionStream);
   for(const auto& entry : packedFfnWeights)
     cudaFree(entry.second);
   packedFfnWeights.clear();
   katagoCudnnOssB29Destroy(cudnnOssB29Context);
+  katagoFa4Sm103B29Destroy(fa4Sm103B29Context);
   if(device >= 0 && previousDevice != device)
     cudaSetDevice(previousDevice);
+}
+
+bool Sm103Model::attention(
+  const void* q,
+  const void* k,
+  const void* v,
+  bool packedQKV,
+  const void* mask,
+  void* output,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream
+) {
+  if(options.attentionTactic != Fa4Sm103B29AttentionTactic)
+    return false;
+  if(batchSize != 29 || seqLen != 361 || numHeads != 12 ||
+     numKVHeads != 12 || qHeadDim != 32 || vHeadDim != 32 ||
+     !usingFP16 || packedQKV || mask != nullptr)
+    return false;
+  if(q == nullptr || k == nullptr || v == nullptr || output == nullptr)
+    throw StringError("SM103 FA4 native attention received a null buffer");
+
+  constexpr float scale = 0.1767766952966369f;
+  int32_t status = katagoFa4Sm103B29Launch(
+    fa4Sm103B29Context,q,k,v,mask,output,scale,stream,
+    batchSize,seqLen,numHeads,numKVHeads,qHeadDim,vHeadDim,
+    packedQKV ? 1 : 0,usingFP16 ? 1 : 0
+  );
+  if(status != KATAGO_FA4_SM103_B29_SUCCESS)
+    throw StringError(
+      "SM103 FA4 native attention launch failed, status=" +
+      Global::intToString(status)
+    );
+  hasLaunchedAttention = true;
+  lastAttentionStream = stream;
+  if(!loggedFa4Attention) {
+    if(logger != nullptr)
+      logger->write(
+        "SM103 backend: FA4 native attention active, tactic=" +
+        string(Fa4Sm103B29AttentionTactic)
+      );
+    loggedFa4Attention = true;
+  }
+  return true;
 }
 
 void Sm103Model::setLogger(Logger* logger_) {
@@ -254,6 +351,31 @@ bool applyFusedFFN(
   return ((Sm103Model*)context)->fusedFFN(
     linear1Weights,linearGateWeights,input,ab12Scratch,output,
     matBatchSize,inputChannels,ffnChannels,usingFP16,stream
+  );
+}
+
+bool applyAttention(
+  void* context,
+  const void* q,
+  const void* k,
+  const void* v,
+  bool packedQKV,
+  const void* mask,
+  void* output,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream
+) {
+  if(context == nullptr)
+    return false;
+  return ((Sm103Model*)context)->attention(
+    q,k,v,packedQKV,mask,output,batchSize,seqLen,numHeads,numKVHeads,
+    qHeadDim,vHeadDim,usingFP16,stream
   );
 }
 

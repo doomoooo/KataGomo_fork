@@ -492,3 +492,53 @@ epilogue parallelism.  The single allowed 64x64 fast packed-SFU variant kept
 residual bit-exact and affine output within `1.526e-5` max abs, but its shallow
 TMA ring serialized the boundary to `546.991/1053.751 us`.  None entered the
 full graph; the core/CMake path remains unchanged.
+
+## Stage 06 — native SM103a FA4 D32 attention
+
+Status: retained; cumulative on portable tactics plus the no-AB12 fused FFN.
+
+Stage 05a exhausted cuDNN's engine and knob surface at S1/S2
+`26.2951/45.6243 us`, with a 696-block, 4.70-wave kernel contributing
+`78.934 ms` exclusive critical time. Local FlashAttention main at commit
+`0251105a` contains a true SM103 path: native exp2, FP32 QK/PV accumulation,
+no D32 `tcgen05.ld.red`, and a static-persistent M128N128/q2 schedule whose
+derived KV ring has 24 stages. The unmerged `origin/subtiling` seed `526c18d`
+was audited but not used: its M64 SMEM-P constructor explicitly rejects SM103
+and was tested only on SM100.
+
+The exact B29/S361/H12/D32 planar-QKV control passed the isolated FP32 check
+at `4.8804e-4` max absolute error and `2.4891e-5` RMSE. Direct-launch medians
+were S1 `21.244 us` and S2 round `37.701 us`, respectively `1.238x` and
+`1.210x` faster than cuDNN. Native NCU then measured grid 148, block 512,
+one wave, 128 registers/thread, `232.45 KiB` dynamic shared memory,
+25.0/23.15% theoretical/achieved occupancy, 53.97% no-eligible cycles, and no
+local-memory spills. The one-wave persistent work distribution, rather than a
+smaller resource tile, is the material difference from cuDNN.
+
+The first C export exposed a real ABI defect before any performance result was
+accepted. CuTe DSL 4.7 could not generate C for the upstream PEP-604
+`max_seqlen_q: Int32 | int | None` annotation. Removing that argument from
+the header shifted the stream and return slots; cuda-gdb showed garbage
+`grid.x`/stream fields and a SIGSEGV inside `cuLaunchKernelEx`. The retained
+generator instead rectifies only the C-export annotation to `cutlass.Int32`,
+keeps the runtime slot, and the native bridge supplies exact value 361. CMake
+authenticates source identity and header/object/runtime hashes, links only a
+build-private object copy, and the default build remains a fail-closed stub.
+
+Exact-warmup B29/S2 NSYS contains 4752 FA4 calls and zero cuDNN SDPA calls;
+the same-binary control contains 4752 cuDNN calls. Kernel sum falls
+`753.832 -> 729.672 ms` (-3.205%), kernel union falls
+`505.850 -> 482.695 ms` (-4.577%), while overlap remains essentially flat
+at `247.982 -> 246.976 ms`. Attention total/exclusive/overlap changes from
+`128.900/94.229/34.671 ms` to `109.840/76.872/32.968 ms`. The savings
+therefore land almost entirely on the exposed critical path, unlike the
+dropped QKV+RoPE fusion.
+
+Five 1000-iteration B29/S2 samples are
+`8933.984650, 8948.551416, 8949.114828, 8963.775297, 8960.522266` nnEval/s;
+median is `8949.114828`, spread `0.333%`. This is `+4.207%` over no-AB12 and
+`+32.900%` over fixed TRT 10.16. The 8192-row replay passes every 2.25x TRT
+request guard: policy RMSE is `9.5291e-5`, policy top-1 agreement is
+`99.8291%`, and the maximum request ratio is `1.946x`. Complete profiler,
+artifact, ABI-debug, throughput, and replay hashes are recorded in
+`stage-06-fa4-native-profile.json`.

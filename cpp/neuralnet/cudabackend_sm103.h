@@ -16,6 +16,7 @@ struct CudaHandles;    // defined in cudabackend.cpp
 struct ScratchBuffers; // defined in cudabackend.cpp
 struct Logger;         // defined in core/logger.h
 struct KatagoCudnnOssB29Context;
+struct KatagoFa4Sm103B29Context;
 
 namespace Sm103Backend {
 
@@ -53,6 +54,26 @@ typedef bool (*Sm103FusedFFNFn)(
   cudaStream_t stream
 );
 
+// Exact B29 planar-QKV FA4 forward hook. Keeping this separate from the SM120
+// attention callback prevents an SM120 artifact from being installed on CC10.3.
+typedef bool (*Sm103AttentionFn)(
+  void* ctx,
+  const void* q,
+  const void* k,
+  const void* v,
+  bool packedQKV,
+  const void* mask,
+  void* output,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
+  bool usingFP16,
+  cudaStream_t stream
+);
+
 struct Options {
   // Default-off so the official CUDA baseline on B300 is unchanged.
   bool enabled = false;
@@ -65,6 +86,8 @@ struct Options {
   // Exact candidate identifier, or "disabled". Kept independent of the
   // portable tactic bundle and default-off.
   std::string dualFfnTactic = "disabled";
+  // Exact native FA4/CuTe SM103a candidate identifier, or "disabled".
+  std::string attentionTactic = "disabled";
   // Wiring tests may opt into an official-forward-only scaffold. Enabling the
   // SM103 backend without this or reusePortableTactics is a startup error.
   bool allowOfficialForwardScaffold = false;
@@ -123,6 +146,23 @@ class Sm103Model {
     cudaStream_t stream
   );
 
+  bool attention(
+    const void* q,
+    const void* k,
+    const void* v,
+    bool packedQKV,
+    const void* mask,
+    void* output,
+    int batchSize,
+    int seqLen,
+    int numHeads,
+    int numKVHeads,
+    int qHeadDim,
+    int vHeadDim,
+    bool usingFP16,
+    cudaStream_t stream
+  );
+
  private:
   void* officialApplyContext;
   OfficialApplyFn officialApply;
@@ -130,11 +170,15 @@ class Sm103Model {
   Logger* logger;
   bool loggedScaffold;
   bool loggedCudnnOssFfn;
+  bool loggedFa4Attention;
   int device;
   KatagoCudnnOssB29Context* cudnnOssB29Context;
+  KatagoFa4Sm103B29Context* fa4Sm103B29Context;
   std::map<std::pair<const void*,const void*>,void*> packedFfnWeights;
   bool hasLaunchedFfn;
   cudaStream_t lastFfnStream;
+  bool hasLaunchedAttention;
+  cudaStream_t lastAttentionStream;
 };
 
 bool applyFusedFFN(
@@ -147,6 +191,24 @@ bool applyFusedFFN(
   int matBatchSize,
   int inputChannels,
   int ffnChannels,
+  bool usingFP16,
+  cudaStream_t stream
+);
+
+bool applyAttention(
+  void* context,
+  const void* q,
+  const void* k,
+  const void* v,
+  bool packedQKV,
+  const void* mask,
+  void* output,
+  int batchSize,
+  int seqLen,
+  int numHeads,
+  int numKVHeads,
+  int qHeadDim,
+  int vHeadDim,
   bool usingFP16,
   cudaStream_t stream
 );

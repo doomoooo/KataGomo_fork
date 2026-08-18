@@ -377,6 +377,8 @@ struct CudaHandles {
   void* sm120PersistingL2InnerContext;
   Sm103Backend::Sm103FusedFFNFn sm103FusedFFN;
   void* sm103FusedFFNContext;
+  Sm103Backend::Sm103AttentionFn sm103Attention;
+  void* sm103AttentionContext;
 
   CudaHandles(int major, int minor, cudaStream_t stream_, bool ownsStreamForTesting_ = false)
     : stream(stream_),
@@ -433,7 +435,9 @@ struct CudaHandles {
       sm120PersistingL2Inner(NULL),
       sm120PersistingL2InnerContext(NULL),
       sm103FusedFFN(NULL),
-      sm103FusedFFNContext(NULL)
+      sm103FusedFFNContext(NULL),
+      sm103Attention(NULL),
+      sm103AttentionContext(NULL)
   {
     if(stream == NULL)
       throw StringError("CudaHandles: external CUDA stream must not be null");
@@ -2363,8 +2367,30 @@ struct TransformerAttentionBlock {
     SizedBuf<void*> attnOutBuf(scratch->allocator, (size_t)numHeads * vHeadDim * seqLen * batchSize * bytesPerElt);
 
     bool usedSDPA = false;
+    // Architecture-exact SM103 dispatch precedes the SM120 hook and cuDNN.
+    // The callback returns false outside its exact B29 planar-QKV contract.
+    if(cudaHandles->sm103Attention != NULL &&
+       cudaHandles->sm103Attention(
+         cudaHandles->sm103AttentionContext,
+         qBuf,
+         kBuf,
+         vBuf,
+         packedQKV,
+         maskBuf,
+         attnOutBuf.buf,
+         batchSize,
+         seqLen,
+         numHeads,
+         numKVHeads,
+         qHeadDim,
+         vHeadDim,
+         usingFP16,
+         cudaHandles->stream
+       )) {
+      usedSDPA = true;
+    }
     // Thin SM120 dispatch: the FA4 AOT kernel lives in cudabackend_sm120.cpp.
-    if(cudaHandles->sm120Attention != NULL &&
+    if(!usedSDPA && cudaHandles->sm120Attention != NULL &&
        cudaHandles->sm120Attention(
          cudaHandles->sm120AttentionContext,
          cudaHandles,
@@ -4383,6 +4409,10 @@ struct ComputeHandle {
       if(context->sm103Options.dualFfnTactic != "disabled") {
         cudaHandles->sm103FusedFFN = &Sm103Backend::applyFusedFFN;
         cudaHandles->sm103FusedFFNContext = sm103Model.get();
+      }
+      if(context->sm103Options.attentionTactic != "disabled") {
+        cudaHandles->sm103Attention = &Sm103Backend::applyAttention;
+        cudaHandles->sm103AttentionContext = sm103Model.get();
       }
     }
     if(sm120HookOwnerActive) {

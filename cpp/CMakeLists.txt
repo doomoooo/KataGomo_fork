@@ -187,6 +187,80 @@ if(USE_BACKEND STREQUAL "CUDA")
         "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${SM103_CUDNN_OSS_B29_AOT_DIR}")
     set(KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT TRUE)
   endif()
+  set(SM103_FA4_B29_AOT_DIR "" CACHE PATH
+    "Exact FA4 SM103a B29/D32 AOT artifact directory (default: disabled stub)")
+  set(SM103_FA4_B29_RUNTIME_ARCHIVE "" CACHE FILEPATH
+    "Static CUDA dialect runtime archive authenticated by the FA4 manifest")
+  set(SM103_FA4_B29_SOURCE neuralnet/fa4_sm103_b29_aot_stub.cpp)
+  set(SM103_FA4_B29_OBJECT "")
+  set(SM103_FA4_B29_ARTIFACT_OBJECT "")
+  if(SM103_FA4_B29_AOT_DIR OR SM103_FA4_B29_RUNTIME_ARCHIVE)
+    if(NOT SM103_FA4_B29_AOT_DIR OR NOT SM103_FA4_B29_RUNTIME_ARCHIVE)
+      message(FATAL_ERROR
+        "SM103 FA4 B29 AOT requires both SM103_FA4_B29_AOT_DIR and SM103_FA4_B29_RUNTIME_ARCHIVE")
+    endif()
+    set(SM103_FA4_B29_HEADER
+      "${SM103_FA4_B29_AOT_DIR}/fa4_sm103a_b29_d32_control.h")
+    set(SM103_FA4_B29_ARTIFACT_OBJECT
+      "${SM103_FA4_B29_AOT_DIR}/fa4_sm103a_b29_d32_control.o")
+    set(SM103_FA4_B29_MANIFEST "${SM103_FA4_B29_AOT_DIR}/manifest.json")
+    if(NOT EXISTS "${SM103_FA4_B29_HEADER}" OR
+       NOT EXISTS "${SM103_FA4_B29_ARTIFACT_OBJECT}")
+      message(FATAL_ERROR "SM103_FA4_B29_AOT_DIR lacks the generated header/object")
+    endif()
+    if(NOT EXISTS "${SM103_FA4_B29_MANIFEST}")
+      message(FATAL_ERROR "SM103 FA4 sibling manifest.json is required")
+    endif()
+    if(NOT EXISTS "${SM103_FA4_B29_RUNTIME_ARCHIVE}")
+      message(FATAL_ERROR "SM103_FA4_B29_RUNTIME_ARCHIVE does not exist")
+    endif()
+
+    file(READ "${SM103_FA4_B29_MANIFEST}" SM103_FA4_B29_MANIFEST_CONTENT)
+    foreach(SM103_FA4_B29_REQUIRED_IDENTITY IN ITEMS
+      "\"candidate_id\": \"fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32\""
+      "\"architecture\": \"sm_103a\""
+      "\"expected_head\": \"0251105a2fb19d2957484b7f023cd8c115286ced\""
+      "\"subtiling_decision\": \"not used: the seed's M64 SMEM-P constructor explicitly rejects SM103 and was only tested for SM100\"")
+      string(FIND "${SM103_FA4_B29_MANIFEST_CONTENT}"
+        "${SM103_FA4_B29_REQUIRED_IDENTITY}" SM103_FA4_B29_IDENTITY_OFFSET)
+      if(SM103_FA4_B29_IDENTITY_OFFSET EQUAL -1)
+        message(FATAL_ERROR "SM103 FA4 manifest is not the audited exact control")
+      endif()
+    endforeach()
+
+    file(SHA256 "${SM103_FA4_B29_HEADER}" SM103_FA4_B29_HEADER_SHA256)
+    file(SHA256 "${SM103_FA4_B29_ARTIFACT_OBJECT}" SM103_FA4_B29_OBJECT_SHA256)
+    file(SHA256 "${SM103_FA4_B29_RUNTIME_ARCHIVE}" SM103_FA4_B29_RUNTIME_SHA256)
+    string(FIND "${SM103_FA4_B29_MANIFEST_CONTENT}"
+      "\"fa4_sm103a_b29_d32_control.h\": \"${SM103_FA4_B29_HEADER_SHA256}\""
+      SM103_FA4_B29_HEADER_HASH_OFFSET)
+    string(FIND "${SM103_FA4_B29_MANIFEST_CONTENT}"
+      "\"fa4_sm103a_b29_d32_control.o\": \"${SM103_FA4_B29_OBJECT_SHA256}\""
+      SM103_FA4_B29_OBJECT_HASH_OFFSET)
+    string(FIND "${SM103_FA4_B29_MANIFEST_CONTENT}"
+      "\"sha256\": \"${SM103_FA4_B29_RUNTIME_SHA256}\""
+      SM103_FA4_B29_RUNTIME_HASH_OFFSET)
+    if(SM103_FA4_B29_HEADER_HASH_OFFSET EQUAL -1 OR
+       SM103_FA4_B29_OBJECT_HASH_OFFSET EQUAL -1 OR
+       SM103_FA4_B29_RUNTIME_HASH_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "SM103 FA4 manifest hash authentication failed for header/object/runtime archive")
+    endif()
+
+    set(SM103_FA4_B29_PRIVATE_DIR
+      "${CMAKE_CURRENT_BINARY_DIR}/sm103-fa4-b29-private")
+    file(MAKE_DIRECTORY "${SM103_FA4_B29_PRIVATE_DIR}")
+    set(SM103_FA4_B29_OBJECT
+      "${SM103_FA4_B29_PRIVATE_DIR}/fa4_sm103a_b29_d32_control.o")
+    configure_file(
+      "${SM103_FA4_B29_ARTIFACT_OBJECT}" "${SM103_FA4_B29_OBJECT}" COPYONLY)
+    set(SM103_FA4_B29_SOURCE neuralnet/fa4_sm103_b29_aot_bridge.cpp)
+    set_source_files_properties(
+      neuralnet/fa4_sm103_b29_aot_bridge.cpp PROPERTIES
+      INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet;${SM103_FA4_B29_AOT_DIR}")
+    set(KATAGO_ENABLE_SM103_FA4_B29_AOT TRUE)
+  endif()
   set(SM120_SEARCH_FFN_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/neuralnet/tilelang_aot/sm120_search_ffn_stub.cu"
     CACHE FILEPATH "Exact-batch FFN AOT candidate used by the whole-graph search slot")
@@ -252,6 +326,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     neuralnet/cudabackend.cpp
     neuralnet/cudabackend_sm103.cpp
     ${SM103_CUDNN_OSS_B29_SOURCE}
+    ${SM103_FA4_B29_SOURCE}
     neuralnet/cudabackend_sm89.cpp
     neuralnet/cudabackend_sm89_forward.cpp
     neuralnet/cudabackend_sm89_kernels.cu
@@ -761,6 +836,9 @@ if(USE_BACKEND STREQUAL "CUDA")
     target_compile_definitions(katago PRIVATE
       KATAGO_ENABLE_SM103_CUDNN_OSS_B29_AOT)
   endif()
+  if(KATAGO_ENABLE_SM103_FA4_B29_AOT)
+    target_compile_definitions(katago PRIVATE KATAGO_ENABLE_SM103_FA4_B29_AOT)
+  endif()
   target_compile_definitions(katago PRIVATE CUDA_TARGET_VERSION=${CMAKE_CUDA_COMPILER_VERSION})
   find_package(CUDAToolkit REQUIRED)
   find_path(CUDNN_INCLUDE_DIR cudnn.h HINTS ${CUDNN_ROOT_DIR} ${CUDAToolkit_INCLUDE_DIRS} PATH_SUFFIXES include)
@@ -777,6 +855,17 @@ if(USE_BACKEND STREQUAL "CUDA")
     target_link_libraries(katago
       "${SM103_CUDNN_OSS_B29_OBJECT}"
       "${SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE}"
+      ${CMAKE_DL_LIBS})
+  endif()
+  if(KATAGO_ENABLE_SM103_FA4_B29_AOT)
+    # This CuTe host object embeds an sm_103a cubin but is not relocatable CUDA
+    # device code. Passing it as a CMake library makes CUDA's device-link step
+    # repeat the object on the final host link. Keep it on the host link only.
+    target_link_options(katago PRIVATE "${SM103_FA4_B29_OBJECT}")
+    set_property(TARGET katago APPEND PROPERTY LINK_DEPENDS
+      "${SM103_FA4_B29_OBJECT}")
+    target_link_libraries(katago
+      "${SM103_FA4_B29_RUNTIME_ARCHIVE}"
       ${CMAKE_DL_LIBS})
   endif()
   if(SM120_SEARCH_FA4_OBJECT)

@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "stage": "06-fa4-native-sm103a-d32",
+  "timestamp_utc": "2026-08-18T11:42:03Z",
+  "status": "retained",
+  "hypothesis": "The cuDNN engine surface is exhausted and its B29/S361/H12/D32 kernel takes 4.70 waves. Upstream FA4's native SM103a static-persistent D32 schedule can reduce the same dense noncausal boundary to one 148-CTA wave while preserving FP32 QK/PV accumulation and enough two-stream overlap to reduce critical union.",
+  "control": {
+    "implementation": "cuDNN Frontend 1.27 retained native engine 10",
+    "isolated_s1_microseconds": 26.2951,
+    "isolated_s2_round_microseconds": 45.6243,
+    "ncu": {
+      "grid_blocks": 696,
+      "block_threads": 512,
+      "registers_per_thread": 128,
+      "dynamic_shared_memory_bytes": 232448,
+      "waves_per_sm": 4.7,
+      "no_eligible_percent": 53.19
+    },
+    "retained_long_median_nn_evals_per_sec": 8587.808904
+  },
+  "candidate": {
+    "candidate_id": "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32",
+    "artifact_dir": ".final-migration-env/artifacts/fa4-sm103a-b29-d32-m128n128-control",
+    "manifest_sha256": "7d2002e485f078c6a32b1cc61995a65b318f95b02d8f197789a9f0cf7129d657",
+    "header_sha256": "d0303517c2be891d8f82c13ba7f554cf55121c6d545d32b4fb7fe3dfe72ea0b1",
+    "object_sha256": "dfdb57dc0b8b8c3314e306bfe8343521db91e7e7291dc2f0c01e21654aee6cfa",
+    "static_cuda_dialect_runtime_sha256": "7d745c0655e761979d5059122289181960117526991307d6c0a9b604848dc35f",
+    "binary": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4/katago",
+    "binary_sha256": "4d1edac11f5b95cf33eeca2244217b16d0fb5a314323a26d4ea9f4a8f802e63a",
+    "contract": {
+      "compile_target": "sm_103a",
+      "batch": 29,
+      "sequence": 361,
+      "heads_q": 12,
+      "heads_kv": 12,
+      "head_dim_qk": 32,
+      "head_dim_v": 32,
+      "dtype": "FP16",
+      "layout": "planar BSHD Q/K/V and BSHD output",
+      "scale": "1/sqrt(32)",
+      "causal": false,
+      "mask": null,
+      "attention_bias": null,
+      "dropout": 0.0,
+      "tile_m": 128,
+      "tile_n": 128,
+      "q_stages": 2,
+      "kv_stages": 24,
+      "threads": 512,
+      "scheduler": "static_persistent",
+      "cta_count": 1,
+      "qk_accumulator": "FP32",
+      "pv_accumulator": "FP32",
+      "exp2": "native",
+      "tcgen05_ld_red": false
+    }
+  },
+  "upstream_audit": {
+    "flash_attention_commit": "0251105a2fb19d2957484b7f023cd8c115286ced",
+    "flash_fwd_sm100_sha256": "f5928a15a7aa559084d14aa12cc2c95efdc89c7b3a1f0d20219b24103a32456f",
+    "subtiling_seed_commit": "526c18d25bcbc7fc7d6740ab3c7c84ed2d42cb0b",
+    "subtiling_decision": "not used: its M64 SMEM-P constructor explicitly rejects SM103 and was tested only for SM100",
+    "search_policy": "run the exact upstream SM103a control first; do not port or scan M64 after the default wins S1, S2, whole-graph union, long throughput, and accuracy"
+  },
+  "isolated_validation": {
+    "record": ".final-migration-env/profiles/sm103-b29/stage-06-fa4-native/control-validation.json",
+    "record_sha256": "74f8dbf112e35efc28fed7f99dfc70fb28630ba6aa9d72046e581239a5afda08",
+    "correctness_vs_fp32": {
+      "finite": true,
+      "max_abs": 0.00048804283142089844,
+      "mean_abs": 0.000018838421965483576,
+      "rmse": 0.00002489074904588051,
+      "output_sha256": "ec83f077cd46fe94737373546d1cb50dad2c303c37309b810d5e17c4456f4b29"
+    },
+    "timing_method": "direct compiled TVM-FFI launch with CUDA events; 20 warmups, 200 iterations, 7 repeats",
+    "s1_median_microseconds": 21.243999004364014,
+    "s1_speedup_vs_cudnn": 1.2377660154568062,
+    "s2_round_median_microseconds": 37.701120376586914,
+    "s2_speedup_vs_cudnn": 1.2101576702302335
+  },
+  "aot_abi_audit": {
+    "rejected_binary_sha256": "97be4ac877a768485955badae3547fd1885e7197801ff3c9c1d19fd6177c8dbb",
+    "failure": "initial exported header omitted max_seqlen_q after CuTe DSL 4.7 rejected its PEP-604 Int32|int|None annotation; that shifted stream and return slots and caused SIGSEGV in cuLaunchKernelEx before the kernel ran",
+    "cuda_gdb_proof": "lookup completed; stack reached cudaLaunchKernelExC and cuLaunchKernelEx; malformed launch config contained a garbage grid.x and stream",
+    "fix": "rectify only max_seqlen_q's C-export annotation to cutlass.Int32, retain the runtime ABI slot, and pass exact value 361 from the native bridge",
+    "final_wrapper_argument_count": 8,
+    "final_result": "native marker and complete forward succeed; fail-closed stub and authenticated object/header/runtime hashes remain intact"
+  },
+  "native_ncu": {
+    "report": ".final-migration-env/profiles/sm103-b29/stage-06-fa4-native/fa4-native-full.ncu-rep",
+    "report_sha256": "4eb2598aab4c74c8e988e1d2af484dc277a4f783a06ef3c29f886994e0a3b7bd",
+    "method": "one matching native KataGo launch, NCU full set, 40 replay passes",
+    "grid_blocks": 148,
+    "block_threads": 512,
+    "waves_per_sm": 1.0,
+    "registers_per_thread": 128,
+    "dynamic_shared_memory_kib": 232.45,
+    "driver_shared_memory_kib": 1.02,
+    "theoretical_occupancy_percent": 25.0,
+    "achieved_occupancy_percent": 23.15,
+    "no_eligible_percent": 53.97,
+    "compute_throughput_percent": 38.83,
+    "memory_throughput_percent": 10.16,
+    "l2_hit_rate_percent": 40.29,
+    "local_memory_spilling_requests": 0,
+    "replay_duration_microseconds": 41.12
+  },
+  "whole_graph_nsys": {
+    "method": "exact B29/S2, 20 warmups and 50 timed iterations per stream; cudaWarmupOnlyMaxBatchSize=true; same binary control/candidate",
+    "candidate_report": ".final-migration-env/profiles/sm103-b29/stage-06-fa4-native/full-graph-fa4.nsys-rep",
+    "candidate_report_sha256": "7bcb444f7f28733355d130e4537eebe654b4787980bea9e85e9de22d3f40c69b",
+    "candidate_sqlite_sha256": "9bbf2633220e52ed04276d6f08205244360116ca28b1f91dc517d824e010b9a7",
+    "control_report": ".final-migration-env/profiles/sm103-b29/stage-06-fa4-native/full-graph-control.nsys-rep",
+    "control_report_sha256": "02099bc2ba7378229cd60b32bcb1dbe7284c98bf43eccbdbe0b65f501078d320",
+    "control_sqlite_sha256": "c1a0bb34ed24a8fa2a71ba49bcf7910f2db66096d8c0e4e6107707729b7f4fd0",
+    "attention_identity": {
+      "candidate_fa4_calls": 4752,
+      "candidate_cudnn_sdpa_calls": 0,
+      "control_cudnn_sdpa_calls": 4752
+    },
+    "profiled_nn_evals_per_sec": {
+      "control": 8264.039364,
+      "candidate": 8652.853984
+    },
+    "kernel_sum_milliseconds": {
+      "control": 753.832,
+      "candidate": 729.672,
+      "reduction_percent": 3.205
+    },
+    "kernel_union_milliseconds": {
+      "control": 505.850,
+      "candidate": 482.695,
+      "reduction_percent": 4.577
+    },
+    "two_stream_overlap_milliseconds": {
+      "control": 247.982,
+      "candidate": 246.976
+    },
+    "attention_milliseconds": {
+      "control": {"total": 128.900, "exclusive": 94.229, "overlap": 34.671},
+      "candidate": {"total": 109.840, "exclusive": 76.872, "overlap": 32.968}
+    },
+    "conclusion": "attention saves 19.060 ms raw and 17.357 ms exposed critical time while global overlap stays effectively flat; unlike the dropped QKV fusion, the isolated saving transfers to S2 union"
+  },
+  "short_abba": {
+    "method": "same cumulative binary; 50 warmups, 300 iterations, exact B29/S2",
+    "control_samples_nn_evals_per_sec": [8567.036256, 8549.377918],
+    "candidate_samples_nn_evals_per_sec": [8930.480125, 8926.482688],
+    "control_center_nn_evals_per_sec": 8558.207087,
+    "candidate_center_nn_evals_per_sec": 8928.4814065,
+    "gain_percent": 4.326540778
+  },
+  "long_s2": {
+    "warmups": 200,
+    "iterations_per_sample": 1000,
+    "samples_nn_evals_per_sec": [
+      8933.98465,
+      8948.551416,
+      8949.114828,
+      8963.775297,
+      8960.522266
+    ],
+    "median_nn_evals_per_sec": 8949.114828,
+    "relative_spread": 0.003328893,
+    "gain_vs_no_ab12_percent": 4.207195666,
+    "gain_vs_tensorrt_10_16_percent": 32.900031032
+  },
+  "full_accuracy": {
+    "rows": 8192,
+    "corpus_sha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5",
+    "model_sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "reference_sha256": "789a6f927b90d85c67b30766c7a271e1a711954f87bfe61132c0c58e3626a08b",
+    "candidate_sha256": "673316051f8972649f85ad6f262f11831ab9343a90f65c0f36d6e6448804ac03",
+    "comparison": ".final-migration-env/baselines/b300-20260818/cudnn-oss-b29-correctness/portable-fa4-native-vs-fp32.json",
+    "comparison_sha256": "5a117af44a64780c4e766d3b7e925de4e5386c892d855a9f9b007521d45283da",
+    "input_and_target_sections_byte_exact": true,
+    "policy_probability_rmse": 0.00009529080853099003,
+    "policy_top1_vs_fp32": 0.998291015625,
+    "value_outcome_rmse": 0.002122806617990136,
+    "score_mean_rmse": 0.0018368397140875459,
+    "ownership_sigmoid_rmse": 0.00023349409457296133,
+    "maximum_policy_abs_error": 0.009579360485076904,
+    "maximum_request_ratio_to_trt16": 1.9463556329433207,
+    "request_gate_multiplier": 2.25,
+    "request_gate_passed": true
+  },
+  "integration": {
+    "config_key": "cudaSm103AttentionTactic",
+    "default": "disabled",
+    "architecture_guard": "exact CC10.3",
+    "shape_guard": "B29/S361/H12/D32 MHA FP16, planar Q/K/V, null mask",
+    "fallback": "returns false outside the exact shape; selecting the tactic with an absent or unauthenticated module fails handle construction",
+    "activation_marker": "SM103 backend: FA4 native attention active, tactic=fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32",
+    "cmake_authentication": "candidate/source identity plus header/object/static-runtime SHA-256; link uses a build-private object copy"
+  },
+  "decision": {
+    "isolated_gate": "pass",
+    "native_ncu_gate": "pass",
+    "whole_graph_union_gate": "pass",
+    "long_gate": "pass",
+    "accuracy_gate": "pass",
+    "retained": true,
+    "production_ready": false
+  }
+}
