@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-portable-baseline-evidence",
+  "stage": "02-portable-proven-tactics",
+  "status": "qualified_discovery_pending_commits",
+  "target": {
+    "architecture": "sm103",
+    "accelerated_target": "sm_103a",
+    "batch": 29,
+    "streams": 2
+  },
+  "binary": {
+    "path": ".final-migration-env/katago-builds/cuda-sm103-portable/katago",
+    "measurement_sha256": "b514d85c5e4d8b33dc0ab2eb26a26030d199d6a5d53a1c48b6b66c21bb3f8738",
+    "clean_split_sha256": "a00157f08a37b91bbf12956d36f6c92fae06f7d9a0856d614a6a38499e7b0625",
+    "clean_split_short_nn_evals_per_sec": 7139.41769,
+    "cuda": "13.3.73"
+  },
+  "portable_empty": {
+    "iterations": 1000,
+    "warmup": 80,
+    "samples_nn_evals_per_sec": [
+      5018.968251,
+      4981.821598
+    ],
+    "median_nn_evals_per_sec": 5000.3949245,
+    "relative_spread": 0.0074287438414105175
+  },
+  "retained_ladder": [
+    {
+      "name": "cublas_hgemm_beta1_residual",
+      "config": {
+        "cudaUseFusedResidual": true,
+        "cudaUseFusedResidualGemmSm120": true
+      },
+      "samples_nn_evals_per_sec": [
+        5617.3029,
+        5583.296655
+      ],
+      "median_nn_evals_per_sec": 5600.2997775,
+      "relative_spread": 0.006072218693832158,
+      "gain_vs_previous_percent": 11.99714946634911
+    },
+    {
+      "name": "rmsnorm_c384_warp4_vec8",
+      "config": {
+        "cudaRMSNormTacticSm120": "warp4-vec8"
+      },
+      "samples_nn_evals_per_sec": [
+        5978.789799,
+        5969.539899
+      ],
+      "median_nn_evals_per_sec": 5974.164849000001,
+      "relative_spread": 0.00154831683319688,
+      "gain_vs_previous_percent": 6.675804623924897
+    },
+    {
+      "name": "planar_fused_qk_rope",
+      "config": {
+        "cudaUseFusedQKRoPE": true,
+        "cudaUseBatchSharedRoPE": false,
+        "cudaUseBatchSharedRoPEUnrolledSm120": false,
+        "cudaUseFusedQKRoPEHalf2Sm120": false
+      },
+      "samples_nn_evals_per_sec": [
+        6497.882942,
+        6492.744926
+      ],
+      "median_nn_evals_per_sec": 6495.313934,
+      "relative_spread": 0.0007910342829012027,
+      "gain_vs_previous_percent": 8.723379722058278
+    },
+    {
+      "name": "affine_silu_half2",
+      "config": {
+        "cudaAffineSiluTacticSm120": "half2"
+      },
+      "samples_nn_evals_per_sec": [
+        6712.092932,
+        6763.835599
+      ],
+      "median_nn_evals_per_sec": 6737.9642655,
+      "relative_spread": 0.007679272991240894,
+      "gain_vs_previous_percent": 3.7357752676100198
+    },
+    {
+      "name": "swiglu_c1152_half8",
+      "config": {
+        "cudaUseSwiGLU1152Sm120": true
+      },
+      "samples_nn_evals_per_sec": [
+        7150.536082,
+        7149.647579
+      ],
+      "median_nn_evals_per_sec": 7150.0918305,
+      "relative_spread": 0.00012426455786331995,
+      "gain_vs_previous_percent": 6.11649971357362
+    }
+  ],
+  "rejected_discovery": [
+    {
+      "name": "persisting_l2_trunk_inner",
+      "gain_vs_previous_percent": -1.8857478884265033
+    },
+    {
+      "name": "fused_policy_and_head_bn",
+      "gain_vs_previous_percent": -1.6416538120332391
+    }
+  ],
+  "comparison_to_tensorrt": {
+    "tensorrt_10_16_median_nn_evals_per_sec": 6733.719141,
+    "portable_best_median_nn_evals_per_sec": 7150.0918305,
+    "portable_best_gain_percent": 6.183398516947447
+  },
+  "whole_graph_nsys": {
+    "tool_version": "2025.3.2",
+    "baseline_nn_evals_per_sec": 4703.19888,
+    "portable_best_nn_evals_per_sec": 6930.278801,
+    "throughput_gain_percent": 47.35245048791135,
+    "baseline_kernel_time_sum_ns": 986013223,
+    "portable_best_kernel_time_sum_ns": 753574298,
+    "kernel_time_reduction_percent": 23.573611344966714,
+    "baseline_kernel_instances": 70036,
+    "portable_best_kernel_instances": 57592,
+    "kernel_instance_reduction_percent": 17.768005025986632,
+    "baseline_report_sha256": "3d99d889d980f60e0a65c873cd24f0a3330558ec1792744d4bfb6fb58ac90984",
+    "portable_best_report_sha256": "f38732ce3c9900f0746f834f93cc8cc1533bb95adeb90c4b4e0ba9552bb8dcfc",
+    "baseline_kernel_csv_sha256": "23ac7bf4c0b52626bc7c043c43f7c507ced7111a14ae92642c72da92f50b4b94",
+    "portable_best_kernel_csv_sha256": "7579165d8fbeab92e2574a30950549ea2cbcbf8852bad294fee3491c1654be4a"
+  },
+  "accuracy": {
+    "reference": "CUDA FP32",
+    "rows": 8192,
+    "candidate_replay_sha256": "8a62462357c81cc6c50974a95b31d47f8dfd62ee3eadf9ee923392dba6942d22",
+    "comparison_sha256": "5745c12600a64995b5ac47bbe12ffebd74b2b7eb46f288c4c1086d22ad4a0f0c",
+    "policy_top1_vs_reference": 0.9979248046875,
+    "policy_probability_rmse": 0.00009608553227735683,
+    "value_outcome_rmse": 0.0021319063380360603,
+    "score_mean_rmse": 0.0018199598416686058,
+    "ownership_sigmoid_rmse": 0.00023663377214688808,
+    "trt16_relative_request_ratios": {
+      "policy_max_abs": 1.0683822186899226,
+      "policy_max_rmse": 1.0727186383377154,
+      "value_max_abs": 1.0230589369314937,
+      "value_max_rmse": 1.0230551886490087,
+      "score_max_abs": 0.883044859124328,
+      "score_max_rmse": 0.8825033292288912,
+      "ownership_max_abs": 0.7202852679370555,
+      "ownership_max_rmse": 1.096872168640191
+    },
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true
+  },
+  "production_ready": false,
+  "commit_status": "pending_separate_commits"
+}

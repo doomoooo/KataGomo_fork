@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-accuracy-evidence",
+  "stage": "01-original-cudnn-oss-ffn",
+  "status": "failed_request_gate",
+  "candidate": "cudnn-fe-1_27-oss-dense-gemm-swiglu-fp16-b29",
+  "exact_batch": 29,
+  "rows": 8192,
+  "reference": {
+    "backend": "cuda",
+    "precision": "FP32",
+    "replay_sha256": "789a6f927b90d85c67b30766c7a271e1a711954f87bfe61132c0c58e3626a08b"
+  },
+  "candidate_replay_sha256": "03cc06e116ff5e13eb1e8ecc1a25137510583ae47dbb02f9666976010b9c83b7",
+  "comparison_sha256": "218f636e9c93f3acff19955c9f592cb9244cf011c63601b76acb05aab6e18b9f",
+  "aggregate": {
+    "policy_top1_vs_reference": 0.9951171875,
+    "policy_probability_rmse": 0.00031440367456525564,
+    "value_outcome_rmse": 0.003455517115071416,
+    "score_mean_rmse": 0.0030804304406046867,
+    "ownership_sigmoid_rmse": 0.0006558005698025227
+  },
+  "request_gate": {
+    "control": "TensorRT 10.16.1.11 vs CUDA FP32",
+    "maximum_control_multiplier": 2.0,
+    "passed": false,
+    "metrics": {
+      "policyProbability": {
+        "maximumAbs": 0.1679590791463852,
+        "maximumAbsRatioToControl": 15.132187812134166,
+        "maximumAbsPassed": false,
+        "maximumRmse": 0.01229176763445139,
+        "maximumRmseRatioToControl": 19.756358993593174,
+        "maximumRmsePassed": false
+      },
+      "valueProbability": {
+        "maximumAbs": 0.06489986181259155,
+        "maximumAbsRatioToControl": 1.901360835255639,
+        "maximumAbsPassed": true,
+        "maximumRmse": 0.052990030497312546,
+        "maximumRmseRatioToControl": 1.9015733723636787,
+        "maximumRmsePassed": true
+      },
+      "scoreRaw": {
+        "maximumAbs": 0.5262035727500916,
+        "maximumAbsRatioToControl": 1.1390289915805922,
+        "maximumAbsPassed": true,
+        "maximumRmse": 0.24151873588562012,
+        "maximumRmseRatioToControl": 1.2551096510196844,
+        "maximumRmsePassed": true
+      },
+      "ownershipProbability": {
+        "maximumAbs": 0.11509224772453308,
+        "maximumAbsRatioToControl": 15.711115360205692,
+        "maximumAbsPassed": false,
+        "maximumRmse": 0.015420998446643353,
+        "maximumRmseRatioToControl": 10.029103208433433,
+        "maximumRmsePassed": false
+      }
+    }
+  },
+  "accepted": false
+}
