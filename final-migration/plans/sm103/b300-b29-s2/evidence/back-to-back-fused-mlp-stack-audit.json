@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "kind": "sm103-back-to-back-fused-mlp-stack-audit",
+  "timestamp_utc": "2026-08-18T14:02:00Z",
+  "status": "closed_major_kernel_blocker",
+  "gpu_work_performed": false,
+  "core_or_provider_source_modified": false,
+  "contract_or_runtime_path_created": false,
+  "objective": "Find an FP16/BF16-only local provider or bounded derivative for a true single-kernel B29 SwiGLU MLP: two input GEMMs, the accepted FP16 roundtrip and fast SwiGLU, then the complete K1152 down GEMM with beta-one residual.",
+  "target": {
+    "architecture": "sm_103a",
+    "input": {"shape": [10469, 384], "dtype": "FP16"},
+    "gate_and_up_weights": {"count": 2, "shape_each": [384, 1152], "dtype": "FP16"},
+    "activation": "FP16 projection roundtrip followed by accepted fast SwiGLU",
+    "down_weight": {"shape": [1152, 384], "dtype": "FP16"},
+    "output": {"shape": [10469, 384], "dtype": "FP16", "epilogue": "beta-one residual"},
+    "accumulation": "FP32 tensor-core accumulation",
+    "excluded_precisions": ["FP8", "INT8", "FP4"]
+  },
+  "retained_graph_context": {
+    "parent_stage": "Stage08 id70 Q/K/V auxiliary-stream dependency DAG",
+    "parent_evidence": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-08-qkv-aux-streams.json",
+    "parent_evidence_sha256": "38667e90a8010bf40fe258da2fb6b8d9afb95e33ae514494fc42cffd1b361553",
+    "parent_median_nn_evals_per_sec": 9201.745296,
+    "profile": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/nsys-final-aux.sqlite",
+    "profile_sha256": "e0505e7a2b2d9de21b2c710358a53f919242a37b78b4115102b37805cadee79c",
+    "fused_ffn_exposed_ms": 38.14,
+    "observation": "The accepted no-AB12 input projection plus SwiGLU remains an exposed hotspot, while linear2 remains a separate large library GEMM. This audit asks whether deleting their global intermediate is locally implementable, not whether either standalone GEMM can be retiled again."
+  },
+  "intermediate_value": {
+    "shape": [10469, 1152],
+    "dtype": "FP16",
+    "bytes_per_stream": 24120576,
+    "mib_per_stream": 23.003173828125,
+    "logical_store_plus_load_bytes_per_ffn": 48241152,
+    "logical_store_plus_load_mb_per_ffn": 48.241152,
+    "ffn_calls_per_forward": 33,
+    "logical_store_plus_load_bytes_per_forward_per_stream": 1591958016,
+    "combined_two_stream_working_set_bytes_per_ffn": 48241152,
+    "b300_l2_bytes": 132644864,
+    "interpretation": "Eliminating the tensor removes one full logical write and read, but the two-stream 48.24 MB working set fits in B300's 132.64 MB L2. Therefore 48.24 MB is an upper bound on memory-system traffic saved per FFN, not a DRAM-saving claim; input/down GEMM compute remains."
+  },
+  "arithmetic_work": {
+    "two_input_projection_flops_per_ffn": 18524602368,
+    "down_projection_flops_per_ffn": 9262301184,
+    "total_mlp_flops_per_ffn": 27786903552,
+    "note": "A fusion that recomputes the two input projections once for each of three N128 down-output tiles would triple the 18.52 GFLOP input stage and erase the memory-roundtrip value."
+  },
+  "provider_inventory": [
+    {
+      "provider": "CUTLASS example 45 dual_gemm",
+      "version_or_commit": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+      "resource": ".final-migration-env/third_party/cutlass/examples/45_dual_gemm/dual_gemm.cu",
+      "sha256": "0c57d3d79fd84d1a31c8d313865cf2a1b7e8e5ecc305622c1cc711352efb6ed0",
+      "line_anchors": "33-44,93-112",
+      "finding": "Computes two parallel GEMMs sharing X and an elementwise SiLU-multiply result. It does not consume that result in a second sequential GEMM; it is the same boundary already implemented more efficiently by the accepted no-AB12 SM103 kernel.",
+      "classification": "partial boundary only"
+    },
+    {
+      "provider": "CUTLASS example 13 two_tensor_op_fusion",
+      "version_or_commit": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+      "resource": ".final-migration-env/third_party/cutlass/examples/13_two_tensor_op_fusion/README.md",
+      "sha256": "65b08c7c4b14f46bd78490af9c9e0554908483dd49ea57c1ff59e795366204bf",
+      "line_anchors": "20-55,66-84",
+      "finding": "This is a genuine sequential single-kernel GEMM0-to-GEMM1 seed, but block residency requires threadblock_tile_N=problem_N; RF residency additionally requires warp_tile_N=threadblock_tile_N. It is implemented for SM75/80, not tcgen05/SM103.",
+      "classification": "true historical seed, major port and inapplicable shape contract"
+    },
+    {
+      "provider": "CUTLASS CuTe task-scheduling tutorials",
+      "version_or_commit": "6c68991985ca8b09594ac6fd43abbfd5830c4140",
+      "resource": ".final-migration-env/third_party/cutlass/examples/python/CuTeDSL/experimental/task_scheduling/blackwell/tutorial/07_group_pipeline_ts/03_merge_gemm_resadd.py",
+      "sha256": "7624d416a70ce2e221059b0995263e782ae598a3fdd19ffb7c7983e9a4940814",
+      "line_anchors": "29-55,834-1062",
+      "finding": "Merge/fork PipelineGroup primitives coordinate one GEMM's load, MMA, residual, activation, and store tasks. No tutorial makes one GEMM's distributed output the K-reduction input of another GEMM.",
+      "classification": "major-kernel scheduling primitives only"
+    },
+    {
+      "provider": "cuDNN Frontend OSS dense SwiGLU",
+      "version_or_commit": "nvidia-cudnn-frontend 1.27.0",
+      "resource": ".final-migration-env/venv/lib/python3.14/site-packages/cudnn/gemm/cutedsl/dense/swiglu/dense_gemm_persistent_swiglu.py",
+      "sha256": "9eba76ddf512e9fe6074c7cd1b5fe25ebfe389655f8a22a4ba9b0ad5571b8652",
+      "finding": "Provides the accepted packed input projection and SwiGLU output. The installed dense/grouped/FROST surfaces contain no SwiGLU-output-to-second-matmul kernel or complete MLP C ABI.",
+      "classification": "drop-in first stage only"
+    },
+    {
+      "provider": "cuDNN Frontend graph",
+      "version_or_commit": "1.27.0 with cuDNN 9.25",
+      "resource": "cpp/external/cudnn-frontend/include/cudnn_frontend/node/matmul.h",
+      "finding": "The graph API can describe matmul and pointwise nodes, but the local engine/OSS inventory has no backend pattern for two dependent dense matmuls with an unmaterialized K1152 activation. Expressibility is not evidence of one execution kernel.",
+      "classification": "no matching execution plan seed"
+    },
+    {
+      "provider": "Quack MLP",
+      "version_or_commit": "quack-kernels 0.6.4",
+      "resource": ".final-migration-env/venv/lib/python3.14/site-packages/quack/mlp.py",
+      "sha256": "8c937a8f3036f5a1e21b9032cd3ff9d9d7d864d6e80380eddf7d21977a3e6325",
+      "line_anchors": "110-123,220-253",
+      "finding": "The forward path explicitly calls gemm_gated/linear_gated first and a separate gemm/gated_linear second. postact is a tensor passed between launches; the Torch custom-op interface is not a complete native C ABI MLP kernel.",
+      "classification": "optimized two-kernel MLP, not back-to-back fusion"
+    },
+    {
+      "provider": "Liger Tiled SwiGLU MLP",
+      "version_or_commit": "liger-kernel 0.8.1",
+      "resources": [
+        ".final-migration-env/venv/lib/python3.14/site-packages/liger_kernel/ops/tiled_mlp.py",
+        ".final-migration-env/venv/lib/python3.14/site-packages/liger_kernel/transformers/tiled_mlp.py"
+      ],
+      "sha256": [
+        "7b2305b051601dc87c6bfe91e886111b6e3f8ea2a0e4617f05052842e006f126",
+        "fc6a366cdf21b8be08d041c13d735fa4845a12e925f21890104248c292524f6d"
+      ],
+      "line_anchors": "ops 12-55; transformers 90-105",
+      "finding": "TiledMLP chunks rows in Python and calls gate_proj, up_proj, a separate activation kernel, and down_proj for every shard. The cuTile backend explicitly says no GPU kernel.",
+      "classification": "training-memory wrapper, not a fusion seed"
+    },
+    {
+      "provider": "FlashAttention fused_dense FusedMLP",
+      "version_or_commit": "0251105a2fb19d2957484b7f023cd8c115286ced",
+      "resource": ".final-migration-env/third_party/flash-attention/flash_attn/ops/fused_dense.py",
+      "sha256": "06a4fc55348219d2c902387a581324091158add56874f7a8125581bc7e802330",
+      "line_anchors": "310-345,475-528",
+      "finding": "The name FusedMLP refers to cuBLASLt linear-plus-GELU/ReLU/SqReLU for the first layer; line 336 executes the second layer with a separate F.linear. Gated SwiGLU is unsupported.",
+      "classification": "misleading name; first-stage epilogue fusion only"
+    },
+    {
+      "provider": "TransformerEngine",
+      "version_or_commit": null,
+      "finding": "No TransformerEngine distribution or local source tree is installed in the expanded environment, so there is no callable or auditable native C ABI seed in scope.",
+      "classification": "unavailable locally"
+    },
+    {
+      "provider": "Triton",
+      "version_or_commit": "3.7.1",
+      "finding": "The installed tree has no fused SwiGLU MLP implementation. Triton dot can express a custom per-program chain, but it does not solve cross-program ownership of the K1152 reduction and supplies no ready native C ABI boundary.",
+      "classification": "language substrate for a major kernel"
+    },
+    {
+      "provider": "TileLang",
+      "version_or_commit": "0.1.13",
+      "finding": "The installed package exposes GEMM scheduling primitives but no MLP example or operator. Historical local TileLang work covers only dual input GEMM plus SwiGLU or standalone linear2, not their dependent fusion.",
+      "classification": "language substrate for a major kernel"
+    }
+  ],
+  "structural_blocker": {
+    "statement": "The down GEMM output tile depends on all 1152 activated hidden channels, while the input projection is partitioned across many hidden-N CTAs. An epilogue cannot hand one local hidden tile to a complete down-GEMM K reduction without either recomputation, cross-CTA exchange, or materialization.",
+    "cutlass_b2b_constraint_application": {
+      "required_first_gemm_threadblock_n": 1152,
+      "example_constraint": "threadblock_tile_N = problem_N",
+      "M128_hidden_tile_bytes_if_staged_in_smem": 294912,
+      "b300_dynamic_shared_memory_limit_bytes": 232448,
+      "result": "A single M128x1152 FP16 intermediate tile already exceeds B300 shared memory before weights, pipelines, barriers, or down accumulators; RF residency is still less feasible."
+    },
+    "naive_output_tile_recomputation": {
+      "down_output_channels": 384,
+      "assumed_down_n_tile": 128,
+      "output_ctas_per_m_tile": 3,
+      "effect": "Each output CTA would recompute both complete input projections unless hidden chunks are exchanged, tripling the input-stage work from 18.52 to 55.57 GFLOP per FFN."
+    },
+    "single_owner_alternative": "One persistent CTA/cluster could own an M tile, loop over hidden-K chunks, round each pair to FP16, apply SwiGLU into a shared-memory chunk, and accumulate all N384 down outputs in TMEM. This requires a new dual-mainloop pipeline, partial TMEM allocation, down-weight staging, and either one CTA owning N384 or DSM/cluster multicast. No audited provider implements it.",
+    "numeric_constraint": "The accepted projection FP32-to-FP16 roundtrip must occur before fast SwiGLU and before the down GEMM consumes each hidden chunk; directly feeding FP32 accumulators would repeat the already-rejected numerical implementation error."
+  },
+  "native_abi_audit": {
+    "complete_drop_in_c_abi_found": false,
+    "existing_first_stage_c_abi": "The accepted cuDNN OSS derivative has an authenticated CuTe-generated C wrapper for input projection plus SwiGLU only.",
+    "other_interfaces": "Quack, Liger, FlashAttention fused_dense, Triton, and TileLang expose Python/Torch/JIT interfaces or old CUTLASS C++ device examples, not an SM103a full-MLP native ABI."
+  },
+  "classification": {
+    "drop_in": [],
+    "bounded_derivative": [],
+    "major_kernel_seeds": [
+      "CUTLASS example 13 block/RF-resident B2B concept, after replacing its impossible N1152 residency contract",
+      "CuTe task-scheduling PipelineGroup primitives for a newly designed chunked producer-consumer mainloop",
+      "Triton or TileLang only as implementation languages, not reusable schedules"
+    ]
+  },
+  "decision": {
+    "one_shot_candidate_recommended": false,
+    "gpu_trial_justified": false,
+    "reason": "No provider crosses the dependent K1152 reduction boundary. The only true B2B example requires an impossible whole-N hidden tile, while all production-named MLP paths still materialize postact. A correct candidate would be a new persistent/cluster MLP algorithm, not a bounded provider swap.",
+    "reopen_conditions": [
+      "A provider publishes an SM100/SM103 sequential GEMM fusion whose first GEMM may have N larger than its threadblock tile and whose second K reduction consumes distributed producer tiles without a full global intermediate",
+      "or a new design supplies static TMEM/SMEM/register accounting for the exact M10469/K384/H1152/N384 problem and proves no input-projection recomputation across down-output tiles",
+      "the design must preserve the FP16 projection boundary, fast SwiGLU semantics, beta-one residual, a stable native C ABI, and show an isolated complete-boundary advantage before any whole-graph GPU gate"
+    ]
+  }
+}
