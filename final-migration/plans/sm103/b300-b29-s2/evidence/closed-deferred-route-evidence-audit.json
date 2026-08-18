@@ -1,0 +1,729 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-closed-deferred-route-evidence-audit",
+  "timestamp_utc": "2026-08-18T12:20:52Z",
+  "status": "cpu_only_closure_audit_no_gpu_no_core_change",
+  "snapshot": {
+    "branch": "cuda-opt-sm103",
+    "target": "B300 CC10.3 sm_103a, B29/S2, FP16 NHWC",
+    "retained_reference": "no-AB12 fused FFN plus native FA4",
+    "retained_long_nn_evals_per_sec": 8949.114828,
+    "retained_reference_evidence": {
+      "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-06-fa4-native-profile.json",
+      "sha256": "8c0756d6413eb9d88658eb2bbce7ddf81a8d7721ce4f84d9cc75cced9dad83c0"
+    },
+    "note": "Evidence is graded at this timestamp. Concurrent cublasLt-exact and later FA4 work is not declared closed by this file."
+  },
+  "grading": {
+    "A": "Candidate has whole-graph B29/S2 NSYS attribution, targeted NCU resource evidence, and correctness evidence.",
+    "B": "Candidate has isolated S1/S2 correctness plus targeted or partial NCU; it may also have fair boundary NSYS, but lacks whole-graph NSYS.",
+    "C": "Candidate has runtime correctness/timing evidence but no targeted NCU. This grade may include an unprofiled short whole-graph result.",
+    "D": "Static/source/environment analysis only; no candidate GPU result.",
+    "rule": "A route receives the grade of its strongest terminal candidate. Subvariants with weaker evidence are listed explicitly."
+  },
+  "routes": [
+    {
+      "id": "portable-persisting-l2-trunk-inner",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "result": "Accumulated B29/S2 discovery regressed 1.8857478884%.",
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-02-portable-baseline.json",
+        "sha256": "303302f2bfffdcc08a0416fad932f07bfbb6d8a368415ce18952cea897b20044"
+      },
+      "closure_root_cause": "The SM120 persisting-window policy transfers negatively to B300's L2/dual-stream working set; an actual full-network timing loss was observed.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "This was already measured in the accumulated graph, so an isolated resource shape cannot reverse the observed application result."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "portable-fused-policy-head-bn",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "result": "Adding fused policy/head-BN after L2 regressed a further 1.6416538120%.",
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-02-portable-baseline.json",
+        "sha256": "303302f2bfffdcc08a0416fad932f07bfbb6d8a368415ce18952cea897b20044"
+      },
+      "closure_root_cause": "The heads are a small graph share and the launch/format changes did not repay their overhead on B300.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Measured application regression and user-directed head deprioritization close this route."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "portable-unselected-sm120-transfers",
+      "status": "closed_or_deferred_static",
+      "evidence_grade": "D",
+      "variants": [
+        "initial-global matmul-add",
+        "model-weight sharing",
+        "wide/strided QKV SM120 AOT",
+        "wide FFN SM120 AOT",
+        "SM120 projection-GEMM-Lt",
+        "fused value terminal"
+      ],
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/portable-baseline.json",
+        "sha256": "bfa4e9f4f4bddb7b303412ea6284566b9db6370f055d1dc5b5992b6d79428bf3"
+      },
+      "closure_root_cause": "Architecture-bound SM120 objects are illegal on SM103; architecture-neutral switches were historical negatives or had no B300 signal. Projection-GEMM-Lt is separately under active exact-shape investigation and is not closed here.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "Some generic switches lack B300 measurements, but none is a bounded closed candidate in this snapshot."
+      },
+      "supplement": "none; do not duplicate the active cublasLt-exact owner"
+    },
+    {
+      "id": "flashinfer-cutedsl-d32-attention",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "result": {
+        "correctness_max_abs": 0.000053823,
+        "s1_us": 43.824,
+        "s2_round_us": 72.512,
+        "old_cudnn_control_s1_us": 39.424,
+        "old_cudnn_control_s2_us": 63.6,
+        "loss_percent_s1": 11.16,
+        "loss_percent_s2": 14.01,
+        "loss_vs_current_fa4_s2_percent": 92.33
+      },
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-first-pass-20260818.md",
+        "sha256": "badc576c7b5feea332a3557ddd60368fe1feb16202527eb1ab7046a6996f0499"
+      },
+      "source_evidence": {
+        "path": "python/sm103_flashinfer_b29.py",
+        "sha256": "ea12ca1f8fffda5b472106950062bd99b04544ddb396ff790f3fa0aa3fa284b3"
+      },
+      "closure_root_cause": "It was already slower than cuDNN and is now grossly slower than the retained native FA4 boundary.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Although no NCU/full graph was run, the current FA4 S2 reference makes the old <=20% loss obsolete and nearly doubles the performance gap."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "triton-persistent-tma-plain-gemm",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "variants": [
+        {
+          "name": "wide_qkv",
+          "loss_factor_s1": 2.099,
+          "loss_factor_s2": 2.712,
+          "manifest": ".final-migration-env/artifacts/triton-sm103-b29-control/wide_qkv/triton-b29-wide-qkv-m128-n256-k64-s4-w8-persistent-tma-ws.manifest.json",
+          "manifest_sha256": "89f9ae37657ed212e7abc01010281a033130afa146298332fdf8fa20f60ca384",
+          "cubin_sha256": "cee45860e78154e09c43f39caafe99580aa3b3ccf9e9c241e3419b61ccade8df"
+        },
+        {
+          "name": "dual_ffn",
+          "loss_factor_s1": 2.2,
+          "loss_factor_s2": 2.258,
+          "manifest": ".final-migration-env/artifacts/triton-sm103-b29-control/dual_ffn/triton-b29-dual-ffn-m128-n256-k64-s4-w8-persistent-tma-ws.manifest.json",
+          "manifest_sha256": "84cdfd61a88a8692c3d1c573d469ec769879c2ef611f66bb406c61c5cb7c6bd6",
+          "cubin_sha256": "7542d390dc725bd55edd5176e7dc5822759fd9e0fb3e2dec17f36a10be644d2b"
+        }
+      ],
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-first-pass-20260818.md",
+        "sha256": "badc576c7b5feea332a3557ddd60368fe1feb16202527eb1ab7046a6996f0499"
+      },
+      "closure_root_cause": "tcgen05/TMA use did not compensate for the persistent pipeline and workspace overhead; both plain controls are over 2x slower.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Gross >2x isolated losses are outside the supplemental-experiment policy."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "triton-linear2-beta1-residual",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "result": {
+        "candidate_s1_us": 30.592,
+        "control_s1_us": 20.256,
+        "candidate_s2_us": 55.584,
+        "control_s2_us": 33.648,
+        "loss_percent_s1": 51.03,
+        "loss_percent_s2": 65.2,
+        "static_s3_shared_bytes": 188516,
+        "rejected_s4_shared_bytes": 237668
+      },
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-optimization-stages.md",
+        "sha256": "11ba2957dc04b1444ad378efdda1969877b7f943bd1d590cebad288952baa904"
+      },
+      "artifact": {
+        "path": ".final-migration-env/artifacts/triton-sm103-b29-linear2-residual/triton-b29-linear2-residual-m128-n256-k64-s3-w8-persistent-tma-ws.manifest.json",
+        "sha256": "91d9adb17583cd339c6ce9b9f4756ac80a8acd2e488215c6e4f4c83f7cce0b3c",
+        "cubin_sha256": "3880ca21b328fb8e7c527e505f34ea3ed33d981fba36b32149efa6a1f1cba6e2"
+      },
+      "closure_root_cause": "The persistent K1152 pipeline and high shared-memory footprint dominate the saved residual launch.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Loss exceeds 20% in both S1 and S2; no NCU/full graph is warranted."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "cute-plain-planar-qkv",
+      "status": "deferred_unclosed_gap",
+      "evidence_grade": "C",
+      "result": {
+        "candidate_s1_us": 19.953,
+        "three_gemm_control_s1_us": 20.45,
+        "candidate_s2_us": 36.957,
+        "three_gemm_control_s2_us": 40.66,
+        "s1_gain_percent": 2.43,
+        "s2_gain_percent": 9.11,
+        "correctness": "bitwise identical planar Q/K/V",
+        "rope_fused": false
+      },
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-qkv-rope-cute-20260818.md",
+        "sha256": "4b0c6c67b8df331958c28d05bebda634f23f6f583ffd8f5aa7edf154d9276146"
+      },
+      "artifact": {
+        "path": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-control/aot-manifest.json",
+        "sha256": "9ecaaa6cd0975cc51e2c304cedbd7761bb977d65482fc7173502d0b41f7d7fae"
+      },
+      "closure_root_cause": "No closure exists: the project advanced directly to QKV+RoPE fusion, so this shorter QKV-only one-launch boundary never received targeted NCU or a whole-graph trial.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "It wins isolated S2 and preserves the accepted separate RoPE. The failed fused-QKV+RoPE profile is a warning but not a resource proof for this shorter kernel."
+      },
+      "supplement": "recommended_1"
+    },
+    {
+      "id": "cute-fused-planar-qkv-rope-family",
+      "status": "closed_negative",
+      "evidence_grade": "A",
+      "terminal_candidate": {
+        "name": "pairmajor-occ6",
+        "isolated_s1_us": 22.756,
+        "isolated_s2_us": 40.5687,
+        "whole_graph_gain_percent": -6.2826,
+        "profiled_gain_percent": -5.0371,
+        "ncu_sha256": "20231756d49adf798cc63347be9255345d707062d3afe81d3a11ff25321c6b21",
+        "nsys_sha256": "91c0eda0714e4cc8d34771db7d953c20c1b9cca6ab3addb8795b8f6c0c8f68f8"
+      },
+      "variants": [
+        {
+          "name": "v0 scalar-table",
+          "grade": "B",
+          "isolated_s1_us": 39.012,
+          "isolated_s2_us": 73.05,
+          "validation_sha256": "93a891518e2c1c7f8a410709afc92676bf3e8d2fc9b0715ac859bf9396284276",
+          "ncu_sha256": "e1302184e684800c3d5c2b0fd601c6b0e56178cd69592d0828276d7858f1809e"
+        },
+        {
+          "name": "pairmajor",
+          "grade": "B",
+          "isolated_s1_us": 35.7669,
+          "isolated_s2_us": 66.8271,
+          "validation_sha256": "1e2e6425ff78237ca57895a1e30a9fe67b4363bb23fe8c760e476fef613e4f12",
+          "ncu_sha256": "9180c4deb130c20234b7c20ca12e38dd06e70e5f2d7789fe75d3270a8578beaa"
+        },
+        {
+          "name": "pairmajor-occ2",
+          "grade": "B",
+          "isolated_s1_us": 35.4884,
+          "isolated_s2_us": 66.7022,
+          "validation_sha256": "8720414d677ab5c88f6117bd57d7c24698e2753fd69c01f5ffa59aed16504a88",
+          "partial_ncu_sha256": "e12849a861c16105cad163a5b7891c4d7c79744f05ac3fa7fcf5afa8c028f70f"
+        },
+        {
+          "name": "pairmajor-occ4",
+          "grade": "B",
+          "isolated_s1_us": 35.6605,
+          "isolated_s2_us": 68.0156,
+          "validation_sha256": "8a41cae8a09d639d2d955cc1a640b9eae16eff3f9e6f95b2a64157b9c2253bc9",
+          "partial_ncu_sha256": "d043b6c17d7ab328b24e0644d0cf02517f562b8b432e6fbcb1e12ec09e556f81"
+        },
+        {
+          "name": "low-smem-AB2-C1",
+          "grade": "B",
+          "isolated_s1_us": 138.0285,
+          "isolated_s2_us": 269.3784,
+          "validation_sha256": "93a2b3cb8b61c46ee8ab69bf62000f68e84e87b690c29827816e002c2180e630",
+          "partial_ncu_sha256": "fc928052a64daf7f1203e413c1ec4a487efaa4fcb30793972128bba6d7b9568a"
+        },
+        {
+          "name": "direct-store-AB2",
+          "grade": "B",
+          "isolated_s1_us": 120.2653,
+          "isolated_s2_us": 233.1166,
+          "validation_sha256": "693f563e9ae770cd4d4bdf7762e81afe301ef77f74f33cb87f73e3686aa49272",
+          "ncu_sha256": "dd037de75e5f2e5891b4d2c798240cbc4e63374153eb7d99cb5a5826df29e0ae"
+        }
+      ],
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-04-qkv-rope-profile.json",
+        "sha256": "0a16ad0185af80c16bb243b5e92ef0958092cd94e5497dfb6885300f9a833d77"
+      },
+      "closure_root_cause": "The locally faster one-launch grid becomes a long exclusive segment: kernel sum falls 2.31%, but union rises 5.02% and overlap falls 17.19%. Low-SMEM variants serialize the store path or move the limit to registers.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "The best isolated variant has direct whole-graph NSYS/NCU falsification; all other fused variants are dominated or grossly slower."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "cudnn-oss-ffn-no-projection-roundtrip",
+      "status": "closed_correctness_failure",
+      "evidence_grade": "A",
+      "result": {
+        "whole_graph_gain_percent": 14.4,
+        "profiled_gain_percent": 12.5471,
+        "policy_request_ratio_to_trt": 15.132,
+        "ownership_request_ratio_to_trt": 15.711
+      },
+      "primary_evidence": [
+        {
+          "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-01-original-cudnn-oss-profile.json",
+          "sha256": "744c768f6269a0d8c4cb3bba38f1ade1e8b188be31c32eff9ebc88d8631d5585"
+        },
+        {
+          "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-01-original-cudnn-oss-accuracy.json",
+          "sha256": "a3f4ebaec3c34fa4c35cca30dbea5cc5ea5424abfebbda9ca83b00c593247c3c"
+        }
+      ],
+      "closure_root_cause": "It omitted both official FP16 projection rounding boundaries, producing 10-20x request-level drift despite strong performance.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Gross implementation-level numerical failure is terminal."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "ffn-precise-and-newton-math",
+      "status": "closed_negative",
+      "evidence_grade": "C",
+      "variants": [
+        {
+          "name": "precise-exp-div",
+          "correctness": "passes and fixes studied outliers",
+          "isolated_s1_us": 48.5903,
+          "isolated_s2_us": 79.2466,
+          "whole_graph_nn_evals_per_sec": 5554,
+          "timing_path": ".final-migration-env/aot/cudnn-oss-b29-proj-fp16-roundtrip-precise-math-sm103-20260818/standalone-s1-s2-stable-5x1000.json",
+          "timing_sha256": "4f2fc4db8e60337625491915d2a9d8ad7f36ef7eba8338f99a2c21efa3f83357",
+          "accuracy_sha256": "4efdd9450980372c57bbe0330fe0c8a876696da04e997a09f687ff27ffbcec70"
+        },
+        {
+          "name": "one-newton-reciprocal",
+          "correctness": "moves worst case to row7111 and exceeds the 2.25 request guard",
+          "performance": "approximately preserves fast-parent throughput but adds no gain",
+          "accuracy_path": ".final-migration-env/baselines/b300-20260818/cudnn-oss-b29-correctness/portable-roundtrip-newton1-vs-fp32.json",
+          "accuracy_sha256": "86c5a9de15ce10ae0aff83d6317742a2d00b97414210e56df86122312dcbc5ee"
+        }
+      ],
+      "case_study": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-03a-bad-case-study.json",
+        "sha256": "f03ec55bbeee9d1e9c68cc69ed73e7808f6b376cdf4c7c6d062fdca322f1c555"
+      },
+      "closure_root_cause": "Precise math is about 48% slower in S2 and destroys graph throughput; Newton adds no performance and makes request error non-monotone.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Precise exceeds the 20% loss cutoff; Newton has no performance hypothesis and fails accuracy."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "ffn-no-ab12-ab3-two-resident-cta",
+      "status": "closed_negative",
+      "evidence_grade": "A",
+      "result": {
+        "isolated_parent_s2_us": 43.517,
+        "isolated_candidate_s2_us": 43.6495,
+        "full_graph_parent_nn_evals_per_sec": 8556.3966365,
+        "full_graph_candidate_nn_evals_per_sec": 8370.02206,
+        "candidate_ffn_average_us": 26.8351,
+        "parent_ffn_average_us": 23.6574
+      },
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/stage-05-ffn-ab3-profile.json",
+        "sha256": "0cdeed88c77ea453d08fd09832335c1aa222af277c887e3927ff0a3c81e8ff99"
+      },
+      "raw_evidence": {
+        "ncu_sha256": "2f39cedb81806717155ba3223b9f514a3a5c08e9429ffcd2291d2814beb3b504",
+        "nsys_sha256": "226c26c0278bab68cea7d0f261c9b7b4b395dc9f777d1573fd92829306db8917"
+      },
+      "closure_root_cause": "Two-CTA residency was achieved exactly, but the AB3 K384 pipeline starved; full-graph exclusive FFN time rose.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "This is the canonical isolated-near-tie whose resource-reversal hypothesis was directly disproved by full-graph NSYS."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "ffn-no-ab12-m128n64-ab4",
+      "status": "deferred_static",
+      "evidence_grade": "D",
+      "hypothesis": "N64 plus AB4 predicts 115712 B dynamic shared memory and two resident CTAs without AB3's three-stage pipeline.",
+      "primary_evidence": [
+        {
+          "path": "python/sm103_cudnn_oss_b29_no_ab12_n64_ab4.py",
+          "sha256": "7880d3e6b9e79240ae26f82212dd6465971f9c4d3a8180d2fc0fe326aeb62986"
+        },
+        {
+          "path": "python/sm103_cudnn_oss_b29_no_ab12_n64_ab4_export.py",
+          "sha256": "a6fdba6f2fdbba80a8b432e11202da1d60c9d054905afc535ba44e900b6aa7e1"
+        },
+        {
+          "path": "python/sm103_cudnn_oss_b29_no_ab12_n64_ab4_validate.py",
+          "sha256": "ecdd0e23e204f2fae6607d0c11a2bff2606d97e7f46cf1f8faf8193d02b59f0d"
+        }
+      ],
+      "closure_root_cause": "Not closed by measurement. It remains static because no AOT artifact, correctness, timing or NCU result exists.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "The resource prediction is untested, but N64 doubles packed-N tile count and A-tile reloads; AB3 full-graph failure lowers prior probability."
+      },
+      "supplement": "not_selected_in_top_two; first isolated compile/NCU only if a recommended gap is closed or blocked"
+    },
+    {
+      "id": "cudnn-frontend-sdpa-engine-surface",
+      "status": "closed_negative",
+      "evidence_grade": "B",
+      "result": {
+        "tuples_attempted": 18532,
+        "correct_executable_tuples": 34,
+        "retained_s2_us": 45.6243,
+        "tn1_s2_us": 47.2577,
+        "frost_s2_us_range": [67.462, 68.733],
+        "engine8_s2_us": 110.8741
+      },
+      "variants": [
+        {
+          "name": "TN1",
+          "isolated_loss_percent": 3.58,
+          "ncu_sha256": "990c4e7c20947655e7f1fe9e560c27efe0335c0d4a80743826724c7bb30b3d40",
+          "nsys_sha256": "15d0366599823f24b1ecf2144531d19be27c097954e6e3c599b4bbf468734efc",
+          "resource_result": "same grid/block/registers/shared-memory/waves as retained"
+        },
+        {
+          "name": "FROST-D32-envelope",
+          "ncu_sha256": "b69a2fd07921944285a4e388a9c331b5e920cab8980e4cc3ee2938000eee5e71",
+          "nsys_sha256": "3d64e8285e922375e631d7cc490005bb70f4e9528d3d72ed6e947355d13506b7",
+          "resource_result": "lower smem but CGA2, same grid/waves, worse scheduler eligibility"
+        },
+        {
+          "name": "engine8",
+          "ncu_sha256": "d070c545b702a9a00810f36ad0c63074fd1c3d972ca1fcc84b75a6dcb33e416e",
+          "nsys_sha256": "b2372f0bbfab02731f93f7ab34549f3ca1adbc8d7ec3913515a6d2ef2c30a6cd",
+          "resource_result": "SM80 WMMA, 7.05 waves, 158 registers; grossly slower"
+        }
+      ],
+      "primary_evidence": {
+        "path": ".final-migration-env/profiles/sm103-b29/cudnn-sdpa-search/result.json",
+        "sha256": "d61a2dd888bac2b86af0a772dc8932829187edf9c1edf3ad574bdd2c58ad7d32"
+      },
+      "record": {
+        "path": "final-migration/records/sm103-b29-cudnn-sdpa-search-20260818.md",
+        "sha256": "73a8101da980d1ef7d79fa856d0397554465c10af29dee77263983a1fb6beb7f"
+      },
+      "closure_root_cause": "No correct engine changes the useful wave/resource envelope. TN1 is the only <=20% loss, but NCU proves it retains identical resources and fair S2 NSYS is slower.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "A full application run is absent, but the proposed resource mechanism is directly disproved and FA4 has since replaced this boundary."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "cute-final-linear2-residual-affine-silu",
+      "status": "closed_negative",
+      "evidence_grade": "B",
+      "variants": [
+        {
+          "name": "exact-scalar",
+          "candidate_s1_us": 91.409,
+          "control_s1_us": 14.825,
+          "candidate_s2_us": 157.885,
+          "control_s2_us": 28.343,
+          "ncu_sha256": "ffa932a805d2d06aeeaefb70f7f88586f406f42661f42997c79d7458417a57eb"
+        },
+        {
+          "name": "exact-coalesced",
+          "candidate_s1_us": 77.896,
+          "control_s1_us": 14.847,
+          "candidate_s2_us": 68.592,
+          "control_s2_us": 51.503,
+          "ncu_sha256": "6f9cad72d7b8584619e0bc35c255708372171b2ee28e0123e60407c87cb4ddf3",
+          "validation_sha256": "84a0cdf5da10889111eef19488b10a6ad7388c8cb72d74846d5d72b3d7fbcba3"
+        },
+        {
+          "name": "M64N64-fast-SFU",
+          "candidate_s1_us": 546.991,
+          "control_s1_us": 14.609,
+          "candidate_s2_us": 1053.751,
+          "control_s2_us": 27.819,
+          "validation_sha256": "12e4bad0c085318b222c6822479c1e55737d901b0723425a58e53e82ee36a722"
+        }
+      ],
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-linear2-affine-silu-cute-20260818.md",
+        "sha256": "cd9d108491bba690765eccc04c5ec1d02c89f7d41fcb6830d3d01cb0336b0320"
+      },
+      "closure_root_cause": "Auxiliary epilogue traffic, register pressure and shallow-stage serialization overwhelm the removed launches. The best S2 variant is still 33% slower.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "No measured variant is within the 20% supplemental threshold."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "cute-outproj-beta1-rmsnorm",
+      "status": "closed_with_one_unproven_near_loss",
+      "evidence_grade": "B",
+      "variants": [
+        {
+          "name": "M64N192-CGA2-occ6",
+          "candidate_s1_us": 24.7418,
+          "control_s1_us": 13.2287,
+          "candidate_s2_us": 28.509,
+          "control_s2_us": 26.2771,
+          "s2_loss_percent": 8.4936,
+          "correctness": "bitwise exact",
+          "ncu_sha256": "33d17303070d6c6c0bd133e792c5f47c0a5999307c4c4fb4ba6f9012fa359de4",
+          "validation_sha256": "2bfbd66e4bb876bf1aefe9dc8b9c2cab2dc04f9a69df322ad8328af274c974bd",
+          "resource_shape": "328 blocks, 1.11 waves, 114.82 KiB, two resident CTAs, 86.8% no-eligible"
+        },
+        {
+          "name": "M128N192-CGA2-occ6",
+          "candidate_s2_us": 78.8269,
+          "control_s2_us": 27.0538,
+          "validation_sha256": "22d313aaa614132ce3210224ab7cbb0b108d6ea32ff198c9a70d1f51d7f1a104",
+          "ncu": "not run after gross isolated failure"
+        }
+      ],
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/outproj-rmsnorm-fusion-profile.json",
+        "sha256": "0c5e212cc7c11efd5a8fd65d5fabf8d8228976c4978e5f981b505bdc08b47c96"
+      },
+      "closure_root_cause": "M128 is grossly slower. M64 crosses the intended residency boundary but remains latency/scoreboard bound and loses isolated S2 by only 8.49%.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "M64 has the exact profile form that could lose isolated yet hide better in the full graph, and no integrated NSYS exists. Counterevidence is strong: the incumbent boundary is already 79.99% overlap-covered and exposes only 3.43% of union."
+      },
+      "supplement": "recommended_2_as_one_short_fullgraph_nsys_only; no long test unless union wins"
+    },
+    {
+      "id": "fa4-reduced-accumulator-probes",
+      "status": "closed_correctness_or_compile_failure",
+      "evidence_grade": "C",
+      "variants": [
+        {
+          "name": "typed-qk16",
+          "result": "finite but grossly wrong, max abs 3.6728, correlation 0.0691",
+          "evidence_path": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-qk16-native-repeat.json",
+          "sha256": "f68244245d7788672680732656d0204c3d29d7c9e42ee51ae3ed1c37beb06e08"
+        },
+        {
+          "name": "typed-pv16",
+          "result": "non-finite output",
+          "evidence_path": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/typed-pv16-native.json",
+          "sha256": "d66cb5980f0c2a4bec07345019480b19143d0f7812345f8d2413225dee481e99"
+        },
+        {
+          "name": "both16-and-untyped-probes",
+          "result": "IR verification/typed TMEM layout failures",
+          "compile_failure_sha256": "65a30350bbee70ce13dea0e3e1d9153be44a54a854652077ecf0d962508cae13"
+        },
+        {
+          "name": "typed-fp32-control",
+          "result": "reproduces retained output and timing; no optimization",
+          "evidence_path": ".final-migration-env/profiles/sm103-b29/stage-06b-fa4-accum/fp32-native.json",
+          "sha256": "9a358909a61bf7a90d16c781a9bf54013cd48b5566dd962f634e4b93519da8fe"
+        }
+      ],
+      "closure_root_cause": "The online-softmax/TMEM representation is not made numerically valid by changing only accumulator element types; FP32 control has no speed delta.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Gross correctness or compiler failures precede performance/resource qualification."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "qkv-inference-aux-stream-dag",
+      "status": "deferred_static",
+      "evidence_grade": "D",
+      "result": "Current host submission is already about 1024 pending descriptors per stream and 17.45 ms ahead; aux streams would expand dependency-ready QKV grids from two to at most six.",
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/scheduler-submission-window-qkv-aux-plan.json",
+        "sha256": "54a013a37f8eda7f3fd00bc2631228a38b7c0d10e2f100d1112d618029c47815"
+      },
+      "closure_root_cause": "Not closed; only lifetime, graph-capture and scheduler-frontier design exists. Event overhead and full-SM QKV shared memory bound the upside.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "This changes the dependency DAG rather than kernel math, but has no implementation or timing evidence."
+      },
+      "supplement": "not_selected_in_top_two because plain planar QKV already has positive runtime evidence for the same boundary"
+    },
+    {
+      "id": "mslk-1.3",
+      "status": "closed_as_dropin_deferred_as_source_oracle",
+      "evidence_grade": "D",
+      "result": "Wheel has zero sm_103/sm_103a images; native FMHA has no D32 FP16 instantiation; dense grouped source supports FP16 but lacks residual/SiLU/SwiGLU epilogues.",
+      "primary_evidence": {
+        "path": "final-migration/plans/sm103/b300-b29-s2/evidence/mslk-1.3-sm103-low-hanging-audit.json",
+        "sha256": "75c5640b0824f2e5019879951b5054c2f0976bb73e0a5bdb52aeb8fe3ceef64e"
+      },
+      "closure_root_cause": "No drop-in architecture-exact runtime exists. The proposed grouped-QKV source recipe duplicates the already-measured CuTe plain-planar-QKV concept with less evidence and a Torch-dependent source surface.",
+      "unproven_resource_reversal_gap": {
+        "exists": true,
+        "reason": "A standalone SM103a grouped-QKV port is statically plausible but redundant with the stronger recommended plain-QKV experiment."
+      },
+      "supplement": "none in this two-experiment budget"
+    },
+    {
+      "id": "liger-kernel-0.8.1",
+      "status": "closed_static_incompatible",
+      "evidence_grade": "D",
+      "result": "Liger SwiGLU is Triton and selects its Blackwell 2D column tiling only when next_power_of_2(n_cols) >= 16384; KataGo uses C1152/C384. Its CuTe directory offers RMSNorm/cross-entropy rather than dense SwiGLU fusion.",
+      "primary_evidence": {
+        "path": "final-migration/records/sm103-b29-linear2-affine-silu-cute-20260818.md",
+        "sha256": "cd9d108491bba690765eccc04c5ec1d02c89f7d41fcb6830d3d01cb0336b0320"
+      },
+      "closure_root_cause": "Shape dispatcher and operation boundary do not match.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "No exact candidate can be selected without a new port."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "tilelang-and-quack",
+      "status": "closed_as_direct_reuse_deferred_as_generator",
+      "evidence_grade": "D",
+      "result": "Installed packages compile for SM103, but available proven artifacts are SM89/SM120 architecture-bound. Quack patterns already informed the accepted no-AB12 epilogue; no exact new B29 candidate remains.",
+      "primary_evidence": {
+        "path": "final-migration/environment/README.md",
+        "sha256": "cd3566cd6fe3e4e1c9656dca43cc6365c9cf17832286dee849fa32d731f2ffb0"
+      },
+      "closure_root_cause": "No reusable architecture-exact object; plain Triton and CuTe controls already cover the obvious dense boundaries.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "This is a tool provider, not an unmeasured concrete candidate."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "flaggems",
+      "status": "closed_environment_absent",
+      "evidence_grade": "D",
+      "result": "No FlagGems distribution, importable module, source checkout, artifact, or B29 contract exists in the managed environment.",
+      "primary_evidence": {
+        "path": "final-migration/environment/README.md",
+        "sha256": "cd3566cd6fe3e4e1c9656dca43cc6365c9cf17832286dee849fa32d731f2ffb0"
+      },
+      "closure_root_cause": "Absent provider and no exact operator hypothesis.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "Static incompatibility/absence is outside supplemental GPU experiments."
+      },
+      "supplement": "none"
+    },
+    {
+      "id": "deepgemm",
+      "status": "closed_environment_excluded",
+      "evidence_grade": "D",
+      "result": "DeepGEMM is intentionally excluded from the main venv and no source/artifact is present. Its primary low-precision/grouped surface does not supply a drop-in exact KataGo FP16 fused boundary.",
+      "primary_evidence": {
+        "path": "final-migration/environment/README.md",
+        "sha256": "cd3566cd6fe3e4e1c9656dca43cc6365c9cf17832286dee849fa32d731f2ffb0"
+      },
+      "closure_root_cause": "Separate Torch/CUDA ABI and source-only build would be a new environment/project, not a bounded backend swap.",
+      "unproven_resource_reversal_gap": {
+        "exists": false,
+        "reason": "No candidate exists; do not spend GPU time on environment expansion."
+      },
+      "supplement": "none"
+    }
+  ],
+  "near_loss_gap_scan": [
+    {
+      "candidate": "cuDNN SDPA TN1",
+      "isolated_loss_percent": 3.58,
+      "missing": ["whole-graph integration"],
+      "resource_reversal_possible": false,
+      "reason": "NCU shows identical grid, registers, shared memory and waves; fair S2 NSYS is slower."
+    },
+    {
+      "candidate": "outproj+RMS M64N192-CGA2-occ6",
+      "isolated_loss_percent": 8.4936,
+      "missing": ["whole-graph NSYS"],
+      "resource_reversal_possible": true,
+      "reason": "Two-resident CTA and 1.11-wave geometry could overlap differently, although the incumbent is already 80% overlap-covered."
+    },
+    {
+      "candidate": "FlashInfer D32",
+      "isolated_loss_percent_at_time": 14.01,
+      "missing": ["NCU", "whole-graph NSYS"],
+      "resource_reversal_possible": false,
+      "reason": "It is now 92% slower than retained FA4 S2, so the historical <=20% gap is obsolete."
+    },
+    {
+      "candidate": "portable persisting L2",
+      "whole_graph_loss_percent": 1.8857,
+      "missing": ["targeted NCU"],
+      "resource_reversal_possible": false,
+      "reason": "The application result itself is already negative."
+    },
+    {
+      "candidate": "portable fused policy/head-BN",
+      "whole_graph_loss_percent": 1.6417,
+      "missing": ["targeted NCU"],
+      "resource_reversal_possible": false,
+      "reason": "The application result is negative and the boundary is deprioritized."
+    },
+    {
+      "candidate": "FFN AB3",
+      "isolated_loss_percent": 0.3044,
+      "missing": [],
+      "resource_reversal_possible": false,
+      "reason": "The exact resource-reversal hypothesis was tested and failed full-graph NSYS."
+    }
+  ],
+  "recommended_supplemental_experiments": [
+    {
+      "priority": 1,
+      "candidate": "cute-plain-planar-qkv",
+      "why": "It is the only closed/deferred boundary with an isolated S2 win and no terminal NCU/full-graph evidence. It is shorter than the failed QKV+RoPE fusion and retains the accepted RoPE kernel.",
+      "minimum_experiment": [
+        "Create a formal bitwise validation record for the existing artifact.",
+        "Run targeted NCU for grid/cluster/shared-memory/register/wave identity.",
+        "If NCU does not show a gross long-exclusive shape, integrate only QKV and run one short current-baseline B29/S2 NSYS A/B.",
+        "Measure QKV exclusive/overlap, FA4 and FFN displacement, and total union; stop without long testing unless union improves."
+      ],
+      "evidence_budget_reason": "Existing artifact and isolated timings make this cheaper and better grounded than MSLK grouped-QKV or aux-stream implementation."
+    },
+    {
+      "priority": 2,
+      "candidate": "outproj-rmsnorm-M64N192-CGA2-occ6",
+      "why": "It is the sole <=20% isolated S2 loss whose NCU resource form could plausibly become more overlap-friendly in the full graph and which lacks that direct test.",
+      "minimum_experiment": [
+        "Temporary exact hook only; no retuning or M128 variant.",
+        "One short current-baseline B29/S2 NSYS A/B with correctness smoke.",
+        "Compare boundary exclusive time, other-family coverage, total union and FA4/FFN displacement.",
+        "Drop immediately unless total union improves; no long or request gate on a union loss."
+      ],
+      "caution": "The maximum plausible gain is small because only 3.43% of current union is exposed by this boundary and 79.99% is already covered."
+    }
+  ],
+  "explicitly_not_recommended": [
+    "Any gross >2x candidate or compiler/static incompatibility",
+    "FlashInfer after native FA4 retention",
+    "cuDNN TN1/FROST/engine8 full-graph integration",
+    "fused QKV+RoPE tile or low-SMEM scans",
+    "FFN precise/Newton/AB3 reruns",
+    "linear2+affine or Triton linear2 tile scans",
+    "MSLK grouped-QKV before the stronger existing plain-CuTe QKV gap is resolved",
+    "FlagGems or DeepGEMM environment expansion"
+  ],
+  "audit_conclusion": "Most routes are genuinely closed at their claimed level. The important distinction is that FFN AB3 and fused QKV+RoPE already received the full resource-reversal test and failed, whereas plain planar QKV never did. Outproj+RMS M64 is the only isolated near-loss with a defensible but low-ceiling whole-graph reversal gap. These two experiments exhaust the supplemental budget; all other missing profiles are either dominated, grossly slower, numerically invalid, static-only, or obsolete against the retained FA4 baseline."
+}
