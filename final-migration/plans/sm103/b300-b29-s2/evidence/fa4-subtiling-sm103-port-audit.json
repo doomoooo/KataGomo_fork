@@ -1,0 +1,248 @@
+{
+  "schema": 1,
+  "kind": "sm103-fa4-subtiling-port-audit",
+  "timestamp_utc": "2026-08-18T13:42:00Z",
+  "status": "closed_static_major_port_blocker",
+  "gpu_work_performed": false,
+  "core_or_upstream_source_modified": false,
+  "objective": "Determine whether FlashAttention origin/subtiling supplies a bounded SM103a FP16 D32 dense-noncausal M64 candidate that can cross B300's two-resident-CTA resource boundary without a blind tile or accumulator sweep.",
+  "target": {
+    "gpu": "NVIDIA B300 SXM6 AC",
+    "architecture": "sm_103a",
+    "batch": 29,
+    "sequence_q": 361,
+    "sequence_kv": 361,
+    "heads_q": 12,
+    "heads_kv": 12,
+    "head_dim_qk": 32,
+    "head_dim_v": 32,
+    "dtype": "FP16",
+    "causal": false,
+    "mask": null,
+    "desired_dynamic_shared_memory_bytes_max": 115712,
+    "desired_grid_ctas": 296,
+    "desired_resident_ctas_per_sm": 2
+  },
+  "source_identity": {
+    "retained_main_commit": "0251105a2fb19d2957484b7f023cd8c115286ced",
+    "retained_main_role": "source of the accepted M128N128/q2/kv24 native SM103a kernel",
+    "subtiling_commit": "526c18d25bcbc7fc7d6740ab3c7c84ed2d42cb0b",
+    "subtiling_subject": "Add guarded SM100 smaller-tile kernels",
+    "subtiling_parent": "00756db9d921da0846453283ddfbeb7457abd09b",
+    "sm103_ld_red_ancestry_commit": "af04967",
+    "repository": ".final-migration-env/third_party/flash-attention",
+    "branch": "origin/subtiling"
+  },
+  "source_anchors": [
+    {
+      "resource": "flash_attn/cute/interface.py@526c18d",
+      "lines": "566-579",
+      "fact": "tile_m=64 sets p_in_smem and rejects arch != 100 before compilation; FP16/BF16 and the head-dimension envelope are checked here"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "166-204",
+      "fact": "M64 forces q_stage=1, rejects 2CTA/CLC/non-TMA configurations, and independently permits only Arch.sm_100a or Arch.sm_100f"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "242-257",
+      "fact": "SM103 uses native exp2 and disables tcgen05.ld.red for unmodified D32 scores, but this logic is reached only after the M64 SM100-only constructor guard"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "297-371",
+      "fact": "the kernel fixes sixteen warps/512 threads and assigns D32 register budgets softmax=200, correction=64, other=48"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "385-404",
+      "fact": "KV stages are selected to fill a 224 KiB budget after Q/O and SMEM-P, capped at 32 rather than by the exact S361 N-block count"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "528-550",
+      "fact": "M64 changes the PV tcgen05 A operand from TMEM to SMEM; this is an algorithmic SMEM-P path, not a smaller instance of the retained TMEM-P kernel"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "725-780",
+      "fact": "the aligned SharedStorage definition provides the exact barrier, Q, O, KV, scale, and P byte accounting used below"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "836-842",
+      "fact": "launch requests min_blocks_per_mp=1"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "1214-1367",
+      "fact": "warp-specialized setmaxnreg instructions apply the 200/64/48 register budgets"
+    },
+    {
+      "resource": "flash_attn/cute/flash_fwd_sm100.py@526c18d",
+      "lines": "1263",
+      "fact": "every path allocates get_max_tmem_alloc_cols(\"sm_100\"), i.e. all 512 TMEM columns, even when M64 needs fewer logical columns"
+    },
+    {
+      "resource": "flash_attn/cute/tile_scheduler.py@526c18d",
+      "lines": "338-348",
+      "fact": "StaticPersistentTileScheduler caps a one-CTA cluster grid at the physical SM count, so B300 launches 148 rather than 296 CTAs"
+    },
+    {
+      "resource": "tests/cute/test_flash_attn_sm100_tile_m64.py@526c18d",
+      "lines": "42-80,481-498",
+      "fact": "M64 dense tests cover FP16 D96 and several BF16 dimensions, but not FP16 D32/D32 or S361; a dedicated test requires arch 103 to fail with only-on-SM100"
+    },
+    {
+      "resource": "cutlass/cute/arch/tmem.py@CUTLASS-4.7",
+      "lines": "24-75,115-158",
+      "fact": "TMEM capacity is 512 columns for SM100 and SM103; allocations are power-of-two values from 32 through 512"
+    }
+  ],
+  "feature_envelope": {
+    "fp16": "accepted by the declared M64 dtype guard",
+    "head_dim_32": "accepted by supports_sm100_tile_m64_head_dims because both QK and V are in [8,128] and divisible by 8",
+    "dense_noncausal": "supported by the algorithm shape and static-persistent scheduler",
+    "tile_shapes": ["M64N64", "M64N128"],
+    "exact_target_tested_upstream": false,
+    "test_gaps": [
+      "no FP16 D32/D32 forward test",
+      "no S361 forward test",
+      "no successful SM103 M64 test",
+      "the test suite explicitly asserts that arch 103 is rejected"
+    ]
+  },
+  "d32_shared_memory_formula": {
+    "assumptions": {
+      "m": 64,
+      "d_qk": 32,
+      "d_v": 32,
+      "element_bytes": 2,
+      "q_stage": 1,
+      "p_stage": 2,
+      "clc": false,
+      "overlap_q_o": false
+    },
+    "terms_bytes": {
+      "q_plus_o": "2 * 64 * 32 * 2 = 8192",
+      "p": "2 * 64 * tile_n * 2",
+      "kv_per_stage": "tile_n * 32 * 2",
+      "barriers_scale_and_control_before_alignment": "652 + 16 * kv_stage",
+      "dynamic_total": "align_up(652 + 16 * kv_stage, 1024) + 8192 + (256 * tile_n) + (64 * tile_n * kv_stage)"
+    },
+    "default_stage_formula": "min(floor((224*1024 - q_plus_o - p) / kv_per_stage), 32)",
+    "evaluations": [
+      {
+        "tile": "M64N128",
+        "kv_stage": 23,
+        "metadata_aligned_bytes": 1024,
+        "q_plus_o_bytes": 8192,
+        "p_bytes": 32768,
+        "kv_bytes": 188416,
+        "dynamic_shared_memory_bytes": 230400,
+        "with_driver_shared_memory_bytes": 231424,
+        "two_resident_boundary_passed": false
+      },
+      {
+        "tile": "M64N64",
+        "kv_stage": 32,
+        "metadata_aligned_bytes": 2048,
+        "q_plus_o_bytes": 8192,
+        "p_bytes": 16384,
+        "kv_bytes": 131072,
+        "dynamic_shared_memory_bytes": 157696,
+        "with_driver_shared_memory_bytes": 158720,
+        "two_resident_boundary_passed": false
+      },
+      {
+        "tile": "M64N64-hypothetical-kv22",
+        "kv_stage": 22,
+        "metadata_aligned_bytes": 1024,
+        "q_plus_o_bytes": 8192,
+        "p_bytes": 16384,
+        "kv_bytes": 90112,
+        "dynamic_shared_memory_bytes": 115712,
+        "with_driver_shared_memory_bytes": 116736,
+        "two_resident_boundary_passed_by_shared_memory_only": true
+      },
+      {
+        "tile": "M64N64-hypothetical-kv21",
+        "kv_stage": 21,
+        "dynamic_shared_memory_bytes": 111616,
+        "with_driver_shared_memory_bytes": 112640
+      }
+    ]
+  },
+  "tmem_formula": {
+    "logical_columns": "2 * tile_n + 32 for q_stage=1 and Dv32",
+    "M64N64_logical_columns": 160,
+    "M64N64_minimum_valid_power_of_two_allocation": 256,
+    "M64N128_logical_columns": 288,
+    "M64N128_minimum_valid_power_of_two_allocation": 512,
+    "source_allocation_columns_for_both": 512,
+    "capacity_columns_per_sm": 512,
+    "conclusion": "M64N128 cannot have two simultaneous TMEM allocations; M64N64 would require changing the allocator request from 512 to 256 before two TMEM users are even possible"
+  },
+  "register_formula": {
+    "threads_per_cta": 512,
+    "warp_groups_after_q_stage_1": {
+      "softmax_warps": {"count": 4, "registers_per_thread": 200},
+      "correction_warps": {"count": 4, "registers_per_thread": 64},
+      "other_or_empty_warps": {"count": 8, "registers_per_thread": 48}
+    },
+    "registers_per_cta": "32 * (4*200 + 4*64 + 8*48) = 46080",
+    "average_registers_per_thread": 90,
+    "two_cta_registers_required": 92160,
+    "b300_registers_per_sm": 65536,
+    "conclusion": "two CTAs cannot co-reside under the shipped warp/register topology even if shared memory is reduced"
+  },
+  "grid_formula": {
+    "scheduler": "StaticPersistentTileScheduler",
+    "cluster_shape_m": 1,
+    "source_max_ctas": "sm_count",
+    "b300_sm_count": 148,
+    "source_grid_ctas": 148,
+    "desired_grid_ctas": 296,
+    "launch_min_blocks_per_mp": 1,
+    "conclusion": "M64 increases logical work tiles but does not increase the persistent launch window; a separate two-CTA-per-SM scheduler and grid-stride contract is required"
+  },
+  "coupled_blockers": [
+    {
+      "id": 1,
+      "name": "SM103 SMEM-P architecture port",
+      "requirement": "prove the 16-datapath SMEM-P tcgen05 PV instruction, barrier mapping, correction scaling, and universal epilogue copy on SM103 before removing both independent SM100 guards"
+    },
+    {
+      "id": 2,
+      "name": "exact-shape KV stage policy",
+      "requirement": "reduce M64N64 from the default 32 KV stages to at most 22 without starving the S361 pipeline"
+    },
+    {
+      "id": 3,
+      "name": "partial TMEM allocation",
+      "requirement": "allocate 256 rather than 512 TMEM columns for M64N64 and validate all score/output offsets and lifetime barriers"
+    },
+    {
+      "id": 4,
+      "name": "two-resident persistent scheduler",
+      "requirement": "launch approximately 296 CTAs, stride persistent work by that grid, and request/verify min_blocks_per_mp=2 instead of the shipped 148/1 contract"
+    },
+    {
+      "id": 5,
+      "name": "warp and register topology redesign",
+      "requirement": "reduce the 46080-register CTA footprint below 32768 registers, likely by removing unused q_stage-2 warps and retuning softmax registers rather than merely applying a compiler cap"
+    }
+  ],
+  "decision": {
+    "bounded_derivative_recommended": false,
+    "reason": "the only theoretically resource-eligible shape, M64N64, requires all five coupled structural changes; unguarding M64, changing tile_n, or changing KV stages alone remains one-resident due to TMEM, grid, and registers",
+    "gpu_trial_justified": false,
+    "new_contract_or_tests_created": false,
+    "reopen_conditions": [
+      "upstream publishes and tests an SM103 M64 SMEM-P forward path",
+      "or a dedicated SM103 design simultaneously demonstrates M64N64/kv<=22, TMEM256, grid296, and <=32768 registers per CTA in compile-time resource evidence",
+      "the candidate must preserve FP32 QK/PV accumulation, native SM103 exp2, and D32 ld.red disabled before isolated correctness or GPU timing"
+    ]
+  }
+}
