@@ -1,0 +1,199 @@
+{
+  "schema": 1,
+  "stage": "04-sm103-cute-planar-qkv-rope",
+  "timestamp_utc": "2026-08-18T10:50:00Z",
+  "status": "whole_graph_rejected",
+  "hypothesis": "Replace three projection launches plus fused Q/K RoPE with one exact-B29 planar tcgen05/TMEM/TMA GEMM whose epilogue preserves the official FP16 projection boundary.",
+  "baseline": {
+    "name": "stage-03-no-ab12",
+    "median_nn_evals_per_sec": 8587.808904,
+    "profiled_nn_evals_per_sec": 8315.91445,
+    "nsys_report": ".final-migration-env/profiles/sm103-b29/stage-03-no-ab12/full-graph.nsys-rep",
+    "nsys_report_sha256": "853e7f8dc8907e863b82fae203de6c321a4341bf2102dbb9415a07891d101306",
+    "kernel_csv_sha256": "444155c53f9bcdc40f6f3a3515e79801e0731e7ce02970617c4c6df06a545a6c"
+  },
+  "candidate": {
+    "candidate_id": "cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-occ6",
+    "artifact_dir": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-pairmajor-occ6",
+    "object_sha256": "76bda914c97b3310da06aa398d96edf91c3cf3b6a5b72b8bd7df2f4f83965735",
+    "library_sha256": "818b4042d5fa3393b0b23670d2ba67aae169febf1e8bd0afb5524744811892aa",
+    "derivative_sha256": "33a384e0ca66357f7f6812b76ff250d3086fd1be043b6e7b58277839bc2f075f",
+    "binary": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-qkv-rope/katago",
+    "binary_sha256": "ce1fd7c352673605dea9696850a9f37dd40da7720f08a6702c1754510943539f",
+    "layout": "planar Q||K||V; ropeApplied=true; packedOutput=false",
+    "launches_per_boundary": 1
+  },
+  "isolated": {
+    "method": "native C ABI, five 1000-iteration samples after 40 warmups; coordinator event encloses two streams",
+    "s1_median_microseconds": 22.75600051879883,
+    "s2_round_median_microseconds": 40.56870269775391,
+    "correctness": {
+      "q_max_abs": 0.0000152587890625,
+      "k_max_abs": 0.0000152587890625,
+      "v_bitwise_equal": true,
+      "all_outputs_finite": true
+    },
+    "ncu": {
+      "report": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-pairmajor-occ6/fused-qkv-rope-final-full.ncu-rep",
+      "report_sha256": "20231756d49adf798cc63347be9255345d707062d3afe81d3a11ff25321c6b21",
+      "grid": [82, 3, 3],
+      "blocks": 738,
+      "threads_per_block": 128,
+      "registers_per_thread": 58,
+      "dynamic_shared_memory_bytes": 117576,
+      "resident_blocks_per_sm": 2,
+      "theoretical_occupancy_percent": 12.5,
+      "achieved_occupancy_percent": 10.32,
+      "local_spills": 0,
+      "no_eligible_percent": 90.03,
+      "l1tex_scoreboard_stall_percent": 75.9
+    }
+  },
+  "whole_graph_short": {
+    "iterations_per_thread": 50,
+    "warmup_per_thread": 10,
+    "unprofiled_nn_evals_per_sec": 8048.267422,
+    "gain_vs_baseline_percent": -6.28264424641184,
+    "both_lane_activation_markers_observed": true,
+    "profiled_nn_evals_per_sec": 7897.035932,
+    "profiled_gain_vs_baseline_percent": -5.037071034322638,
+    "nsys_report": ".final-migration-env/profiles/sm103-b29/stage-04-qkv-rope/whole-graph-occ6.nsys-rep",
+    "nsys_report_sha256": "91c0eda0714e4cc8d34771db7d953c20c1b9cca6ab3addb8795b8f6c0c8f68f8",
+    "kernel_csv": ".final-migration-env/profiles/sm103-b29/stage-04-qkv-rope/whole-graph-occ6_cuda_gpu_kern_sum.csv",
+    "kernel_csv_sha256": "9dc03a0c36ac448ce51e28424fd7bf233f922766eec302887b43fdf9d0680986",
+    "cuda_api_csv_sha256": "e44440b5d25fad73d0bcbc46c7485ffc6786d118bc4daba836992065989bfab2"
+  },
+  "nsys_union_overlap": {
+    "baseline": {
+      "kernel_events": 49540,
+      "span_ns": 565299777,
+      "sum_kernel_ns": 637220218,
+      "union_busy_ns": 426832210,
+      "overlap_savings_ns": 210388008,
+      "overlap_ge2_ns": 207542568,
+      "overlap_ge2_fraction_of_busy": 0.4862392367248948,
+      "weighted_concurrency": 1.4929056502085445
+    },
+    "candidate": {
+      "kernel_events": 37528,
+      "span_ns": 589168249,
+      "sum_kernel_ns": 622476240,
+      "union_busy_ns": 448244600,
+      "overlap_savings_ns": 174231640,
+      "overlap_ge2_ns": 173850134,
+      "overlap_ge2_fraction_of_busy": 0.3878465775159366,
+      "weighted_concurrency": 1.3886976887172762
+    },
+    "delta_percent": {
+      "sum_kernel_ns": -2.3137963271592232,
+      "union_busy_ns": 5.016582511427625,
+      "overlap_savings_ns": -17.185565063195053,
+      "overlap_ge2_ns": -16.23398723677737,
+      "span_ns": 4.2222680728211115,
+      "weighted_concurrency": -6.980210804126264
+    }
+  },
+  "neighbor_kernel_effects": {
+    "qkv_boundary": {
+      "baseline_projection_plus_rope_average_ns": 40395.4,
+      "candidate_fused_average_ns": 33498.4,
+      "local_reduction_percent": 17.073757478847837
+    },
+    "sdpa_average_ns": {
+      "baseline": 27110.6,
+      "candidate": 29645.2,
+      "delta_percent": 9.349110679955452
+    },
+    "fused_ffn_average_ns": {
+      "baseline": 23657.4,
+      "candidate": 22217.5,
+      "delta_percent": -6.08646765916796
+    },
+    "one_sm_gemm_average_ns": {
+      "baseline": 18258.9,
+      "candidate": 20789.9,
+      "delta_percent": 13.861733182174163
+    }
+  },
+  "critical_union_attribution_ms": {
+    "baseline": {
+      "old_qkv_2sm_epi_exclusive": 34.93,
+      "old_qkv_2sm_epi_overlap_covered": 71.34,
+      "old_rope_exclusive": 19.96,
+      "old_rope_overlap_covered": 25.51,
+      "fused_ffn_exclusive": 47.82,
+      "fused_ffn_overlap_covered": 45.73
+    },
+    "candidate": {
+      "fused_qkv_rope_exclusive": 101.48,
+      "fused_qkv_rope_overlap_covered": 32.70,
+      "fused_ffn_exclusive": 59.08,
+      "fused_ffn_overlap_covered": 23.35
+    },
+    "conclusion": "The fused grid becomes a long exclusive critical-path segment. It removes summed QKV work but exposes substantially more QKV and FFN time in the union. Any successor must reduce fused exclusive time and restore FFN overlap, not merely reduce per-call isolated latency."
+  },
+  "resource_squeeze_conclusion": "The fused boundary reduces summed kernel work, but its long two-CTA wave removes cross-stream overlap. Kernel sum falls 2.31% while union busy time rises 5.02%, sum-minus-union overlap savings fall 17.19%, >=2-way overlap time falls 16.23%, and adjacent SDPA/one-SM GEMMs slow 9.35%/13.86%. This is explicit resource contention, not a numerical or dispatch failure.",
+  "single_low_smem_followup": {
+    "candidate_id": "cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-occ8-c1",
+    "hypothesis": "Use two AB stages and one TMA-store epilogue stage to cross the exact three-CTA SMEM threshold without changing tile or arithmetic.",
+    "artifact_dir": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-pairmajor-occ8-c1",
+    "compiled_schedule": {
+      "ab_stages": 2,
+      "accumulator_stages": 1,
+      "epilogue_stages": 1
+    },
+    "dynamic_shared_memory_bytes": 75632,
+    "resident_blocks_per_sm": 3,
+    "theoretical_occupancy_percent": 18.75,
+    "isolated_s1_median_microseconds": 138.0285186767578,
+    "isolated_s2_round_median_microseconds": 269.37841796875,
+    "correctness_passed": true,
+    "decision": "reject before whole graph; serializing the TMA-store ring is catastrophic",
+    "manifest_sha256": "7cd9358f60fdc38191fef04fece283c87fd3bb895f12d17c7d9874c5d9dd2a51",
+    "validation_sha256": "93a2b3cb8b61c46ee8ab69bf62000f68e84e87b690c29827816e002c2180e630",
+    "ncu_launch_occupancy_sha256": "fc928052a64daf7f1203e413c1ec4a487efaa4fcb30793972128bba6d7b9568a"
+  },
+  "direct_store_followup": {
+    "candidate_id": "cute47-sm103-b29-planar-qkv-rope-tcgen05-fp16-pairmajor-direct-ab2",
+    "hypothesis": "Delete sC and the TMA-store ring entirely, keep an AB2 mainloop, and use a 128-bit predicated direct register-to-global store for the ragged M tail.",
+    "artifact_dir": ".final-migration-env/artifacts/cute-sm103-b29-planar-qkv-rope-pairmajor-direct-ab2",
+    "compiled_schedule": {
+      "ab_stages": 2,
+      "accumulator_stages": 1,
+      "epilogue_stages": 0
+    },
+    "correctness_passed": true,
+    "qk_max_abs": 0.0000152587890625,
+    "v_bitwise_equal": true,
+    "isolated_s1_median_microseconds": 120.26525115966796,
+    "isolated_s2_round_median_microseconds": 233.11660766601563,
+    "ncu": {
+      "dynamic_shared_memory_bytes": 67232,
+      "registers_per_thread": 172,
+      "block_limit_shared_memory": 3,
+      "block_limit_registers": 2,
+      "actual_resident_blocks_per_sm": 2,
+      "theoretical_occupancy_percent": 12.5,
+      "achieved_occupancy_percent": 6.89,
+      "global_store_sector_utilization_bytes_per_32": 16.0,
+      "global_excessive_sectors": 856512,
+      "no_eligible_percent": 98.26,
+      "l1tex_scoreboard_stall_percent": 88.74,
+      "ncu_replay_duration_microseconds": 128.38,
+      "local_spills": 0
+    },
+    "static_blocker": "The stock Blackwell non-TMA TMEM fragment keeps 128 output values per thread. Even a 128-bit CopyUniversal store requires 172 registers/thread and only 16/32B global-store sector utilization. Register pressure caps residency at two CTAs despite 65.66KiB SMEM, while scoreboard stalls reach 88.74%. Fixing this requires a new warp-specialized register redistribution or shared exchange, recreating the resource structure this bounded derivative was meant to remove.",
+    "decision": "reject before whole graph; the standard non-TMA epilogue cannot provide coalesced low-register planar stores for this ragged shape",
+    "manifest_sha256": "a1644aabe7c99a64b1030d0ad14a86490b6e74e37c69e255891787a705dcb61c",
+    "validation_sha256": "693f563e9ae770cd4d4bdf7762e81afe301ef77f74f33cb87f73e3686aa49272",
+    "ncu_full_sha256": "dd037de75e5f2e5891b4d2c798240cbc4e63374153eb7d99cb5a5826df29e0ae"
+  },
+  "decision": {
+    "isolated_gate": "pass",
+    "whole_graph_gate": "fail",
+    "accuracy_gate": "not_run_after_whole_graph_failure",
+    "retained": false,
+    "commit_allowed": false,
+    "note": "Keep the contract/generator/bridge as evidence and future fusion infrastructure, but do not enable or commit this tactic as an effective optimization."
+  }
+}

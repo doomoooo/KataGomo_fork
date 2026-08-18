@@ -395,3 +395,100 @@ The full replay is not byte-identical to the parent because changed resource
 scheduling perturbs final reduction ulps, but accuracy improves: policy RMSE
 is `9.4938e-5`, worst request returns to the common row5183 family, maximum TRT
 request ratio is `1.608x`, and every aggregate/request gate passes.
+
+## Stage 04 — fused planar QKV + learnable RoPE resource rounding
+
+Status: dropped after profiler-guided full-graph and resource-threshold gates.
+
+The no-AB12 graph spends about `117.1 ms` on three QKV projections and
+`45.5 ms` on planar Q/K RoPE per profiled run.  A CuTe DSL 4.7 derivative
+combined all four launches into one SM103a tcgen05/TMEM/TMA kernel while
+retaining planar Q/K/V output for the existing cuDNN SDPA.  Isolated
+correctness had at most one FP16 ULP on rotated Q/K and bitwise V.  Isolated S1
+fell to `22.756 us`, but the first full-graph B29/S2 result was only
+`8048.267422` nnEval/s versus the retained `8587.808904`.
+
+NSYS established why the single-stream result did not transfer:
+
+- summed kernel time still improved `637.220 -> 622.476 ms`;
+- kernel union regressed `426.832 -> 448.245 ms`;
+- overlap fell `210.388 -> 174.232 ms`;
+- the fused kernel was exclusive for `101.477 ms`, versus about `54.9 ms`
+  exclusive for the old QKV+RoPE boundary;
+- FFN overlap-covered time fell `45.73 -> 23.35 ms`.
+
+NCU measured `114.82 KiB/CTA`, 58 registers/thread, two CTAs/SM, 90.03% no
+eligible cycles, and 75.9% long-scoreboard stalls.  The one allowed resource
+hypothesis forced the exact three-CTA shared-memory boundary.  The compiled
+AB2/C1 version reached `73.86 KiB` and three blocks/SM, but serializing the TMA
+store ring made S1/S2 `138.03/269.38 us`.  Removing the TMA C ring reached
+about `65.66 KiB`, but the stock direct-store fragment used 172 registers,
+remained limited to two CTAs, and produced `120.27/233.12 us`.  Both failed
+before full-graph execution.  Evidence is recorded in
+`stage-04-qkv-rope-profile.json`; no QKV runtime tactic is retained.
+
+## Stage 05 — fused FFN two-resident-CTA boundary
+
+Status: dropped after NCU proof and full-graph A/B/B/A.
+
+The accepted no-AB12 fused FFN uses exactly one 148-CTA wave and `181248 B`
+dynamic shared memory.  Since its five A/B stages consume `32768 B` each, the
+bounded AB3 derivative removed exactly two stages while preserving every math,
+tile, scheduler, and output choice.  The prediction was deliberately placed on
+B300's resource cliff: `115712 B` dynamic plus `1024 B` driver shared memory is
+`116736 B`, exactly half of `233472 B/SM`.
+
+NCU validated the hypothesis exactly: `115.71 KiB` dynamic shared memory,
+66 registers/thread, block-limit shared-memory=2, and theoretical occupancy
+`18.75%`.  Tight C correctness passed and AB12 remained untouched.  However,
+isolated S1 regressed `23.288 -> 24.960 us`, while S2 round remained essentially
+flat at `43.517 -> 43.649 us`.
+
+Accumulated full-graph A/B/B/A samples were
+`8535.266384 / 8369.002605 / 8371.041515 / 8577.526889` nnEval/s.  NSYS
+normalized per forward showed kernel union `3.499 -> 3.601 ms`, overlap
+`1.724 -> 1.690 ms`, and FFN exclusive time `0.392 -> 0.507 ms`.  Thus the
+hardware residency cliff was real, but K384 pipeline starvation cost more than
+the scheduler could recover.  The five-stage no-AB12 parent remains retained;
+the complete negative result is in `stage-05-ffn-ab3-profile.json`.
+
+## Stage 05a — cuDNN Frontend SDPA engine surface
+
+Status: current native engine retained; engine/knob surface exhausted.
+
+SDPA is the largest single exclusive interval in the no-AB12 timeline:
+`78.934 ms` exclusive and only `30.045 ms` overlap-covered.  Its current
+engine uses grid 696, block 512, 128 registers/thread, `232.45 KiB` dynamic
+shared memory, and 4.70 waves.  A dedicated cuDNN Frontend 1.27 harness
+enumerated 22 engines and 18,532 knob tuples.  Only 61 finalized, 52 ran, and
+34 passed correctness.
+
+The existing engine 10 configuration remains fastest after contention-guarded
+7x1000 measurement: S1 `26.2951 us`, S2 round `45.6243 us`.  Its fastest
+equivalent alias measured `45.6201 us`, a `0.009%` difference with identical
+resources.  Reducing TN from two to one measured `47.2577 us`, and NCU proved
+that grid, block, registers, shared memory, and wave count did not change.
+FROST reduced shared memory to `197.01 KiB` but required CGA2 and regressed S2
+to `67.462-68.733 us`.  Engine 8 fell back to SM80 WMMA, used 158 registers and
+7.05 waves, and measured about `110.9 us`; 18 manually forced engine-8 tuples
+were also numerically wrong.  The search result SHA is
+`d61a2dd888bac2b86af0a772dc8932829187edf9c1edf3ad574bdd2c58ad7d32`.
+Further SDPA work therefore requires a new SM103 algorithm, not another cuDNN
+knob sweep.
+
+## Stage 05b — final-linear2 + residual + C384 affine-SiLU
+
+Status: fusion boundary closed after three isolated implementations.
+
+Call-graph and NSYS adjacency checks showed that all 1342 C384 affine launches
+in the profiled run are immediately preceded on the same stream by the final
+linear2 residual GEMM.  This made the complete boundary a valid fusion target.
+The unfused control measured S1/S2 `14.609/27.819 us`.
+
+The initial exact CuTe implementation was `91.409/157.885 us`.  A coalesced
+exact epilogue reduced it to `77.896/68.592 us`, but NCU still showed 128
+registers/thread, 6.25% occupancy, 86.69% no-eligible cycles, and too little
+epilogue parallelism.  The single allowed 64x64 fast packed-SFU variant kept
+residual bit-exact and affine output within `1.526e-5` max abs, but its shallow
+TMA ring serialized the boundary to `546.991/1053.751 us`.  None entered the
+full graph; the core/CMake path remains unchanged.

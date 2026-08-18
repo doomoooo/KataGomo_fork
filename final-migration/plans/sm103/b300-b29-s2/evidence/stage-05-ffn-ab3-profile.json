@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-profiler-guided-negative-result",
+  "stage": "05-ffn-ab3-two-resident-cta",
+  "status": "dropped_after_full_graph_short_gate",
+  "production_ready": false,
+  "hypothesis": {
+    "statement": "Reduce the accepted no-AB12 fused FFN A/B TMA pipeline from five stages to three so two B29 stream CTAs can reside on every B300 SM.",
+    "scope": "Only the A/B pipeline depth changes; tcgen05 tile, 148-CTA persistent grid, accumulator stages, C epilogue, FP16 projection round-trip, fast SwiGLU, and no-AB12 contract are unchanged.",
+    "resource_boundary_bytes": {
+      "b300_shared_per_sm": 233472,
+      "parent_dynamic_per_cta": 181248,
+      "removed_two_ab_stages": 65536,
+      "candidate_dynamic_per_cta": 115712,
+      "driver_per_cta": 1024,
+      "candidate_total_per_cta": 116736
+    }
+  },
+  "identity": {
+    "parent_candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29",
+    "candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-ab3-b29",
+    "candidate_derivative_sha256": "7179368d91fe52a8a2fc81f8737e1a78d3c191309e1336be5df0250ae1813ae3",
+    "aot_manifest_sha256": "0a35320d8b003822c5173a802194c1338c8d6eabbe319e26d17c2bacb587f60e",
+    "aot_object_sha256": "416d4517328f29e64573ae707c6272cc4dba785ab5929daf86f7d39dadb494e7",
+    "aot_library_sha256": "b2d9960205697b6eb049278b6c0d1dc258bdc0503675cff5e5e35993572d9d46",
+    "clean_trial_binary_sha256": "5e1a411ffc8ec161f02085ecb92e409fdbc3d2ab7f3fb20d641adb08700e7d70"
+  },
+  "correctness": {
+    "standalone_tight_gate": "passed",
+    "output_max_abs_error": 0.00006103515625,
+    "output_rmse": 0.00000022917204489658616,
+    "ab12_sentinel_untouched": true
+  },
+  "ncu": {
+    "report": ".final-migration-env/profiles/sm103-b29/stage-05-ffn-ab3-isolated.ncu-rep",
+    "report_sha256": "2f39cedb81806717155ba3223b9f514a3a5c08e9429ffcd2291d2814beb3b504",
+    "passes": 15,
+    "grid": 148,
+    "threads_per_cta": 192,
+    "registers_per_thread": 66,
+    "dynamic_shared_bytes_per_cta": 115712,
+    "driver_shared_bytes_per_cta": 1024,
+    "block_limit_shared_memory": 2,
+    "theoretical_occupancy_percent": 18.75,
+    "single_grid_achieved_occupancy_percent": 9.24,
+    "single_grid_duration_us": 46.66,
+    "no_eligible_percent": 80.03,
+    "active_warps_per_scheduler": 1.48,
+    "eligible_warps_per_scheduler": 0.21,
+    "conclusion": "The compiled kernel crossed the exact two-resident-CTA resource boundary. A single 148-CTA grid still launches only one CTA per SM, so the extra residency can help only when streams overlap."
+  },
+  "isolated_s1_s2": {
+    "method": "preallocated native C ABI, CUDA coordinator events, warmup 1000, five repeats of 1000 iterations",
+    "parent_control_ms": {
+      "s1": 0.0232884,
+      "s2_round": 0.0435170
+    },
+    "candidate_ms": {
+      "s1_median": 0.024960287094116212,
+      "s2_round_median": 0.043649471282958985,
+      "s1_relative_spread": 0.03300859618997736,
+      "s2_relative_spread": 0.02210401324122374
+    },
+    "conclusion": "Two-stream residency only offsets the latency lost by shortening the input pipeline; it does not beat the parent in isolation."
+  },
+  "full_graph_short_abba_nn_evals_per_sec": {
+    "order": [
+      "parent",
+      "candidate",
+      "candidate",
+      "parent"
+    ],
+    "samples": [
+      8535.266384,
+      8369.002605,
+      8371.041515,
+      8577.526889
+    ],
+    "iterations": 200,
+    "warmup": 80,
+    "batch": 29,
+    "streams": 2
+  },
+  "nsys": {
+    "candidate_report": ".final-migration-env/profiles/sm103-b29/stage-05-ffn-ab3-full-graph.nsys-rep",
+    "candidate_report_sha256": "226c26c0278bab68cea7d0f261c9b7b4b395dc9f777d1573fd92829306db8917",
+    "normalized_per_forward_ms": {
+      "parent": {
+        "kernel_sum": 5.223116540983607,
+        "kernel_union": 3.498624672131147,
+        "overlap": 1.724491868852459,
+        "ffn_exclusive": 0.39193207377049183,
+        "ffn_overlap_any": 0.3748236803278689,
+        "ffn_self_overlap": 0.012722983606557376
+      },
+      "candidate": {
+        "kernel_sum": 5.291233427419354,
+        "kernel_union": 3.6012208629032254,
+        "overlap": 1.690012564516129,
+        "ffn_exclusive": 0.5072148467741936,
+        "ffn_overlap_any": 0.3689266370967742,
+        "ffn_self_overlap": 0.00790766935483871
+      }
+    },
+    "candidate_ffn_average_us": 26.8351,
+    "parent_ffn_average_us": 23.6574,
+    "conclusion": "The theoretical residency did not translate into useful stream overlap for this graph. Pipeline starvation increased FFN exclusive critical-path time and the full kernel union."
+  },
+  "decision": {
+    "outcome": "drop",
+    "enter_long_gate": false,
+    "enter_request_accuracy_gate": false,
+    "enter_production": false,
+    "retained_parent": "no-ab12 five-stage fused FFN",
+    "reason": "The profiler-predicted resource boundary was real, but the three-stage mainloop cost exceeded any concurrency benefit in both isolated S2 and the accumulated full graph."
+  }
+}
