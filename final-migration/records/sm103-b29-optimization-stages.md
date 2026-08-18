@@ -821,3 +821,42 @@ the experiment stopped before NSYS, replay, request, or long testing. All
 aux1 runtime and test wiring was removed; retained aux2 source remains
 byte-identical to commit `b5e17d76`. The exact samples and temporary build
 identity are in `stage-08b-qkv-aux1-diagnostic.json`.
+
+## Stage 09 — attention outproj + next-FFN pre-RMS closure audit
+
+Status: dropped after current-best same-binary A-B-B-A and NSYS; Stage 08
+aux2 remains retained.
+
+The retained aux2/id70/FA4 trace contains exactly 4752 same-stream
+FA4→outproj→next-FFN-RMS triples, 33 per forward. The boundary contributes
+`0.545 ms` summed and `0.173 ms` exposed union per forward, so the earlier
+isolated negative still required one accumulated-graph closure test. The
+authenticated M64xN192 `(1,2)`-cluster CuTe kernel keeps every official FP16
+projection/residual boundary and reproduces the incumbent C384 Vec8 XOR RMS
+tree exactly. Standalone validation was elementwise identical. NCU had already
+proved 52 registers/thread, `114.82 KiB` dynamic plus `1.02 KiB` driver shared
+memory, exactly two CTAs/SM, 1.11 waves, no spills, 86.8% no-eligible cycles,
+and 60.4% long-scoreboard stalls. Its isolated S2 round was nevertheless
+`28.509 us` versus `26.277 us`.
+
+A temporary config-selected `dlopen` hook allowed control and candidate to use
+one binary while carrying the fused RMS scratch across the adjacent
+attention/FFN objects. Locked 50-warmup/300-iteration A-B-B-A measured control
+`9225.855157/9249.631477` and candidate
+`8827.727061/8933.192196` nnEval/s, a center regression of `3.868%`.
+
+Same-binary NSYS explains why current-best scheduling cannot reverse it. The
+candidate removes exactly 4752 launches, and 89.5% of its interval overlaps
+other work; boundary-exclusive time even falls `24.897 -> 18.451 ms`.
+However, its contended fused service averages `36.863 us`, versus only
+`16.519 us` for the exact control outproj+RMS pair. Kernel sum therefore rises
+`756.045 -> 873.367 ms` (`+15.518%`) and whole-graph union rises
+`466.821 -> 481.016 ms` (`+3.041%`). Neighboring FFN and RoPE summed time also
+rises `10.638%/17.781%`. More concurrency is real—overlap grows 35.656%—but it
+cannot hide the added work.
+
+The current-best graph is retained. No long or replay gate ran. All temporary
+runtime wiring was removed, core/CMake are byte-clean against HEAD, and the
+current-best binary was rebuilt without the hook. Full identities, isolated
+measurements, A-B-B-A samples, NSYS hashes, union attribution, and cleanup
+proof are in `outproj-rmsnorm-fusion-profile.json`.

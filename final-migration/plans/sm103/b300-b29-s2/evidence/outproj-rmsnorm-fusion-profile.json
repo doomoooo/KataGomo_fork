@@ -2,7 +2,7 @@
   "schema": 1,
   "kind": "katago-sm103-b29-profiler-guided-negative-result",
   "boundary": "attention-outproj-beta1-residual-to-next-ffn-pre-rmsnorm",
-  "status": "closed_after_isolated_s2_hard_gate",
+  "status": "closed_after_current-best-full-graph-abba-and-nsys",
   "production_ready": false,
   "current_cumulative_baseline": {
     "lineage": "retained no-AB12 fused FFN plus retained native FA4",
@@ -179,6 +179,113 @@
     "whole_graph": "not run after isolated hard-gate failure",
     "decision": "drop"
   },
+  "current_best_full_graph_closure": {
+    "requested_gap": "test whether current-best aux2+id70+FA4 graph scheduling reverses the M64 isolated S2 loss",
+    "current_best_runtime_commit": "b5e17d76",
+    "head_during_closure": "a6744f1b",
+    "method": {
+      "binary_contract": "one temporary binary; control disables the hook and candidate enables the authenticated M64 DSO by config",
+      "temporary_binary_sha256": "d92b4e1d0645c643588b459e7578e2acaa0b0fd390c650357db2ebaf1c151f1e",
+      "gpu_serialization": "final-migration/environment/with-gpu-lock.sh, GPU ordinal 0",
+      "batch": 29,
+      "outer_streams": 2,
+      "warmups": 50,
+      "iterations": 300,
+      "order": ["control", "candidate", "candidate", "control"],
+      "control_tactic": "disabled",
+      "candidate_tactic": "cute47-sm103-b29-outproj-beta1-rmsnorm-m64n192-clustern2-rowremap-exact-occ6",
+      "candidate_library_sha256": "abf4c2212c5d4384e96cd14f9ae762122066f94c03feb77505a899527cd2b8db"
+    },
+    "activation": {
+      "candidate_markers": 2,
+      "marker": "SM103 backend: exact outproj+residual+FFN-preRMS active, tactic=cute47-sm103-b29-outproj-beta1-rmsnorm-m64n192-clustern2-rowremap-exact-occ6",
+      "fa4_markers": 2,
+      "qkv_aux_markers": 2,
+      "fused_ffn_markers": 2
+    },
+    "short_abba_nn_evals_per_sec": {
+      "control_samples": [9225.855157, 9249.631477],
+      "candidate_samples": [8827.727061, 8933.192196],
+      "control_center": 9237.743317,
+      "candidate_center": 8880.4596285,
+      "candidate_delta_percent": -3.8676511810249004,
+      "result": "negative"
+    },
+    "nsys": {
+      "method": "same temporary binary; control then candidate; 20 warmups and 50 timed iterations; six CUDA streams in both traces",
+      "control": {
+        "report": ".final-migration-env/profiles/sm103-b29/stage-09-outproj-rms-closure/control.nsys-rep",
+        "report_sha256": "a0b5da4e3c69b258321cc84e2bb6fc9510b3de04b82da3d1dc82e8edd71e9eaa",
+        "sqlite": ".final-migration-env/profiles/sm103-b29/stage-09-outproj-rms-closure/control.sqlite",
+        "sqlite_sha256": "1ffa8ba4dd232d66fd03a599461903e8cbf015376b398858e882b8bdd97f366b",
+        "profiled_nn_evals_per_sec": 8965.815024,
+        "kernel_events": 58530,
+        "kernel_sum_ms": 756.045346,
+        "kernel_union_ms": 466.821079,
+        "kernel_overlap_ms": 289.224267,
+        "time_at_concurrency_depth_at_least_2_ms": 256.261449,
+        "time_at_concurrency_depth_at_least_3_ms": 30.537405,
+        "time_at_concurrency_depth_at_least_4_ms": 2.425413,
+        "exact_boundaries": 4752,
+        "exact_boundary_kernel_events": 9504,
+        "exact_boundary_sum_ms": 78.496096,
+        "exact_boundary_union_ms": 72.949886,
+        "exact_boundary_covered_ms": 48.053312,
+        "exact_boundary_exclusive_ms": 24.896574,
+        "exact_boundary_average_sum_us": 16.518539,
+        "ffn_sum_ms": 106.210340,
+        "rope_sum_ms": 50.440964,
+        "fa4_sum_ms": 112.216242,
+        "all_rms_sum_ms": 52.769375
+      },
+      "candidate": {
+        "report": ".final-migration-env/profiles/sm103-b29/stage-09-outproj-rms-closure/candidate.nsys-rep",
+        "report_sha256": "02613e0e1eb6e0fdcab56f4aab90c01588ebd1b2c0e10764efe1b51d83e8ead3",
+        "sqlite": ".final-migration-env/profiles/sm103-b29/stage-09-outproj-rms-closure/candidate.sqlite",
+        "sqlite_sha256": "2cbad9b8be810871f9172f1d441cb4b083c742cca9e9c1fbe5c4f21665b2e3fb",
+        "profiled_nn_evals_per_sec": 8713.764259,
+        "kernel_events": 53778,
+        "kernel_sum_ms": 873.367034,
+        "kernel_union_ms": 481.015710,
+        "kernel_overlap_ms": 392.351324,
+        "time_at_concurrency_depth_at_least_2_ms": 339.055431,
+        "time_at_concurrency_depth_at_least_3_ms": 44.383846,
+        "time_at_concurrency_depth_at_least_4_ms": 8.912047,
+        "exact_boundaries": 4752,
+        "exact_boundary_kernel_events": 4752,
+        "exact_boundary_sum_ms": 175.171971,
+        "exact_boundary_union_ms": 175.130563,
+        "exact_boundary_covered_ms": 156.679713,
+        "exact_boundary_exclusive_ms": 18.450850,
+        "exact_boundary_average_us": 36.862789,
+        "ffn_sum_ms": 117.508814,
+        "rope_sum_ms": 59.409768,
+        "fa4_sum_ms": 112.851873,
+        "remaining_attention_pre_rms_sum_ms": 28.845950
+      },
+      "delta_percent": {
+        "profiled_throughput": -2.8112420825691986,
+        "kernel_sum": 15.51781101764762,
+        "kernel_union": 3.040700525007778,
+        "kernel_overlap": 35.65643300601744,
+        "kernel_launches": -8.118913377755,
+        "exact_boundary_sum": 123.16010594972772,
+        "exact_boundary_exclusive": -25.890003982073996,
+        "ffn_sum": 10.637828670918491,
+        "rope_sum": 17.78079419735119,
+        "fa4_sum": 0.5664340461517092,
+        "remaining_attention_pre_rms_sum": 9.328374649121773
+      },
+      "interpretation": "The candidate hides 89.5% of its fused interval and reduces boundary-exclusive time, but its 36.86 us contended service is 2.23x the control boundary's 16.52 us. The extra service raises total kernel work 15.52%, slows neighboring FFN/RoPE/RMS work, and increases whole-graph union 3.04%. More overlap cannot compensate for the work inflation."
+    },
+    "cleanup": {
+      "temporary_runtime_wiring_removed": true,
+      "core_and_cmake_diff_vs_head": false,
+      "current_best_binary_rebuilt_without_hook": true,
+      "restored_binary_sha256": "6ba00d5e32acdbd18e2fe305db0601629236713e85a7262bdca16ecdb15c2b04"
+    },
+    "decision": "drop; the current-best aux2 scheduler does not reverse the isolated loss; do not run long or replay"
+  },
   "source_snapshot": {
     "contract": {
       "path": "python/sm103_cute_b29_outproj_rmsnorm.py",
@@ -203,6 +310,6 @@
     "core_or_cmake_integration": false,
     "long_gate": "not entered",
     "accuracy_request_gate": "not entered because isolated S2 failed",
-    "reason": "M64 proved the resource cliff and exact arithmetic but remained 8.49% slower in S2; the only profiler-guided M128 rounding was catastrophically slower and failed its explicit S2 hard gate"
+    "reason": "M64 proved the resource cliff and exact arithmetic but remained 8.49% slower in isolated S2; current-best aux2+id70+FA4 A-B-B-A regressed 3.87% and NSYS union rose 3.04%; the only profiler-guided M128 rounding was catastrophically slower"
   }
 }
