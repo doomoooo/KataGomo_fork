@@ -794,3 +794,30 @@ Median is `9201.745296`, spread `0.842%`, `+1.578%` over Stage 07 and
 `+36.652%` over fixed TRT 10.16. Complete DAG accounting, lifecycle
 case-study, profiler, replay, source, and binary hashes are recorded in
 `stage-08-qkv-aux-streams.json`.
+
+## Stage 08b — one-aux Q/K/V topology diagnostic
+
+Status: dropped at the same-binary short gate; Stage 08 aux2 remains retained.
+
+The only bounded simplification of Stage 08 gave each outer handle one
+persistent nonblocking aux stream and one independent id70 Lt state. Q stayed
+on the primary stream; K and V ran sequentially on the single aux stream. The
+boundary therefore used one ready record/wait and one done record/wait, four
+event operations instead of aux2's seven. Every math, buffer, algorithm, and
+downstream kernel remained fixed.
+
+The 50-warmup/300-iteration symmetric sequence
+control-aux1-aux2-aux2-aux1-control measured control
+`9046.300071/9017.547660`, aux1 `9059.046621/9067.317222`, and retained aux2
+`9238.057770/9258.301562` nnEval/s. Centers are `9031.923866`, `9063.181922`,
+and `9248.179666`: aux1 is only `+0.346%` over control and is `-2.000%` behind
+aux2.
+
+The failure is structural. One aux stream adds a FIFO K-to-V edge, so only Q
+and K are dependency-ready at the fork; V cannot join the ready frontier until
+K completes. Saving four event APIs per attention does not compensate for
+losing the third sibling grid. The fixed gate requires aux1 to beat aux2, so
+the experiment stopped before NSYS, replay, request, or long testing. All
+aux1 runtime and test wiring was removed; retained aux2 source remains
+byte-identical to commit `b5e17d76`. The exact samples and temporary build
+identity are in `stage-08b-qkv-aux1-diagnostic.json`.

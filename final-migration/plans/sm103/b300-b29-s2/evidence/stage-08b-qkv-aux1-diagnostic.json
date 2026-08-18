@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-bounded-topology-negative-result",
+  "stage": "08b-cublaslt-id70-qkv-aux1",
+  "timestamp_utc": "2026-08-18T14:08:26Z",
+  "status": "closed_at_same-binary-short-gate",
+  "production_ready": false,
+  "gpu_serialization": {
+    "wrapper": "final-migration/environment/with-gpu-lock.sh",
+    "gpu": 0,
+    "all_gpu_actions_locked": true
+  },
+  "parent": {
+    "commit": "b5e17d76",
+    "tactic": "cublaslt-id70-q-primary-kv-aux2-b29",
+    "long_median_nn_evals_per_sec": 9201.745296
+  },
+  "hypothesis": {
+    "statement": "A single persistent auxiliary stream may retain most of the Stage08 scheduling benefit while halving auxiliary stream/Lt state ownership and reducing each attention boundary from three records plus four waits to two records plus two waits.",
+    "candidate_id": "cublaslt-id70-q-primary-kv-aux1-b29",
+    "fixed_axes": "Exact B29/CC10.3/19x19/FP16/NHWC, the complete id70/tile23/stages35/cluster5 tuple, alpha=1, beta=0, Q/K/V buffers, RoPE, FA4, and every other retained tactic remain unchanged."
+  },
+  "temporary_implementation": {
+    "default": "disabled",
+    "ownership_per_outer_handle": "one persistent nonblocking aux stream, one independent cuBLASLt handle/plan/private workspace, one ready event, and one done event",
+    "dag_per_attention": [
+      "primary records ready",
+      "single aux stream waits ready",
+      "Q id70 launches on primary",
+      "K id70 then V id70 launch sequentially on the one aux stream and one Lt state",
+      "aux records one done event after V",
+      "primary waits done before retained RoPE/FA4"
+    ],
+    "event_operations": {"records": 2, "waits": 2, "total": 4},
+    "retained_aux2_semantics_changed": false
+  },
+  "cpu_and_build": {
+    "tests": {
+      "command": ".final-migration-env/venv/bin/python -m unittest python.tests.test_sm103_qkv_aux_contract python.tests.test_sm103_projection_gemm_lt_contract python.tests.test_sm103_workflow python.tests.test_sm103_b29_contract",
+      "passed": 39
+    },
+    "release_build": "passed",
+    "temporary_test_binary_sha256": "b8e6a32b686525b6fbcfc1b7b7a2ed87b4dd4882591c441e1b75fd5f5bcc2d93"
+  },
+  "same_binary_symmetric_short": {
+    "method": "exact B29/S2, 50 warmups and 300 timed forwards, control-aux1-aux2-aux2-aux1-control",
+    "control_samples_nn_evals_per_sec": [9046.300071, 9017.547660],
+    "aux1_samples_nn_evals_per_sec": [9059.046621, 9067.317222],
+    "retained_aux2_samples_nn_evals_per_sec": [9238.057770, 9258.301562],
+    "centers_nn_evals_per_sec": {
+      "control": 9031.9238655,
+      "aux1": 9063.1819215,
+      "aux2": 9248.179666
+    },
+    "aux1_vs_control_percent": 0.3460841396,
+    "aux2_vs_control_percent": 2.3943492408,
+    "aux1_vs_aux2_percent": -2.0003692746,
+    "retention_gate": "aux1 must beat retained aux2",
+    "retention_gate_passed": false
+  },
+  "root_difficulty": {
+    "static_dag": "The single aux stream imposes a FIFO K->V edge. At the fork, only Q and K are dependency-ready; V cannot become ready until K completes. Aux1 therefore recreates a two-grid frontier, whereas retained aux2 exposes Q, K, and V as three sibling grids per outer lane and six across S2.",
+    "measured_conclusion": "Reducing four event operations per attention is much smaller than the loss from serializing K/V readiness. Aux1 barely beats the no-aux control and loses a clear 2.000% to aux2.",
+    "why_no_profiler_or_replay": "The predeclared gate closes aux1 when it does not beat aux2 in the same-binary symmetric short test. NSYS, replay, request gate, and long testing cannot change the failed topology ranking and were intentionally not run."
+  },
+  "cleanup": {
+    "runtime_selector_removed": true,
+    "runtime_implementation_removed": true,
+    "temporary_source_contract_removed": true,
+    "retained_aux2_source_diff_after_cleanup": "byte-identical to b5e17d76",
+    "commit_scope": "documentation only"
+  },
+  "decision": {
+    "outcome": "drop_aux1_retain_aux2",
+    "reason": "One aux stream saves event APIs but fails to expose V as a sibling ready grid; the retained two-aux topology is 2.000% faster in the fixed symmetric comparison."
+  }
+}
