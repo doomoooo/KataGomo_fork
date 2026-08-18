@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-incremental-tactic-evidence",
+  "stage": "02a",
+  "tactic": "cublas_hgemm_beta1_residual",
+  "status": "retained",
+  "config_delta": {
+    "cudaUseFusedResidual": true,
+    "cudaUseFusedResidualGemmSm120": true
+  },
+  "incumbent": {
+    "name": "portable_empty",
+    "samples_nn_evals_per_sec": [
+      5018.968251,
+      4981.821598
+    ],
+    "median_nn_evals_per_sec": 5000.3949245,
+    "relative_spread": 0.0074287438414105175
+  },
+  "challenger": {
+    "samples_nn_evals_per_sec": [
+      5617.3029,
+      5583.296655
+    ],
+    "median_nn_evals_per_sec": 5600.2997775,
+    "relative_spread": 0.006072218693832158,
+    "gain_percent": 11.99714946634911
+  },
+  "measurement": {
+    "batch": 29,
+    "streams": 2,
+    "iterations_per_sample": 1000,
+    "warmup": 80,
+    "binary_sha256": "b514d85c5e4d8b33dc0ab2eb26a26030d199d6a5d53a1c48b6b66c21bb3f8738",
+    "dormant_unselected_experiment_present": true
+  },
+  "activation_marker": "SM103 portable backend: GEMM beta residual fusion active",
+  "whole_graph_attribution": {
+    "profile_scope": "backend-off versus final accumulated portable graph",
+    "masked_residual_add_instances_before": 8052,
+    "masked_residual_add_instances_after": 0,
+    "baseline_nsys_sha256": "3d99d889d980f60e0a65c873cd24f0a3330558ec1792744d4bfb6fb58ac90984",
+    "portable_nsys_sha256": "f38732ce3c9900f0746f834f93cc8cc1533bb95adeb90c4b4e0ba9552bb8dcfc"
+  },
+  "accuracy_closure": "final accumulated portable set passed the 8192-row aggregate and TRT16-relative request gates",
+  "retained": true
+}

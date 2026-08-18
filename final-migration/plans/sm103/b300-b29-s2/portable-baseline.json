@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-portable-baseline",
+  "status": "qualified_incremental",
+  "production_ready": false,
+  "target": {
+    "architecture": "sm103",
+    "compute_capability": [
+      10,
+      3
+    ],
+    "batch": 29,
+    "streams": 2,
+    "board": [
+      19,
+      19
+    ],
+    "precision": "FP16/NHWC"
+  },
+  "adapter": {
+    "cudaSm103Backend": true,
+    "cudaSm103ReusePortableTactics": true,
+    "cudaSm103AllowOfficialForwardScaffold": false,
+    "cudaSm120Backend": false,
+    "cudaSm89Backend": false,
+    "cudaSm89Forward": false
+  },
+  "portable_tactics": {
+    "cudaUseFusedResidual": true,
+    "cudaUseFusedResidualGemmSm120": true
+  },
+  "explicit_negative_choices": {
+    "cudaUseBatchSharedRoPE": false,
+    "cudaUseBatchSharedRoPEUnrolledSm120": false,
+    "cudaUseFusedQKRoPEHalf2Sm120": false,
+    "cudaUsePersistingL2Trunk": false,
+    "cudaUsePersistingL2Inner": false,
+    "cudaUseFusedPolicyP1": false,
+    "cudaUseHeadBNHalfToFloat": false,
+    "cudaUseQKVStridedSm120": false,
+    "cudaUseWideFFNSingleGemm": false,
+    "cudaUseProjectionGemmLt": false,
+    "cudaShareModelWeights": false,
+    "cudaUseInitialGlobalMatMulAdd": false,
+    "cudaUseFusedValueTerminalSm120": false
+  },
+  "latest_gate": {
+    "name": "cublas_hgemm_beta1_residual",
+    "median_nn_evals_per_sec": 5600.2997775,
+    "gain_vs_previous_percent": 11.99714946634911,
+    "relative_spread": 0.006072218693832158
+  }
+}
