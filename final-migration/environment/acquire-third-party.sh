@@ -19,7 +19,7 @@ sync_latest() {
   local name="$1" tier="$2" url="$3" requested_ref="$4" submodules="$5"
   local target="${KATAGO_THIRD_PARTY_ROOT}/${name}"
   local bundle="${KATAGO_LOCAL_ARCHIVE}/git/${name}.bundle"
-  local resolved describe submodule_commits="-"
+  local current_revision="" resolved describe submodule_commits="-"
   local new_checkout=0
 
   if [[ ! -e "${target}" ]]; then
@@ -41,9 +41,11 @@ sync_latest() {
   [[ -d "${target}/.git" ]] || die "source target is not a Git checkout: ${target}"
   if [[ "${new_checkout}" == "0" ]]; then
     [[ -z "$(git -C "${target}" status --porcelain)" ]] || die "managed source checkout is dirty: ${target}"
+    current_revision="$(git -C "${target}" rev-parse HEAD)"
   fi
 
-  if [[ "${new_checkout}" == "1" || "${KATAGO_REFRESH_SOURCES:-0}" == "1" ]]; then
+  if [[ "${new_checkout}" == "1" || "${KATAGO_REFRESH_SOURCES:-0}" == "1" || \
+        ( "${requested_ref}" != "HEAD" && "${current_revision}" != "${requested_ref}" ) ]]; then
     github_fallback_warning "${name} source"
     if ! git -C "${target}" fetch --depth=1 origin "${requested_ref}"; then
       if [[ "${new_checkout}" == "1" ]]; then
@@ -85,6 +87,9 @@ sync_latest() {
   [[ -z "$(git -C "${target}" status --porcelain)" ]] || die "source checkout remained dirty after sync: ${target}"
 
   resolved="$(git -C "${target}" rev-parse HEAD)"
+  if [[ "${requested_ref}" != "HEAD" && "${resolved}" != "${requested_ref}" ]]; then
+    die "${name} resolved to ${resolved}, expected pinned revision ${requested_ref}"
+  fi
   describe="$(git -C "${target}" describe --tags --always 2>/dev/null || printf unknown)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${name}" "${tier}" "${url}" "${requested_ref}" "${resolved}" "${describe}" "${submodule_commits}" \

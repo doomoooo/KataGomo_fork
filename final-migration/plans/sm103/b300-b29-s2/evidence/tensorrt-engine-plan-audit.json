@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-tensorrt-engine-plan-read-only-audit",
+  "timestamp_utc": "2026-08-18T14:54:03Z",
+  "status": "complete_no_new_runtime_candidate",
+  "scope": {
+    "mode": "read-only CPU-first, with only deserialize/inspection and one exact-B29 synthetic inference performed under the shared GPU-0 lock",
+    "core_or_cmake_modified": false,
+    "benchmark_or_accuracy_gate_run": false,
+    "stage_commit_push": false
+  },
+  "fixed_identity": {
+    "anchor": {
+      "path": "final-migration/plans/sm103/b300-b29-s2/baseline-anchor.json",
+      "sha256": "96ca902992a58a7a581626c63c748a507c2823d37ec6848ba6f549b8d7020227"
+    },
+    "selection": {
+      "gpu": "NVIDIA B300 SXM6 AC",
+      "compute_capability": "10.3",
+      "multi_processor_count": 148,
+      "batch": 29,
+      "streams": 2,
+      "board": [19, 19],
+      "precision": "FP16/NHWC"
+    },
+    "model": {
+      "path": ".final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz",
+      "name": "b11c768h12nbt3tflrs-fson-silu",
+      "sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6"
+    },
+    "binary": {
+      "path": ".final-migration-env/katago-builds/tensorrt-10.16.1.11-sm103/katago",
+      "sha256": "883024dc8bbc02e7f6b05b0431034652931acc760b76e7fd455dc996af278612",
+      "linked_sonames": ["libnvinfer.so.10", "libnvonnxparser.so.10"],
+      "runpath_root": ".final-migration-env/tensorrt-10.16.1.11/lib"
+    },
+    "config": {
+      "path": "cpp/configs/gtp_example.cfg",
+      "sha256": "807c646c5e4f6f5a3193f6da4c216782486ec2a3c3015e543a34f605ce2c0e3f"
+    },
+    "source_result": {
+      "path": ".final-migration-env/baselines/b300-20260818/trt10-peak-confirm/result.json",
+      "sha256": "b167a3435a0789f0337b8499260f42876988c6cad7694b90dbb02bbcc2a31768",
+      "median_nn_evals_per_sec": 6733.719141,
+      "samples": 5,
+      "iterations": 1000,
+      "warmup": 20
+    },
+    "standalone_manifest": "absent; baseline-anchor.json, result.json, the cache trailer, and binary/config/model hashes form the identity chain"
+  },
+  "serialized_cache": {
+    "path": ".final-migration-env/baselines/b300-trt10-home/trtcache/trt-101601_gpu-ffb8d56c_net-b11c768h12nbt3tflrs-fson-silu_s9_onnxnh_ex19x19_b29_fp16",
+    "file_bytes": 165613349,
+    "file_sha256": "cf5ebb04326dbe464dbcce717208dfc45f39c7508dac3c0398a16c4b357c0763",
+    "raw_plan_bytes_after_trailer_strip": 165613244,
+    "raw_plan_sha256": "91c6e60d1453b83330051b25aea9fa515d303a7ef6203ef857e22303e0788e5f",
+    "trailer": {
+      "bytes": 105,
+      "model_sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+      "parameter_string": "_101601_ffb8d56c_s9_onnxnh_ex_19_19_29_16",
+      "decoded": "TensorRT 10.16.1, B300-name hash ffb8d56c, tune salt 9, ONNX NHWC, exact 19x19, B29, FP16"
+    },
+    "plan_header_magic": "ftrt",
+    "plan_version_probe": "trtexec --getPlanVersionOnly: Plan was created with TensorRT version 10.16.1.11",
+    "readme_11_2_1_2_is_baseline": false
+  },
+  "engine_runtime_metadata": {
+    "runtime": "TensorRT 10.16.1.11",
+    "profiling_verbosity": "LAYER_NAMES_ONLY",
+    "num_layers": 572,
+    "num_aux_streams": 0,
+    "num_io_tensors": 8,
+    "num_optimization_profiles": 1,
+    "device_memory_size_v2_bytes": 121151488,
+    "streamable_weights_size_bytes": 0,
+    "io": {
+      "inputs": ["InputMask", "InputSpatial", "InputGlobal"],
+      "outputs": ["OutputPolicyPass", "OutputPolicy", "OutputValue", "OutputScoreValue", "OutputOwnership"],
+      "dtype_format_location": "all FP32, row-major LINEAR, device",
+      "io_aliases": "none"
+    },
+    "profile_0": {
+      "InputMask": {"min": [1, 1, 19, 19], "opt": [29, 1, 19, 19], "max": [29, 1, 19, 19]},
+      "InputSpatial": {"min": [1, 22, 19, 19], "opt": [29, 22, 19, 19], "max": [29, 22, 19, 19]},
+      "InputGlobal": {"min": [1, 19, 1, 1], "opt": [29, 19, 1, 1], "max": [29, 19, 1, 1]}
+    }
+  },
+  "exact_b29_sequence_probe": {
+    "purpose": "structural kernel/stream inspection only; one traced inference is not throughput evidence",
+    "gpu_serialization": {
+      "wrapper": "final-migration/environment/with-gpu-lock.sh",
+      "gpu": 0,
+      "label": "trt10-b29-exact-one-nsys"
+    },
+    "shapes": {
+      "InputMask": [29, 1, 19, 19],
+      "InputSpatial": [29, 22, 19, 19],
+      "InputGlobal": [29, 19, 1, 1]
+    },
+    "iterations": 1,
+    "data_transfers": false,
+    "kernel_launches": 439,
+    "kernel_streams": 1,
+    "kernel_sum_ms": 5.001007,
+    "temporary_report": {
+      "retained_in_repository": false,
+      "nsys_sha256": "1ed69d4e14468c757ae44ad09f6a99e5c2bef46844e31fda6ae0bbc80dbe6cc7",
+      "sqlite_sha256": "0bcde0140e44a32a828113d02f2c43d3f99192e49ccc816eeae1c7d672392577"
+    },
+    "discarded_probe": "an earlier trtexec probe omitted --shapes and selected profile-min B1; it is excluded from every result in this record"
+  },
+  "realized_trunk_sequence_direct_evidence": {
+    "repeated_attention_ffn_pairs": 33,
+    "qkv_per_attention": {
+      "inspector_layer": "v_proj+ k_proj+ q_proj in one Myelin layer",
+      "kernel_launches": 1,
+      "kernel_symbol_class": "CUTLASS 3.x SM100 tensorop, FP16 inputs/outputs with FP32 accumulator, 2-SM",
+      "grid": [6, 41, 3],
+      "block": [256, 1, 1],
+      "registers_per_thread": 89,
+      "dynamic_shared_memory_bytes": 231424
+    },
+    "rope_per_attention": {
+      "kernel_launches": 2,
+      "composite_names": [
+        "TranReshTranMulGathMulAddTranReshMove",
+        "TranReshTranMulGathMulAddReshMove"
+      ],
+      "each_grid": [1963, 1, 1],
+      "each_block": [256, 1, 1]
+    },
+    "attention_per_attention": {
+      "kernel_launches": 1,
+      "kernel": "_gemm_mha_v2",
+      "grid": [2, 348, 1],
+      "block": [512, 1, 1],
+      "registers_per_thread": 128,
+      "dynamic_shared_memory_bytes": 0
+    },
+    "ffn_per_ffn": {
+      "sequence": ["combined up/gate Fc", "ReshReshSiluMul", "linear2"],
+      "kernel_launches": 3,
+      "up_gate": {"grid": [18, 41, 1], "block": [256, 1, 1], "registers_per_thread": 72, "dynamic_shared_memory_bytes": 232448},
+      "swiglu": {"grid": [5889, 1, 1], "block": [256, 1, 1], "registers_per_thread": 32},
+      "linear2": {"grid": [6, 44, 1], "block": [256, 1, 1], "registers_per_thread": 89, "dynamic_shared_memory_bytes": 231424}
+    },
+    "interpretation_boundary": "composite layer/kernel names prove launch fusion and the absence of separate launches for named sub-operations; they do not prove internal accumulator details, global-store counts, or buffer aliasing inside Myelin"
+  },
+  "comparison_to_retained_cuda_b5e17d76": {
+    "current_final_nsys": {
+      "report": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/nsys-final-aux.nsys-rep",
+      "report_sha256": "a2619bd41e88202c91e303db91a1648ca4d0203d46566e1b14435a5fca306c77",
+      "sqlite": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/nsys-final-aux.sqlite",
+      "sqlite_sha256": "e0505e7a2b2d9de21b2c710358a53f919242a37b78b4115102b37805cadee79c"
+    },
+    "ready_dag": {
+      "tensorrt": "zero auxiliary streams and one kernel stream per execution context; Q/K/V are exposed as one grouped grid with grid-z 3",
+      "retained_cuda": "two outer plus four Q/K/V auxiliary kernel streams; exact id70 kernels remain separate",
+      "retained_cuda_steady_qkv_union_delta_percent": -26.3493,
+      "retained_cuda_steady_whole_graph_union_delta_percent": -2.8257,
+      "decision": "the general technique is changing the dependency-ready frontier; it is already retained in CUDA, while this TensorRT plan supplies no auxiliary-stream implementation to copy"
+    },
+    "launch_structure": {
+      "tensorrt_kernels_per_forward": 439,
+      "retained_cuda_steady_kernels_per_forward": 405.96,
+      "tensorrt_ffn_launches_per_ffn": 3,
+      "retained_cuda_ffn_launches_per_ffn": 2,
+      "decision": "the retained fused no-AB12 FFN has already surpassed the plan's materialized three-launch FFN boundary"
+    },
+    "closed_fusion_routes": [
+      "do not reopen grouped/fused QKV merely because TensorRT uses one grid-z-3 launch; the SM103 whole-graph fused-QKV/RoPE route already lost overlap",
+      "do not reopen out-projection plus RMS fusion; the current-best full-graph closure regressed"
+    ]
+  },
+  "ownership_output_non_candidate": {
+    "output": "ownership",
+    "direct_code_evidence": "benchmarkPureForward sets every whiteOwnerMap pointer to null, while CUDA benchmarkOutput still executes the full ownership branch; this is a benchmark-only condition, whereas the normal GTP path requests and reads ownership",
+    "retained_cuda_nsys_last_50_per_outer_stream": {
+      "forwards": 100,
+      "ownership_conv_launches": 100,
+      "half_to_float_launches": 100,
+      "summed_service_us": 833.668,
+      "union_us": 761.060,
+      "exclusive_us": 410.337,
+      "exclusive_share_of_current_steady_union_percent": 0.1273
+    },
+    "status": "closed_not_a_candidate",
+    "closure": "do not skip this output: production GTP consumes ownership, and specializing benchmarkPureForward would make the fixed benchmark cease to represent the production GTP graph; heads are also outside the current investment scope",
+    "not_a_claimed_gain": true
+  },
+  "already_retained_general_techniques": [
+    {
+      "technique": "change the ready DAG with persistent auxiliary streams while preserving exact kernel arithmetic",
+      "evidence": "stage-08 QKV aux2"
+    },
+    {
+      "technique": "delete outputs and storage pipelines that have no consumer",
+      "evidence": "stage-03b removed the 48,241,152-byte per-stream AB12 output; L2 sectors fell 66.64 percent and long throughput rose 6.316 percent"
+    }
+  ],
+  "not_visible_in_this_plan": [
+    "per-layer datatype/format/tactic IDs because the engine was built with LAYER_NAMES_ONLY rather than DETAILED profiling verbosity",
+    "per-tactic global workspace and the partition of the 121,151,488-byte execution-context arena",
+    "internal tensor lifetime offsets, alias/reuse pairs, and whether any named intermediate is written to global memory inside a fused kernel",
+    "the internal ready DAG beyond the direct zero-aux-stream API result and observed single kernel stream",
+    "Myelin fused-kernel accumulator behavior not encoded in the external kernel symbol"
+  ],
+  "final_decision": {
+    "new_general_cuda_optimization_from_plan": false,
+    "actionable_runtime_hypotheses": 0,
+    "deferred_bounded_hypotheses": 0,
+    "reason": "the only evidence-backed general techniques are the already-retained ready-frontier aux-stream change and no-AB12 dead-store elimination; ownership is a required production GTP output and is explicitly closed as a candidate"
+  }
+}

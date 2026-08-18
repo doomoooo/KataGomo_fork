@@ -33,11 +33,11 @@ else
   exec > >(tee "${record}") 2>&1
 fi
 
-export PIP_INDEX_URL="${KATAGO_PYPI_MIRROR}"
+configure_pip_environment
 export MAX_JOBS="${KATAGO_BUILD_JOBS}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${KATAGO_BUILD_JOBS}"
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.9;12.0}"
-export FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS:-89;120}"
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.9;10.3;12.0}"
+export FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS:-89;103;120}"
 export XDG_CACHE_HOME="${KATAGO_ENV_ROOT}/cache"
 mkdir -p -- "${XDG_CACHE_HOME}"
 
@@ -112,7 +112,8 @@ build_python_source_component() {
   if [[ "${name}" == "flash-attention" ]]; then
     export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FLASH_ATTN_4=0.0.1.dev1+katago
   fi
-  python -m pip wheel --no-deps --wheel-dir "${temp_wheels}" "${source_path}"
+  python -m pip wheel --no-build-isolation --no-deps \
+    --wheel-dir "${temp_wheels}" "${source_path}"
   wheel="$(find "${temp_wheels}" -maxdepth 1 -type f -name '*.whl' -print -quit)"
   [[ -n "${wheel}" ]] || die "${name} did not produce a wheel"
   wheel_name="$(basename -- "${wheel}")"

@@ -11,21 +11,36 @@ The non-invasive host ABI is Linux x86-64/glibc >= 2.28. The setup script
 checks, but does not overwrite, the baseline OS compiler and shell utilities.
 It never assumes Ubuntu 24.04 and is qualified on Ubuntu 22.04 and 24.04.
 
-Common locked environment:
+Locked managed environment:
 
-- CPython 3.12.13 from python-build-standalone release 20260807;
-- CUDA toolkit 13.0.3 from fixed PyPI packages, including nvcc, CRT, CCCL and
-  NVVM; the C++ backend and Python generators share this one installation;
-- cuDNN 9.20.0 for CUDA 13 from the PyTorch-compatible PyPI package;
+- CPython 3.14.7 from python-build-standalone release 20260814;
+- native CUDA toolkit 13.3.1, including nvcc, CRT, and NVVM 13.3.73, plus
+  cuDNN 9.25.0.15 for C++ compilation and inference qualification;
+- PyTorch 2.13.0+cu132, whose official CUDA 13.2.1/cuDNN 9.20.0.48 build
+  metadata is recorded separately because no official cu133 wheel exists; the
+  managed prefix still contains only the active CUDA 13.3/cuDNN 9.25 DSO set;
+- TensorRT 10.16.1.11 is the B300 comparison identity, but it is not installed,
+  linked or carried by this environment;
 - a clean compatible FlashAttention source with the SM89 C++ and minimal SM120
   both16 patches applied before its wheel is built;
 - the FlashAttention-declared CUTLASS submodule for SM89 and a clean compatible
-  CUTLASS source for CuTe generation; resolved revisions are provenance only;
-- published TileLang 0.1.13, Quack 0.6.4 and compatible TVM-FFI 0.1.12 wheels,
-  plus KataGo's vendored cuDNN frontend headers;
+  CUTLASS source for CuTe generation; both production sources are pinned to the
+  exact qualified commits;
+- published TileLang 0.1.13, Quack 0.6.4, compatible TVM-FFI 0.1.12 and
+  z3-solver 4.15.4.0 wheels, plus KataGo's vendored cuDNN frontend headers;
 - versioned wheels for build tools, PyTorch, CUTLASS DSL and small runtime
   dependencies, including PyTorch's Triton dependency. Triton is not a source
   component or a KataGo kernel generator;
+
+TVM-FFI and z3 remain at those versions because TileLang requires
+`apache-tvm-ffi<0.1.13` and `z3-solver<4.15.5`. Likewise, cuda-python 13.3.1
+keeps compatible cuda-core 1.0.1, SymPy 1.14 keeps mpmath 1.3.0, and Quack's
+CUTLASS DSL constraint receives only the existing explicit smoke-tested waiver.
+CUTLASS DSL 4.7 also requires `protobuf<7`, so protobuf 6.33.6 is the newest
+compatible Python runtime rather than the independently newer 7.x release.
+The PyTorch build-metadata/active-runtime differences are allowed only as exact,
+named conflicts; a general `pip check` waiver is forbidden. They describe one
+mixed ABI/runtime prefix, not two physical runtime closures.
 
 The package manifest binds every carried payload by SHA-256.  Source builds
 produce a second manifest containing source archive, patch, wheel and installed
@@ -49,7 +64,12 @@ Supported mappings:
 | CUDA CC | workflow | default batches | streams |
 | --- | --- | --- | --- |
 | 8.9 | shared CUDA workflow, SM89 catalogs / 10 decision groups | optimized B4-B32 prescan, then top 3 | 2 |
+| 10.3 | B300: generic `sm_103`, accelerated AOT `sm_103a`; exact qualified contract only | B29 | 2 |
 | 12.0 | shared CUDA workflow, SM120 catalogs / 10 decision groups | optimized B4-B32 prescan, then top 3 | 2 |
+
+The CC 10.3 row does not authorize a generic SM103 plan. Plan lookup and tactic
+dispatch fail closed outside the exact checked-in B29/S2 contract rather than
+reuse SM89 or SM120 behavior.
 
 The prescan uses an explicit, artifact-free stable optimized graph and ranks
 physical `nnEval/s`; it is only a shape selector. All AOT candidates for the

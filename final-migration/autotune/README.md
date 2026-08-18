@@ -1,4 +1,4 @@
-# Unified SM89 / SM120 autotune SDK
+# Unified SM89 / SM120 autotune SDK and SM103 qualification
 
 This directory defines the source-based, non-invasive autotune distribution.
 It is separate from `environment/package-distribution.sh`, which packages an
@@ -9,13 +9,20 @@ uses the maintained training archive and corpus identities in `corpus.lock.sh`.
 The current gate contains exactly 8192 deterministically sampled full 19x19
 rows with seed 20260803. The corpus changes only when maintainers intentionally
 regenerate the FP32 reference and certified plans together. The tar carries the
-corpus and its complete source/row manifest. It also carries a pinned
-Python runtime, fixed CUDA 13.0.3 and cuDNN 9.20 PyPI wheels, the complete
-KataGo source tree, materialized third-party source trees, build-prerequisite
-payloads, the model, and integrity manifests. The CUDA compiler and C++ backend
-use the same NVIDIA wheel tree as PyTorch, so the release does not carry a
-second CUDA toolkit. The target does not clone GitHub repositories or resolve
+corpus and its complete source/row manifest. It also carries CPython 3.14.7,
+PyTorch 2.13.0+cu132, native CUDA toolkit 13.3.1 and cuDNN 9.25.0.15 in one
+managed prefix. The complete KataGo source tree, materialized
+third-party source trees, build prerequisites, model, and integrity manifests
+are carried as well. The target does not clone GitHub repositories or resolve
 dependency versions.
+
+PyTorch 2.13.0 has no official `cu133` wheel. Its `cu132` build ABI and metadata
+(CUDA 13.2.1/cuDNN 9.20.0.48) are recorded separately from the active
+CUDA 13.3.1/cuDNN 9.25.0.15 DSOs, but these are not two physical runtime
+closures: the managed prefix contains one active DSO set. The three exact
+metadata conflicts are fail-closed exceptions, not a general `pip check`
+waiver. TensorRT 10.16.1.11 is the fixed B300 comparison baseline and is not
+installed, linked or shipped by this environment.
 
 After extracting the release in a writable persistent directory:
 
@@ -48,7 +55,8 @@ pipeline, and the default search-thread budget. It does not reuse scan-host
 paths from the plan.
 
 The host baseline is Linux x86-64 with glibc 2.28 or newer, an NVIDIA driver
-compatible with CUDA 13.0, and the small OS bootstrap set checked by `setup.sh`
+meeting the conservative CUDA 13.3 packaging policy (610.43.02), and the small
+OS bootstrap set checked by `setup.sh`
 (`bash`, GNU tar/coreutils, and GCC/G++). Everything above that
 bootstrap is carried in the tar; setup performs no APT transaction, Git clone,
 or network access. Setup validates the carried corpus before building. The
@@ -60,20 +68,26 @@ supports both validated Ubuntu 22.04 and
 24.04 hosts instead of encoding one Ubuntu release.
 
 `setup.sh` writes only below the extracted directory unless `--prefix` is
-given. It installs the carried published TVM-FFI, TileLang, Quack and CUTLASS
-DSL wheels, then builds only the locally patched FlashAttention package from
-carried source. PyTorch's Triton wheel dependency is carried
-as a binary package only; this workflow does not generate or benchmark Triton
-kernels. CUDA, nvcc and cuDNN are fixed NVIDIA PyPI packages shared by Python
-code generation and the C++ backend.
+given. It installs TileLang 0.1.13 with its newest compatible TVM-FFI 0.1.12
+and z3-solver 4.15.4.0, Quack 0.6.4, and CUTLASS DSL 4.7.0, then builds only
+the locally patched FlashAttention package from carried source. The Quack DSL
+metadata mismatch is a narrow, smoke-tested exception; it is not permission to
+waive unrelated dependency errors. PyTorch's Triton wheel dependency is carried
+as a binary package and may be used for isolated AOT research, but no retained
+production tactic is implied by installing it. All Python generators resolve
+the one active managed CUDA 13.3/cuDNN 9.25 DSO set described above.
 
 Build parallelism defaults to the lower of `nproc`, 8, and a memory-aware limit
 (75% of current `MemAvailable`/cgroup headroom at 2 GiB per heavy compiler
 process). This avoids fixed `-j4`/`-j8` values while protecting memory-limited
 hosts. `--jobs N` remains an explicit override.
 
-`run-autotune.sh` queries the selected device through the CUDA Runtime.  CC
-8.9 dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow.
+`run-autotune.sh` queries the selected device through the CUDA Runtime. CC 8.9
+dispatches the SM89 workflow and CC 12.0 dispatches the SM120 workflow. NVIDIA
+B300 reports CC 10.3. Generic dependency smokes use `sm_103`, while accelerated
+CuTe artifacts use exact `sm_103a`. The checked-in SM103 workflow remains
+fail-closed outside its explicitly qualified B29/S2 contract; it is never
+misrouted through the SM89 or SM120 catalog.
 The selection domain is exact B4-B32 with two inference streams. By default an
 artifact-free stable optimized graph first measures all 29 batches, and only its
 three highest-throughput shapes receive complete tactic generation,

@@ -21,6 +21,8 @@ CORPUS_OUTPUT_ROOT="${AUTOTUNE_CORPUS_OUTPUT_ROOT:-/workspace/trainingdata/accur
 TRAINING_DATA_CACHE="${AUTOTUNE_TRAINING_DATA_CACHE:-/workspace/trainingdata}"
 PYTHON_ARCHIVE="${AUTOTUNE_PYTHON_ARCHIVE:-${ENV_ROOT}/downloads/${KATAGO_PYTHON_RUNTIME_ARCHIVE}}"
 PYPI_MIRROR="${KATAGO_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_EXTRA_INDEX_URLS="${KATAGO_PIP_EXTRA_INDEX_URLS:-https://pypi.nvidia.com https://download.pytorch.org/whl/cu132}"
+PIP_CACHE_DIR="${KATAGO_PIP_CACHE_DIR:-${ENV_ROOT}/cache/pip}"
 DEFAULT_SEED_WHEELS="${ENV_ROOT}/distributions/20260807T205459Z/wheels:${ENV_ROOT}/autotune-wheel-seed"
 SEED_WHEELS="${AUTOTUNE_SEED_WHEELS:-${DEFAULT_SEED_WHEELS}}"
 CORPUS_RESULT="${ENV_ROOT}/accuracy-corpus/current.json"
@@ -86,7 +88,9 @@ locked_source_archive="$("${CORPUS_PYTHON}" -c \
 for path in "${FLASH_CUTLASS_ROOT}" "${ZLIB_ROOT}" "${MODEL}" "${CORPUS}" "${CORPUS_MANIFEST}"; do
   [[ -e "${path}" ]] || die "required payload input missing: ${path}"
 done
-mkdir -p -- "${OUTPUT_ROOT}" "$(dirname -- "${PYTHON_ARCHIVE}")"
+mkdir -p -- "${OUTPUT_ROOT}" "$(dirname -- "${PYTHON_ARCHIVE}")" "${PIP_CACHE_DIR}"
+export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URLS}"
+export PIP_CACHE_DIR
 
 if [[ ! -r "${PYTHON_ARCHIVE}" ]]; then
   log "downloading the pinned Python source-independent runtime for release construction"
@@ -98,13 +102,13 @@ fi
   || die "Python archive checksum mismatch"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-bundle_name="katago-sm89-sm120-autotune-${timestamp}"
+bundle_name="katago-sm89-sm103-sm120-autotune-${timestamp}"
 stage="$(mktemp -d "${OUTPUT_ROOT}/.${bundle_name}.XXXXXX")"
 bundle="${stage}/${bundle_name}"
 source_stage="${stage}/source-stage/sources"
 cleanup() {
   case "${stage}" in
-    "${OUTPUT_ROOT}"/.katago-sm89-sm120-autotune-*)
+    "${OUTPUT_ROOT}"/.katago-sm89-sm103-sm120-autotune-*)
       find "${stage}" -mindepth 1 -delete
       rmdir -- "${stage}"
       ;;
@@ -188,6 +192,18 @@ git -C "${REPO_ROOT}" archive --format=tar --prefix=repo/ HEAD \
   | gzip -9 > "${bundle}/payload/repo.tar.gz"
 cp -- "${PYTHON_ARCHIVE}" "${bundle}/payload/python.tar.gz"
 
+# Resolve wheels with the bundled interpreter itself.  The packaging host may
+# run a different Python and must not accidentally populate a CPython 3.12
+# wheelhouse for the locked CPython 3.14 runtime.
+wheel_runtime="${stage}/wheel-runtime"
+mkdir -p -- "${wheel_runtime}"
+tar --extract --gzip --file "${PYTHON_ARCHIVE}" --directory "${wheel_runtime}"
+wheel_python="${wheel_runtime}/python/bin/python3"
+[[ -x "${wheel_python}" ]] || die "Python archive did not contain python/bin/python3"
+[[ "$("${wheel_python}" -c 'import platform; print(platform.python_version())')" == \
+   "${KATAGO_PYTHON_RUNTIME_VERSION}" ]] \
+  || die "wheel resolver Python does not match the locked runtime"
+
 asset_stage="${stage}/asset-stage/assets"
 mkdir -p -- "${asset_stage}"
 cp -- "${MODEL}" "${asset_stage}/b11c768h12nbt3tflrs-fson-silu.bin.gz"
@@ -214,13 +230,15 @@ tar --create --gzip --file "${bundle}/payload/assets.tar.gz" \
   --directory "${stage}/asset-stage" assets
 
 log "resolving the pinned wheel payload; this is the only packaging step that may use PyPI"
+log "using configured additional package indexes"
+log "using managed pip cache: ${PIP_CACHE_DIR}"
 IFS=: read -r -a seed_wheel_dirs <<< "${SEED_WHEELS}"
 find_links=()
 for seed_wheel_dir in "${seed_wheel_dirs[@]}"; do
   [[ -d "${seed_wheel_dir}" ]] || die "seed wheel directory missing: ${seed_wheel_dir}"
   find_links+=(--find-links "${seed_wheel_dir}")
 done
-python3 -m pip download --index-url "${PYPI_MIRROR}" "${find_links[@]}" \
+"${wheel_python}" -m pip download --index-url "${PYPI_MIRROR}" "${find_links[@]}" \
   --only-binary=:all: --no-deps --dest "${bundle}/payload/wheels" \
   --requirement "${SCRIPT_DIR}/python-build-requirements.txt" \
   --requirement "${SCRIPT_DIR}/python-binary-requirements.txt"
@@ -232,8 +250,12 @@ python3 "${SCRIPT_DIR}/lock_wheels.py" "${SCRIPT_DIR}/python-binary-requirements
 {
   printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"
   printf 'katago_commit=%s\n' "$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-  printf 'python_version=3.12.13\npython_build_standalone_release=20260807\n'
-  printf 'cuda_toolkit_pypi=13.0.3.0\ncudnn_cuda13_pypi=9.20.0.48\n'
+  printf 'python_version=%s\npython_build_standalone_release=%s\n' \
+    "${KATAGO_PYTHON_RUNTIME_VERSION}" "${KATAGO_PYTHON_RUNTIME_RELEASE}"
+  printf 'native_cuda_toolkit_pypi=13.3.1\nnative_cudnn_cuda13_pypi=9.25.0.15\n'
+  printf 'torch=2.13.0+cu132\ntorch_wheel_cuda=13.2\ntorch_metadata_cuda_toolkit=13.2.1\n'
+  printf 'flashinfer_python=0.6.17\nnvidia_cudnn_frontend=1.27.0\nliger_kernel=0.8.1\nmslk=1.3.0+cu132\n'
+  printf 'minimum_driver=610.43.02\n'
   printf 'model_sha256=%s\n' "$(sha256sum "${MODEL}" | awk '{print $1}')"
   printf 'corpus_sha256=%s\n' "$(sha256sum "${CORPUS}" | awk '{print $1}')"
   "${CORPUS_PYTHON}" -c 'import json,sys; manifest=json.load(open(sys.argv[1])); result=json.load(open(sys.argv[2])); print("training_data_archive="+manifest["source_archive"]); print("training_data_archive_sha256="+manifest["source_archive_sha256"]); print("training_data_url="+result["source_url"])' "${CORPUS_MANIFEST}" "${CORPUS_RESULT}"

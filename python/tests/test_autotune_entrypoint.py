@@ -76,7 +76,9 @@ class AutotuneEntrypointTests(unittest.TestCase):
             repo / "final-migration" / "environment" / "build-matrix.sh"
         ).read_text()
         self.assertIn("activate_venv", build_matrix)
-        self.assertIn('KATAGO_PYTHON_RUNTIME_VERSION="3.12.13"', runtime_lock)
+        self.assertIn('cmake --fresh "${cmake_args[@]}"', build_matrix)
+        self.assertIn('KATAGO_PYTHON_RUNTIME_VERSION="3.14.7"', runtime_lock)
+        self.assertIn('KATAGO_PYTHON_RUNTIME_RELEASE="20260814"', runtime_lock)
         self.assertIn("KATAGO_PYTHON_RUNTIME_SHA256", runtime_lock)
 
     def test_triton_is_binary_only_and_never_source_built(self) -> None:
@@ -104,6 +106,33 @@ class AutotuneEntrypointTests(unittest.TestCase):
             "cutlass flash-attention triton quack", package,
         )
 
+    def test_sm103_activation_uses_only_the_managed_toolchain(self) -> None:
+        repo = AUTOTUNE_PATH.parents[2]
+        activation = (
+            repo / "final-migration/environment/activate-sm103.sh"
+        ).read_text()
+        self.assertIn("activate_venv", activation)
+        self.assertIn("activate_toolchain", activation)
+        self.assertIn('TRITON_PTXAS_PATH="${KATAGO_CUDA_ROOT}/bin/ptxas"', activation)
+        self.assertIn(
+            'TRITON_PTXAS_BLACKWELL_PATH="${KATAGO_CUDA_ROOT}/bin/ptxas"',
+            activation,
+        )
+        self.assertIn('CUTE_DSL_ARCH="sm_103a"', activation)
+        self.assertIn(
+            'CUTE_DSL_PTXAS_PATH="${KATAGO_CUDA_ROOT}/bin/ptxas"', activation
+        )
+        self.assertIn('FLASHINFER_CUDA_ARCH_LIST="10.3a"', activation)
+        self.assertIn("FLASHINFER_NO_DOWNLOAD=1", activation)
+        self.assertNotIn("/usr/local/cuda", activation)
+
+        flashinfer_smoke = (
+            repo / "final-migration/environment/smoke/flashinfer_sm103.py"
+        ).read_text()
+        self.assertIn("mma_tiler=(128, 128, 32)", flashinfer_smoke)
+        self.assertIn("config.can_implement(dtype_width=16)", flashinfer_smoke)
+        self.assertNotIn("cute.compile", flashinfer_smoke)
+
     def test_published_codegen_packages_are_not_cloned_or_source_built(self) -> None:
         repo = AUTOTUNE_PATH.parents[2]
         catalog = (
@@ -115,13 +144,21 @@ class AutotuneEntrypointTests(unittest.TestCase):
         setup = (repo / "setup.sh").read_text()
         package = (AUTOTUNE_PATH.parent / "package-autotune.sh").read_text()
 
-        for component in ("TileLang", "apache-tvm-ffi", "quack"):
+        for component in (
+            "TileLang", "apache-tvm-ffi", "quack", "flashinfer-python",
+            "nvidia-cudnn-frontend", "liger-kernel",
+            "mslk",
+        ):
             self.assertNotIn(f"\n{component}\tcore\t", "\n" + catalog)
             self.assertNotIn(f'build_source_wheel {component}', setup)
             self.assertNotIn(f'copy_source "{component}"', package)
         for requirement in (
             "tilelang===0.1.13", "apache-tvm-ffi==0.1.12",
-            "quack-kernels==0.6.4",
+            "quack-kernels==0.6.4", "z3-solver==4.15.4.0",
+            "flashinfer-python==0.6.17",
+            "nvidia-cudnn-frontend==1.27.0",
+            "liger-kernel==0.8.1",
+            "mslk==1.3.0+cu132",
         ):
             self.assertIn(requirement, requirements)
         self.assertIn("csrc/cutlass", catalog)
@@ -145,15 +182,19 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn('"onnx"', audit)
         self.assertNotIn('"onnx2torch"', audit)
 
-    def test_source_setup_uses_one_fixed_pypi_cuda_toolchain(self) -> None:
+    def test_source_setup_uses_locked_managed_native_and_codegen_stack(self) -> None:
         repo = AUTOTUNE_PATH.parents[2]
         environment = repo / "final-migration/environment"
         environment_setup = (environment / "setup.sh").read_text()
         common = (environment / "lib/common.sh").read_text()
         third_party_build = (environment / "build-third-party.sh").read_text()
+        third_party_catalog = (environment / "third-party.lock.tsv").read_text()
+        third_party_acquire = (environment / "acquire-third-party.sh").read_text()
         katago_build = (environment / "build-matrix.sh").read_text()
         verify = (environment / "verify-third-party.sh").read_text()
         audit = (environment / "audit-environment.sh").read_text()
+        checker = (environment / "check-python-environment.py").read_text()
+        deploy = (environment / "deploy-prebuilt.sh").read_text()
         root_setup = (repo / "setup.sh").read_text()
         package = (repo / "final-migration/autotune/package-autotune.sh").read_text()
         binary_requirements = (
@@ -167,17 +208,80 @@ class AutotuneEntrypointTests(unittest.TestCase):
         self.assertNotIn("acquire-nvidia-toolchain", environment_setup)
         self.assertIn('nvidia/cu13', common)
         self.assertIn('nvidia/cudnn', common)
+        self.assertIn("https://pypi.nvidia.com", common)
+        self.assertIn("https://download.pytorch.org/whl/cu132", common)
+        self.assertIn("KATAGO_PIP_CACHE_DIR", common)
         self.assertIn('export CUDA_HOME="${KATAGO_CUDA_ROOT}"', common)
-        for source in (third_party_build, katago_build, verify):
+        for source in (third_party_build, katago_build):
             self.assertIn("activate_toolchain", source)
             self.assertNotIn("/usr/local/cuda", source)
+        self.assertIn('source "${SCRIPT_DIR}/activate-sm103.sh"', verify)
+        self.assertNotIn("/usr/local/cuda", verify)
         self.assertIn('"-DKATAGO_TILELANG_ROOT=${KATAGO_TILELANG_ROOT}"', katago_build)
         self.assertIn('cuda_root="${KATAGO_CUDA_ROOT}"', root_setup)
         self.assertNotIn("payload/cuda-", root_setup)
         self.assertNotIn("payload/cudnn-", root_setup)
         self.assertNotIn("packing the CUDA", package)
-        self.assertIn("nvidia-cuda-nvcc==13.0.88", binary_requirements)
-        self.assertIn("nvidia-nvvm==13.0.88", binary_requirements)
+        self.assertIn(
+            "6c68991985ca8b09594ac6fd43abbfd5830c4140", third_party_catalog
+        )
+        self.assertIn(
+            "0251105a2fb19d2957484b7f023cd8c115286ced", third_party_catalog
+        )
+        self.assertIn("expected pinned revision", third_party_acquire)
+        self.assertIn("--no-build-isolation", third_party_build)
+        for requirement in (
+            "cuda-toolkit==13.3.1",
+            "cuda-python==13.3.1",
+            "cuda-core==1.0.1",
+            "nvidia-cuda-nvcc==13.3.73",
+            "nvidia-cuda-crt==13.3.73",
+            "nvidia-nvvm==13.3.73",
+            "nvidia-cudnn-cu13==9.25.0.15",
+            "torch==2.13.0+cu132",
+            "flashinfer-python==0.6.17",
+            "nvidia-cudnn-frontend==1.27.0",
+            "liger-kernel==0.8.1",
+            "mslk==1.3.0+cu132",
+        ):
+            self.assertIn(requirement, binary_requirements)
+        self.assertIn(
+            'TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.9;10.3;12.0}"',
+            third_party_build,
+        )
+        self.assertIn(
+            'FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS:-89;103;120}"',
+            third_party_build,
+        )
+        self.assertIn("smoke_archs=(89 103 120)", verify)
+        self.assertIn("610.43.02", audit)
+        for metadata in (
+            "native_cuda_toolkit_pypi=13.3.1",
+            "native_cudnn_cuda13_pypi=9.25.0.15",
+            "torch=2.13.0+cu132",
+            "torch_wheel_cuda=13.2",
+            "minimum_driver=610.43.02",
+        ):
+            self.assertIn(metadata, package)
+        self.assertIn("katago-sm89-sm103-sm120-autotune-", package)
+        self.assertIn(
+            '"mixed-wheel-abi-vs-active-runtime", "==13.2.1", "13.3.1"',
+            checker,
+        )
+        self.assertIn(
+            '"mixed-wheel-abi-vs-active-runtime", "==9.20.0.48", "9.25.0.15"',
+            checker,
+        )
+        self.assertIn("ALLOWED_METADATA_CONFLICT", checker)
+        self.assertIn("load_exact_requirements", checker)
+        self.assertIn("Python runtime drift", checker)
+        self.assertIn("managed nvcc drift", checker)
+        self.assertIn(
+            '--requirements "${bundle}/metadata/python-binary-resolved.txt"',
+            deploy,
+        )
+        self.assertNotIn("pypi_index=", audit)
+        self.assertNotIn("pypi_extra_indexes=", audit)
         self.assertNotIn("libcudnn9-dev-cuda-13", audit)
         self.assertNotIn("libzip-dev libcudnn", audit)
         self.assertNotIn("nsys", audit)

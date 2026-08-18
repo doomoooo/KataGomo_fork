@@ -5,10 +5,13 @@
 本仓库从官方 [`lightvector/KataGo`](https://github.com/lightvector/KataGo)
 提交 `6a1fc5de9fc253723ac475a0683bf0b9d9b7bd19`（`v1.17.2`，获取于
 2026-08-07）重新分叉。KataGo 的 GTP、分析、搜索、模型和围棋逻辑保持不变，
-新增面向 NVIDIA SM89 和 SM120 的 shape-specialized、Plan 驱动 CUDA 推理路径。
+新增面向 NVIDIA SM89、SM103 和 SM120 的 shape-specialized、Plan 驱动 CUDA
+推理路径。B300 实际报告 compute capability 10.3：通用依赖 smoke 使用
+`sm_103`，加速 CuTe artifact 使用严格的 `sm_103a`。
 
-本项目只优化 CUDA backend。production 路径不需要也不使用 TensorRT。本分支
-的改动不属于上游官方 KataGo。
+本项目只优化 CUDA backend。production 路径不需要也不使用 TensorRT；
+TensorRT 10.16.1.11 只用于 B300 固定对比基线。本分支的改动不属于上游官方
+KataGo。
 
 ## Quick Start
 
@@ -16,6 +19,9 @@
 
 - NVIDIA GeForce RTX 4090 D：B12，双 stream
 - NVIDIA GeForce RTX 5080：B16，双 stream
+
+NVIDIA B300 使用[SM103 最终报告](records/sm103-b29-final-report.zh-CN.md)
+记录的固定 B29/双流合同；该合同之外的通用 plan lookup 仍然 fail-closed。
 
 CUDA product name 是 plan registry 的唯一入口主键。其他显卡型号需要先运行
 autotune，生成自己的 plan。
@@ -32,12 +38,22 @@ autotune。`run.sh` 校验构建 manifest 后，以认证的 batch、stream、
 scheduler 和 CUDA pipeline 启动 KataGo GTP。
 
 直接 clone 源码仓库时，仓库根目录也提供同名入口。此时 `./setup.sh` 会在
-`.final-migration-env` 下安装 CUDA 13.0.3、
-cuDNN 9.20 和 Python 3.12.13。CUDA、nvcc、cuDNN、PyTorch 统一来自同一个固定
-版本的 PyPI 环境，不再下载或维护第二套 CUDA 工具链。TileLang、TVM-FFI 和
-Quack 直接使用发布 wheel；只获取 CUTLASS 和带本地 patch 的 FlashAttention
-源码，默认复用干净缓存，仅在 `KATAGO_REFRESH_SOURCES=1` 时刷新。宿主机只需提供 NVIDIA
-驱动、基础编译器和 zlib 开发文件；脚本不会调用 `sudo` 或修改系统软件包。
+`.final-migration-env` 安装一套 managed prefix：CPython 3.14.7、PyTorch
+2.13.0+cu132、CUDA toolkit 13.3.1 与 cuDNN 9.25.0.15。PyTorch 没有发布
+`cu133` wheel；它保留 CUDA 13.2.1/cuDNN 9.20 的构建 ABI 与 metadata，
+但同一 managed venv 实际解析 CUDA 13.3/cuDNN 9.25 DSO。这是经过记录和
+认证的单一混合 ABI/runtime prefix，不是两套物理隔离的 runtime closure。TensorRT
+10.16.1.11 只作对比，setup 不安装它。
+
+TileLang 0.1.13、TVM-FFI 0.1.12、Quack 0.6.4、FlashInfer 0.6.17、
+cuDNN Frontend Python 1.27.0、Liger 0.8.1 和 MSLK 1.3.0+cu132
+直接使用发布 wheel。
+TVM-FFI 与 z3-solver 分别保留 0.1.12 和 4.15.4.0，因为它们是 TileLang
+0.1.13 允许的最新版本；CUTLASS DSL 4.7 要求 `protobuf<7`，因此 protobuf
+保留最高兼容的 6.33.6。其他传递依赖同样服从消费者约束，而不是强行选择不兼容
+的独立最新版。只获取固定 commit 的 CUTLASS 和带本地 patch 的
+FlashAttention 源码，并复用 commit 匹配的干净缓存。宿主机只需提供
+NVIDIA 驱动、基础编译器和 zlib 开发文件；脚本不会调用 `sudo` 或修改系统软件包。
 随后准备 autotune 所需模型和 8192 局面语料。模型会先检查本地 archive 和
 `KATAGO_MODEL`，缺失时从 KataGo v1.17.1 官方 GitHub release 下载，并保存到
 `.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`，与 tar
@@ -83,8 +99,11 @@ FP16、双推理 stream，并按
 | 官方 CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 扫描](records/rtx5080-official-backend-baselines-20260811.md) |
 | 官方 TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 扫描](records/rtx5080-official-backend-baselines-20260811.md) |
 | 已提交 CUDA plan | RTX 5080 | 16 | 2836.2 | [plan 证书](plans/sm120/rtx5080-b16-s2/README.md) |
+| 官方 TensorRT baseline | NVIDIA B300 | 29 | 6733.7 | [固定基线](plans/sm103/b300-b29-s2/baseline-anchor.json) |
+| 保留 CUDA 配置 | NVIDIA B300 | 29 | 9201.7 | [最终报告](records/sm103-b29-final-report.zh-CN.md) |
 
-TensorRT 仅作为对比，不进入本工程的环境、编译、运行时或 release 包。
+TensorRT 仅作为对比。B300 认证目标是原生 CUDA 13.3 上的 TensorRT
+10.16.1.11；它与优化 CUDA production build、runtime 和 release 包保持隔离。
 
 ## Plan 驱动 backend
 
@@ -131,12 +150,15 @@ persisting L2，以及只有真实 cache hit 才算激活的模型权重共享�
 
 ## Autotune 流程
 
-SM89 与 SM120 共用外部 orchestration、plan schema、历史合同、测量、正确性和
-打包代码。只有硬件实现确实不同时才保留架构相关候选生成。
+已维护的 SM89 与 SM120 路径共用外部 orchestration、plan schema、历史合同、
+测量、正确性和打包代码。SM103 复用测量与正确性合同，但使用严格的 B29/S2
+接收端和实现合同。只有硬件实现确实不同时才保留架构相关候选生成。
 
 默认流程如下：
 
 1. 检测目标 CUDA 设备。compute capability 8.9 选择 SM89，12.0 选择 SM120。
+   B300 报告 compute capability 10.3；通用 smoke 使用 `sm_103`，精确加速
+   artifact 使用 `sm_103a`，接收端拒绝复用 SM89 或 SM120 catalog。
 2. 使用自包含且不依赖 artifact 的稳定优化图扫描 B4-B32。
 3. 选择吞吐最高的三个 batch。
 4. 每个入选 batch 独立编译精确 shape artifact，并物化完整实现目录。
@@ -281,8 +303,8 @@ scheduler 或 backend。
 
 工程生成两类非侵入式产物：
 
-1. 源码完备 autotune SDK：包含 KataGo 源码、固定 CPython、CUDA 编译工具链、
-   cuDNN、两个必要源码树、锁定 wheels、模型、corpus、plans、patches、
+1. 源码完备 autotune SDK：包含 KataGo 源码、固定 CPython、分别记录的原生与
+   Python/codegen CUDA 闭包、cuDNN、两个必要源码树、锁定 wheels、模型、corpus、plans、patches、
    licenses 和 SHA-256 manifests。目标机无需 GitHub clone 或自行寻找依赖。
 2. 预编译 runtime tar：包含 CUDA backend、所需用户态 runtime 库、plans、
    installer、licenses 和 hash。接收端只需要兼容的 NVIDIA 驱动。
@@ -334,6 +356,8 @@ AUTOTUNE_CORPUS_MANIFEST=/path/to/8192-full19.manifest.json \
 
 - `cpp/neuralnet/cudatacticplan.*`：production plan loader 和接收端校验。
 - `cpp/neuralnet/cudabackend_sm89*`：维护中的 SM89 backend。
+- `cpp/neuralnet/cudabackend_sm103*`：严格 B300 B29/S2 backend 与保留的
+  portable/AOT hooks；加速 artifact 目标为 `sm_103a`。
 - `cpp/neuralnet/cudabackend_sm120*`、`sm120_aot/`：维护中的 SM120 backend。
 - `cpp/neuralnet/nneval.*`：batch-aware dispatcher 和异步 scheduler。
 - `python/cuda_tactic_workflow.py`：统一架构感知扫描器。

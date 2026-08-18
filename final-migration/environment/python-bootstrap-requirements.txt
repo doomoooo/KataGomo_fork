@@ -4,7 +4,11 @@
 apache-tvm-ffi
 cuda-python
 einops
+flashinfer-python
+liger-kernel
+mslk
 numpy
+nvidia-cudnn-frontend
 packaging
 psutil
 pytest

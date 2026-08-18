@@ -10,7 +10,7 @@ usage() {
   cat <<'EOF'
 Usage: setup.sh {install|audit|verify|build|package|extract ARCHIVE PREFIX|deploy BUNDLE [PYTHON_ENV]|all}
 
-  install  Install pinned Python and build latest dependencies below the managed root.
+  install  Install pinned Python and build pinned dependencies below the managed root.
   audit    Record and validate tool/library/device versions.
   verify   Compile/import third-party dependency smokes.
   build    Build the KataGo CUDA backend.

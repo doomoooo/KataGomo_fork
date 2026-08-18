@@ -48,5 +48,6 @@ while IFS=$'\t' read -r name distribution version commit builder wheel wheel_has
   python -m pip install --no-index --no-deps --force-reinstall "${bundle}/wheels/${wheel}"
 done < "${bundle}/metadata/source-build-manifest.tsv"
 
-python "${bundle}/installer/check-python-environment.py"
+python "${bundle}/installer/check-python-environment.py" \
+  --requirements "${bundle}/metadata/python-binary-resolved.txt"
 printf '[katago-tar] Python tools installed only below %s\n' "${python_env}"

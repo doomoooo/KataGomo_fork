@@ -1,7 +1,8 @@
 pip==26.2.1
-setuptools==83.0.0
-setuptools-scm==9.2.2
-wheel==0.47.0
-cmake==3.31.10
+setuptools==84.0.0
+setuptools-scm==10.2.1
+vcs-versioning==2.2.4
+wheel==0.48.0
+cmake==4.4.2
 ninja==1.13.0
 packaging==26.3

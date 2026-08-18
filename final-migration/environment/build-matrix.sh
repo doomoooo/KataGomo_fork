@@ -45,7 +45,12 @@ build_cuda() {
   )
 
   log "configuring CUDA backend in ${build_dir}"
-  cmake "${cmake_args[@]}"
+  # Dependency upgrades replace the managed Python/CUDA prefix in place. A
+  # normal reconfigure can retain imported library paths from the old venv in
+  # CMakeCache.txt, producing a link failure against a path that no longer
+  # exists. Keep the build directory managed, but always recreate its CMake
+  # cache before resolving the active toolchain.
+  cmake --fresh "${cmake_args[@]}"
   log "building CUDA backend with ${KATAGO_BUILD_JOBS} jobs"
   cmake --build "${build_dir}" --parallel "${KATAGO_BUILD_JOBS}"
   [[ -x "${build_dir}/katago" ]] || die "CUDA build did not produce katago"

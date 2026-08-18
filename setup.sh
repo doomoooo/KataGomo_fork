@@ -156,8 +156,8 @@ if [[ ! -r "${SCRIPT_DIR}/payload/SHA256SUMS" ]]; then
 Usage: ./setup.sh [COMMAND]
 
 With no command, configure the source-development environment without changing
-system packages, then prepare the local autotune runtime. CUDA 13.0.3, cuDNN
-9.20, and Python 3.12.13 are fixed PyPI/runtime dependencies installed below
+system packages, then prepare the local autotune runtime. CUDA 13.3.1, cuDNN
+9.25, and Python 3.14.7 are fixed PyPI/runtime dependencies installed below
 .final-migration-env. The host only provides the NVIDIA driver, base compiler
 tools, and zlib development files.
 
@@ -303,8 +303,9 @@ export CXX="$(command -v g++)"
 export CMAKE_BUILD_PARALLEL_LEVEL="${JOBS}"
 export MAX_JOBS="${JOBS}"
 export XDG_CACHE_HOME="${PREFIX}/cache"
+export PIP_CACHE_DIR="${KATAGO_PIP_CACHE_DIR:-${PREFIX}/cache/pip}"
 export AUTOTUNE_PREFIX="${PREFIX}"
-mkdir -p -- "${XDG_CACHE_HOME}"
+mkdir -p -- "${XDG_CACHE_HOME}" "${PIP_CACHE_DIR}"
 
 if [[ ! -x "${PREFIX}/venv/bin/python" ]]; then
   log "creating the locked Python environment"
@@ -395,8 +396,10 @@ build_source_wheel() {
   : > "${marker}"
 }
 
-export CUDA_VERSION=13.0
+export CUDA_VERSION=13.3
 export USE_CUDA=1
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.9;10.3;12.0}"
+export FLASH_ATTN_CUDA_ARCHS="${FLASH_ATTN_CUDA_ARCHS:-89;103;120}"
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FLASH_ATTN_4=0.0.1.dev1+katago
 build_source_wheel flash_attn_4 "${PREFIX}/sources/flash-attention/flash_attn/cute" flash-attn-4
 
@@ -414,22 +417,34 @@ import json
 import pathlib
 import torch
 
-mods = ["cuda.bindings.runtime", "cutlass.cute", "tvm_ffi", "triton", "tilelang", "quack", "flash_attn.cute"]
+mods = [
+    "cuda.bindings.runtime", "cutlass.cute", "cudnn", "tvm_ffi", "triton",
+    "tilelang", "quack", "flash_attn.cute", "flashinfer", "liger_kernel",
+    "mslk",
+]
 for mod in mods:
     importlib.import_module(mod)
 payload = {
     "python": importlib.import_module("sys").version,
     "torch": torch.__version__,
     "torch_cuda": torch.version.cuda,
+    "native_cuda_toolkit": importlib.metadata.version("cuda-toolkit"),
+    "native_cudnn": importlib.metadata.version("nvidia-cudnn-cu13"),
     "distributions": {
         name: importlib.metadata.version(name)
-        for name in ("apache-tvm-ffi", "triton", "tilelang", "quack-kernels", "flash-attn-4", "nvidia-cutlass-dsl")
+        for name in (
+            "apache-tvm-ffi", "triton", "tilelang", "quack-kernels",
+            "flash-attn-4", "flashinfer-python", "nvidia-cudnn-frontend",
+            "liger-kernel", "mslk", "nvidia-cutlass-dsl",
+        )
     },
 }
 prefix = pathlib.Path(importlib.import_module("os").environ["AUTOTUNE_PREFIX"])
 (prefix / "state" / "python-environment.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 print(json.dumps(payload, indent=2, sort_keys=True))
 PY
+"${python_bin}" \
+  "${PREFIX}/repo/final-migration/environment/check-python-environment.py"
 
 "${python_bin}" -m pip freeze --all > "${PREFIX}/state/pip-freeze.txt"
 sha256sum "${source_wheels}"/*.whl > "${PREFIX}/state/source-wheel-sha256.txt"
@@ -445,6 +460,7 @@ printf '%s\n' \
   "export LD_LIBRARY_PATH='${CUDNN_ROOT}/lib:${CUDA_HOME}/lib64:${PREFIX}/native/lib':\"\${LD_LIBRARY_PATH:-}\"" \
   "export CMAKE_PREFIX_PATH='${PREFIX}/native':\"\${CMAKE_PREFIX_PATH:-}\"" \
   "export XDG_CACHE_HOME='${PREFIX}/cache'" \
+  "export PIP_CACHE_DIR='${PIP_CACHE_DIR}'" \
   > "${PREFIX}/activate"
 chmod 0644 "${PREFIX}/activate"
 printf '%s\n' "${PREFIX}" > "${SCRIPT_DIR}/runtime-prefix.txt"

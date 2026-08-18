@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 activate_venv
 activate_toolchain
+configure_pip_environment
 ensure_record_root
 for command_name in dpkg-query ldd readelf sha256sum tar; do
   require_command "${command_name}"
@@ -227,10 +228,15 @@ done
   printf 'python_abi=%s\n' "$(python -c 'import sysconfig; print(sysconfig.get_config_var("SOABI"))')"
   printf 'platform=%s\n' "$(python -c 'import platform; print(platform.platform())')"
   printf 'cuda_compiler=%s\n' "$(nvcc --version | tail -n 1)"
+  printf 'native_cuda_toolkit=%s\n' "$(python -c 'import importlib.metadata; print(importlib.metadata.version("cuda-toolkit"))')"
+  printf 'native_cudnn=%s\n' "$(python -c 'import importlib.metadata; print(importlib.metadata.version("nvidia-cudnn-cu13"))')"
+  printf 'torch=%s\n' "$(python -c 'import torch; print(torch.__version__)')"
+  printf 'torch_wheel_cuda=%s\n' "$(python -c 'import torch; print(torch.version.cuda)')"
+  printf 'torch_wheel_cudnn=%s\n' "$(python -c 'import torch; print(torch.backends.cudnn.version())')"
   printf 'driver=%s\n' "$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | sort -u | paste -sd, - || printf unavailable)"
   printf 'gpu_architectures=%s\n' "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sort -Vu | paste -sd, - || printf unavailable)"
 } > "${metadata_dir}/build-platform.txt"
-printf '%s\n' "${KATAGO_MIN_DRIVER:-580.65.06}" > "${metadata_dir}/minimum-driver.txt"
+printf '%s\n' "${KATAGO_MIN_DRIVER:-610.43.02}" > "${metadata_dir}/minimum-driver.txt"
 "${bundle}/bin/katago" version > "${metadata_dir}/katago-version.txt"
 cp -- "${katago_build_dir}/CMakeCache.txt" "${metadata_dir}/katago-CMakeCache.txt"
 dpkg-query -W -f='${binary:Package}\t${Version}\n' 2>/dev/null \

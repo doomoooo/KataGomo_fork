@@ -49,11 +49,12 @@ ninja --version 2>/dev/null || true
   failures=$((failures + 1))
 }
 nvcc --version 2>/dev/null | tail -n 1 || true
+printf 'native_cuda_release=%s\n' "$(nvcc --version 2>/dev/null | sed -n -E 's/.*release ([0-9]+\.[0-9]+).*/\1/p' | tail -n 1)"
 
 printf '\n[nvidia-driver-and-devices]\n'
 if nvidia-smi --query-gpu=index,name,driver_version,pci.bus_id,compute_cap,memory.total --format=csv,noheader 2>/dev/null; then
   driver_version="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
-  min_driver="${KATAGO_MIN_DRIVER:-580.65.06}"
+  min_driver="${KATAGO_MIN_DRIVER:-610.43.02}"
   if [[ "$(printf '%s\n%s\n' "${min_driver}" "${driver_version}" | sort -V | head -n 1)" != "${min_driver}" ]]; then
     printf 'FAIL driver %s is older than required %s\n' "${driver_version}" "${min_driver}"
     failures=$((failures + 1))
@@ -147,8 +148,9 @@ import os
 import sys
 
 modules = [
-    "torch", "triton", "tilelang", "flash_attn.cute", "cutlass", "cuda",
-    "numpy", "psutil", "yaml", "quack", "tvm_ffi",
+    "torch", "triton", "tilelang", "flash_attn.cute", "flashinfer",
+    "cudnn", "liger_kernel", "mslk", "cutlass", "cuda", "numpy", "psutil",
+    "yaml", "quack", "tvm_ffi",
 ]
 failed = False
 for name in modules:
@@ -161,8 +163,15 @@ for name in modules:
         failed = True
 
 import torch
-print(f"torch.version.cuda={torch.version.cuda}")
-print(f"torch.backends.cudnn.version={torch.backends.cudnn.version()}")
+print(f"torch.wheel.version={torch.__version__}")
+print(f"torch.wheel.cuda={torch.version.cuda}")
+print(f"torch.wheel.cudnn={torch.backends.cudnn.version()}")
+print(f"native.cuda_toolkit={importlib.metadata.version('cuda-toolkit')}")
+print(f"native.cudnn={importlib.metadata.version('nvidia-cudnn-cu13')}")
+print(f"flashinfer={importlib.metadata.version('flashinfer-python')}")
+print(f"cudnn_frontend_python={importlib.metadata.version('nvidia-cudnn-frontend')}")
+print(f"liger_kernel={importlib.metadata.version('liger-kernel')}")
+print(f"mslk={importlib.metadata.version('mslk')}")
 print(f"LD_LIBRARY_PATH={os.environ.get('LD_LIBRARY_PATH', '')}")
 sys.exit(1 if failed else 0)
 PY

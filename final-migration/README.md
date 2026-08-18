@@ -6,11 +6,13 @@ This repository is a clean fork of official
 [`lightvector/KataGo`](https://github.com/lightvector/KataGo) at commit
 `6a1fc5de9fc253723ac475a0683bf0b9d9b7bd19` (`v1.17.2`, fetched on
 2026-08-07). It retains KataGo's GTP, analysis, search, model, and game logic
-and adds a shape-specialized, plan-driven CUDA inference path for NVIDIA SM89
-and SM120.
+and adds shape-specialized, plan-driven CUDA inference paths for NVIDIA SM89,
+SM103 and SM120. B300 reports compute capability 10.3: generic dependency
+smokes use `sm_103`, while accelerated CuTe artifacts use exact `sm_103a`.
 
 This project only optimizes the CUDA backend. TensorRT is not required or used
-by the production path. These changes are not part of upstream KataGo.
+by the production path; TensorRT 10.16.1.11 is retained only as the B300 fixed
+comparison baseline. These changes are not part of upstream KataGo.
 
 ## Quick start
 
@@ -19,6 +21,10 @@ the certified plan already carried for the selected GPU:
 
 - NVIDIA GeForce RTX 4090 D: B12, two streams
 - NVIDIA GeForce RTX 5080: B16, two streams
+
+NVIDIA B300 uses the fixed B29/two-stream qualification described in the
+[SM103 final report](records/sm103-b29-final-report.md). Generic plan lookup
+outside that exact contract remains fail-closed.
 
 The CUDA product name is the plan registry key. Other GPU models must first
 run autotune to produce their own plan.
@@ -36,15 +42,26 @@ resulting manifest and starts KataGo GTP with the certified batch, streams,
 scheduler, and CUDA pipeline.
 
 The same entry-point names are checked in at the root of a direct source
-clone. In that layout `./setup.sh` installs CUDA 13.0.3, cuDNN 9.20, and
-Python 3.12.13 packages under
-`.final-migration-env`. CUDA, nvcc, cuDNN and PyTorch share one fixed PyPI
-environment; no separate CUDA toolkit is downloaded. Published TileLang,
-TVM-FFI and Quack wheels are used directly. Only CUTLASS and the locally
-patched FlashAttention sources are acquired, and clean cached checkouts are
-reused unless `KATAGO_REFRESH_SOURCES=1` is set. The NVIDIA driver, host
-compiler, and zlib development files are the only host-side prerequisites. It
-never invokes `sudo` or changes system packages. It then prepares the model and
+clone. In that layout `./setup.sh` installs one managed prefix below
+`.final-migration-env`: CPython 3.14.7, PyTorch 2.13.0+cu132, native CUDA
+toolkit 13.3.1 and cuDNN 9.25.0.15.
+These CUDA versions intentionally differ: PyTorch does not publish a `cu133`
+wheel. Its binary carries a CUDA 13.2.1/cuDNN 9.20 build ABI and metadata while
+the managed venv resolves the active CUDA 13.3/cuDNN 9.25 DSOs. This is one
+qualified mixed ABI/runtime prefix, not two isolated runtime closures.
+TensorRT 10.16.1.11 is comparison-only and is not installed by this setup.
+
+Published TileLang 0.1.13, TVM-FFI 0.1.12, Quack 0.6.4, FlashInfer 0.6.17,
+cuDNN Frontend Python 1.27.0, Liger 0.8.1, and MSLK 1.3.0+cu132 wheels are
+used directly. TVM-FFI and z3-solver remain at 0.1.12 and 4.15.4.0 respectively
+because those are the newest versions admitted by TileLang 0.1.13; similarly,
+protobuf remains at 6.33.6 because CUTLASS DSL 4.7 requires `<7`, and other
+transitive pins follow their consumers rather than an independently newer but
+incompatible release. Only CUTLASS and the locally patched
+FlashAttention sources are acquired at pinned commits, and matching clean
+checkouts are reused. The NVIDIA driver, host compiler,
+and zlib development files are the only host-side prerequisites. Setup never
+invokes `sudo` or changes system packages. It then prepares the model and
 8192-row corpus used by autotune. Local archives and `KATAGO_MODEL` are checked
 before the pinned v1.17.1 model's official GitHub release. A downloaded model is stored at
 `.final-migration-env/assets/b11c768h12nbt3tflrs-fson-silu.bin.gz`, the same
@@ -92,9 +109,12 @@ be compared within one GPU model, not across hosts or models.
 | Official CUDA baseline | RTX 5080 | 9 | 1631.1 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
 | Official TensorRT baseline | RTX 5080 | 17 | 2026.7 | [B4-B32 scan](records/rtx5080-official-backend-baselines-20260811.md) |
 | Checked-in CUDA plan | RTX 5080 | 16 | 2836.2 | [plan certificate](plans/sm120/rtx5080-b16-s2/README.md) |
+| Official TensorRT baseline | NVIDIA B300 | 29 | 6733.7 | [fixed baseline](plans/sm103/b300-b29-s2/baseline-anchor.json) |
+| Retained CUDA configuration | NVIDIA B300 | 29 | 9201.7 | [final report](records/sm103-b29-final-report.md) |
 
-TensorRT is shown only as a comparison. It is not included in the environment,
-build, runtime, or release artifacts.
+TensorRT is shown only as a comparison. The B300 qualification target is
+TensorRT 10.16.1.11 on native CUDA 13.3; it remains separate from the optimized
+CUDA production build, runtime, and release artifacts.
 
 ## Plan-driven backend
 
@@ -150,14 +170,17 @@ compatibility layer.
 ## Autotune workflow
 
 The outer orchestration, plan schema, history contract, measurement,
-correctness, and packaging code are shared by SM89 and SM120. Hardware-specific
-candidate generation remains separate only where the implementation requires
-it.
+correctness, and packaging code are shared by the maintained SM89 and SM120
+paths. SM103 reuses the measurement and correctness contracts but has an exact
+B29/S2 receiver and implementation contract. Hardware-specific candidate
+generation remains separate only where the implementation requires it.
 
 The default flow is:
 
 1. Detect the selected CUDA device. Compute capability 8.9 selects SM89 and
-   compute capability 12.0 selects SM120.
+   compute capability 12.0 selects SM120. B300 reports compute capability 10.3;
+   generic smokes use `sm_103`, exact accelerated artifacts use `sm_103a`, and
+   the receiver rejects any route through the SM89 or SM120 catalog.
 2. Measure B4-B32 with a self-contained, artifact-free stable optimized graph.
 3. Select the three highest-throughput batches.
 4. For each selected batch independently, build its exact-shape artifacts and
@@ -324,7 +347,8 @@ scheduler or backend.
 Two non-invasive artifacts are produced:
 
 1. The source-complete autotune SDK contains the KataGo source, pinned CPython,
-   CUDA build toolkit, cuDNN, the two required source trees, locked wheels,
+   the separately recorded native and Python/codegen CUDA closures, cuDNN, the
+   two required source trees, locked wheels,
    model, corpus, plans, patches, licenses, and SHA-256 manifests. The target
    does not clone GitHub or search for dependencies.
 2. The prebuilt runtime tar contains the compiled CUDA backend, required
@@ -381,6 +405,8 @@ its internal manifest before installing into an isolated prefix.
 
 - `cpp/neuralnet/cudatacticplan.*`: production plan loader and receiver checks.
 - `cpp/neuralnet/cudabackend_sm89*`: maintained SM89 backend.
+- `cpp/neuralnet/cudabackend_sm103*`: exact B300 B29/S2 backend and retained
+  portable/AOT hooks; accelerated artifacts target `sm_103a`.
 - `cpp/neuralnet/cudabackend_sm120*` and `sm120_aot/`: maintained SM120 backend.
 - `cpp/neuralnet/nneval.*`: batch-aware dispatcher and asynchronous scheduler.
 - `python/cuda_tactic_workflow.py`: unified architecture-aware scanner.

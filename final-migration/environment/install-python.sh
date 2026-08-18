@@ -89,6 +89,7 @@ fi
 build_requirements="${MIGRATION_ROOT}/autotune/python-build-requirements.txt"
 binary_requirements="${MIGRATION_ROOT}/autotune/python-binary-requirements.txt"
 wheelhouse="${KATAGO_LOCAL_ARCHIVE}/wheels"
+configure_pip_environment
 python_packages_ready=0
 requirements_marker="${KATAGO_ENV_ROOT}/state/python-requirements.sha256"
 requirements_identity="$({ sha256sum "${build_requirements}"; sha256sum "${binary_requirements}"; } | sha256sum | awk '{print $1}')"
@@ -128,7 +129,9 @@ if (( python_packages_ready == 0 )) && [[ -d "${wheelhouse}" ]]; then
 fi
 
 if (( python_packages_ready == 0 )); then
-  log "resolving the fixed Python dependency set from domestic mirror: ${KATAGO_PYPI_MIRROR}"
+  log "resolving the fixed Python dependency set from the configured primary index"
+  log "using configured additional package indexes"
+  log "using managed pip cache: ${KATAGO_PIP_CACHE_DIR}"
   if ! python -m pip install \
     --index-url "${KATAGO_PYPI_MIRROR}" \
     --upgrade --no-deps \

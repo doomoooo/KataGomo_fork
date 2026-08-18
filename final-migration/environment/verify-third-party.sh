@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-activate_venv
-activate_toolchain
+# shellcheck source=activate-sm103.sh
+source "${SCRIPT_DIR}/activate-sm103.sh"
 require_command nvcc
 require_command g++
 
@@ -20,6 +20,7 @@ assert_safe_managed_path "${smoke_build}"
 mkdir -p -- "${smoke_build}"
 
 export XDG_CACHE_HOME="${KATAGO_ENV_ROOT}/cache"
+configure_pip_environment
 mkdir -p -- "${XDG_CACHE_HOME}"
 
 if [[ -n "${KATAGO_SMOKE_ARCHS:-}" ]]; then
@@ -30,7 +31,7 @@ else
       | tr -d '. ' | sort -u
   )
   if (( ${#smoke_archs[@]} == 0 )); then
-    smoke_archs=(89 120)
+    smoke_archs=(89 103 120)
   fi
 fi
 
@@ -67,9 +68,14 @@ g++ -std=c++17 \
 
 log "checking Python CUDA/codegen imports"
 python - <<'PY'
+import importlib.metadata
 import cuda
 import cutlass
+import cudnn
 import flash_attn.cute
+import flashinfer
+import liger_kernel
+import mslk
 import tilelang
 import torch
 import triton
@@ -78,9 +84,16 @@ print("PYTHON_IMPORTS_OK")
 print("torch", torch.__version__, "cuda", torch.version.cuda, "cudnn", torch.backends.cudnn.version())
 print("triton", triton.__version__)
 print("tilelang", tilelang.__version__)
+print("flashinfer", importlib.metadata.version("flashinfer-python"))
+print("cudnn frontend", importlib.metadata.version("nvidia-cudnn-frontend"))
+print("liger kernel", liger_kernel.__file__)
+print("mslk", importlib.metadata.version("mslk"))
 print("cutlass", cutlass.__version__)
 print("flash_attn.cute", flash_attn.cute.__file__)
 PY
+
+log "checking FlashInfer's static D32 configuration/API contract"
+python "${SCRIPT_DIR}/smoke/flashinfer_sm103.py"
 
 for arch in "${smoke_archs[@]}"; do
   log "compiling TileLang no-run smoke for sm_${arch}"
