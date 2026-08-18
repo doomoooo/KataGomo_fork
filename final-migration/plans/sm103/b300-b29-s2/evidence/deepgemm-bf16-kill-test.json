@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "kind": "katagomo-sm103-deepgemm-bf16-conversion-inclusive-kill-test-evidence",
+  "timestamp_utc": "2026-08-18T13:41:25Z",
+  "status": "closed_over_10_percent_s2",
+  "candidate_id": "deepgemm-sm100f-bf16-m10469-k384-n384-conversion-inclusive-kill-test",
+  "decision": {
+    "close_entire_deepgemm_bf16_route": true,
+    "scan_other_shapes": false,
+    "integrate_core_or_cmake": false,
+    "reason": "The required FP16-to-BF16 cast, DeepGEMM BF16 GEMM, and BF16-to-FP16 cast take 38.201599 us per coordinated S2 round versus 18.489760 us for the retained exact FP16 id70 projection. The candidate is 2.066095x the control and therefore misses the authorized within-10-percent kill gate by a wide margin. DeepGEMM raw BF16 is already slower than id70 before casts."
+  },
+  "authorization": {
+    "plan": "final-migration/plans/sm103/b300-b29-s2/evidence/bf16-backend-low-hanging-audit.json",
+    "plan_sha256": "0a2f41495c12a1bc46944d426bc37406ebdd67a2129cea41ddc5841b30931fc1",
+    "scope": "The one bounded K384/N384 DeepGEMM BF16 oracle only; no FP8, INT8, FP4, other shapes, full-graph port, core edit, or CMake edit."
+  },
+  "source": {
+    "repository": "https://github.com/deepseek-ai/DeepGEMM",
+    "commit": "559d79fb6994a58b8a15b4b93bf13ccc16edf247",
+    "working_tree_clean_after_build": true,
+    "submodules": {
+      "third-party/cutlass": "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8",
+      "third-party/fmt": "553ec11ec06fbe0beebfbb45f9dc3c9eabd83d28"
+    },
+    "audited_file_hashes_reverified": {
+      "csrc/apis/gemm.hpp": "508d805a30e16993394c9d292d8e230f6289a8b615c674f782b83486f14bb937",
+      "csrc/jit/device_runtime.hpp": "b567dbc0cc4882a4030bbb2935edbde454d3820d121388a00b1179dd23c3b9c7",
+      "csrc/jit/compiler.hpp": "aec70f54bffc693a935ef9775ee9b40bc8857dcb8b464e6732f39a86e3292d62",
+      "csrc/jit_kernels/impls/sm100_bf16_gemm.hpp": "e843ef0daa337f40f3eaf4841c0a38840203074e88d8e4b604d7f6cddafa8a51",
+      "deep_gemm/include/deep_gemm/impls/sm100_bf16_gemm.cuh": "d81a9491e791a702975f54a56162430a2a3ae298064724f18bbfa71a04a9e984",
+      "csrc/jit_kernels/heuristics/sm100.hpp": "487cac2ff19027c781b08e9a0391836e77c03cdffcb7ceb3346d8633c8eb0884",
+      "csrc/jit_kernels/impls/smxx_cublaslt.hpp": "2ebfe8d3bbd4db27b68e1bf5d5f52cae78bac8c0a499db7d40573d5ab7defa99"
+    }
+  },
+  "environment": {
+    "repository_head_during_measurement": "589dff4af5640c039e55291c426c3e349bd1b447",
+    "device": "NVIDIA B300 SXM6 AC",
+    "compute_capability": "10.3",
+    "driver": "610.57.04",
+    "device_memory_mib": 275040,
+    "num_sms": 148,
+    "cuda_toolkit": "13.3.1",
+    "nvcc": "13.3.73",
+    "torch": "2.13.0+cu132",
+    "torch_cuda_metadata": "13.2",
+    "python": "3.14.7",
+    "isolation_root": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f",
+    "managed_venv_modified": false,
+    "gpu_serialization": "Every DeepGEMM host-extension build, GPU JIT, warmup, correctness run, and timed run was launched through final-migration/environment/with-gpu-lock.sh on GPU ordinal 0."
+  },
+  "jit_authentication": {
+    "requested_target_from_logged_nvcc_command": "--gpu-architecture=sm_100f",
+    "cc103_execution_succeeded": true,
+    "generated_cubin": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/jit-cache/cache/kernel.sm100_bf16_gemm.24d8442b81afd92cf2685e9d383aa8d8/kernel.cubin",
+    "generated_cubin_sha256": "e3cad45a8e62e31406c8afcc718ae9927e18ee095698e64ad8a6c02f4976d2b6",
+    "generated_cubin_bytes": 116376,
+    "generated_source_sha256": "9caef34d985b1021c747b3a8095103a6a088b75c275f4d1cc2315d358201b1b7",
+    "cuobjdump_elf": {
+      "type": "ET_EXEC",
+      "abi": 8,
+      "sm": 100,
+      "toolkit": "13.3",
+      "flags_hex": "0x6006402",
+      "compatibility_section_present": true,
+      "sass_target": "sm_100"
+    },
+    "actual_config": {
+      "layout": "swap_ab=1",
+      "tile_mnk": [224, 128, 64],
+      "cluster_mn": [1, 1],
+      "pipeline_stages": 4,
+      "dynamic_shared_memory_bytes": 189228,
+      "grid_ctas": 148,
+      "threads_per_cta": 256,
+      "logical_tiles": 141,
+      "waves": 1,
+      "last_wave_util_ctas": 141,
+      "registers_per_thread": 40,
+      "stack_bytes": 0,
+      "spill_stores_bytes": 0,
+      "spill_loads_bytes": 0,
+      "barriers": 9,
+      "shared_memory_residency": "one CTA per SM"
+    },
+    "note": "An optional first diagnostic requested DG_JIT_DUMP_SASS, but DeepGEMM expected cuobjdump under the pip CUDA root where that binary is absent. That diagnostic stopped after a successful cubin compile and before a kernel launch. The final cached cubin was then built and executed successfully with dump disabled, and authenticated independently with /usr/local/cuda/bin/cuobjdump."
+  },
+  "contract": {
+    "shape_mnk": [10469, 384, 384],
+    "operation": "D[M,N] = A[M,K] @ W[N,K].T",
+    "deepgemm": "deep_gemm.bf16_gemm_nt(a_bf16,w_bf16,d_bf16,c=None,compiled_dims=\"nk\")",
+    "weight_conversion": "Each lane's FP16 W[N,K] was converted once to persistent contiguous BF16 before warmup and timing.",
+    "timed_cast_inclusive_sequence": [
+      "preallocated a_bf16.copy_(input_fp16)",
+      "DeepGEMM BF16 NT into preallocated d_bf16",
+      "preallocated output_fp16.copy_(d_bf16)"
+    ],
+    "s2": "Two nondefault CUDA streams, each with independent FP16 input, FP16 and BF16 weights, BF16 activation scratch, BF16 GEMM output, and FP16 output. Lane submissions alternate each round so both streams are visible from the first round.",
+    "timing": "Common torch.cuda.Event start and makespan stop, 30 warmups, 200 calls or coordinated rounds per repeat, five rotated-order repeats.",
+    "current_fp16_control": {
+      "name": "retained B29 QKV id70",
+      "compute": "CUBLAS_COMPUTE_16F",
+      "authenticated_tuple": {
+        "id": 70,
+        "tile_id": 23,
+        "split_k": 1,
+        "reduction_scheme": 0,
+        "cta_swizzling": 0,
+        "custom_option": 0,
+        "stages_id": 35,
+        "inner_shape_id": 0,
+        "cluster_shape_id": 5,
+        "workspace_bytes": 0
+      },
+      "descriptor_contract": "The exact KataGo column-major [384,384] x [384,10469] -> [384,10469] descriptors; the logical tensors are contiguous row-major x[10469,384], W[384,384], y[10469,384], with W.T prepacked once."
+    }
+  },
+  "performance": {
+    "s1_median_us": {
+      "id70_fp16": 5.548800230026245,
+      "deepgemm_bf16_raw": 6.662880182266235,
+      "deepgemm_bf16_cast_inclusive": 25.533759593963623,
+      "deepgemm_bf16_input_cast": 8.75440001487732,
+      "deepgemm_bf16_output_cast": 8.462240099906921,
+      "cublaslt_bf16_raw": 4.875360131263733
+    },
+    "s2_median_us_per_coordinated_round": {
+      "id70_fp16": 18.489760160446167,
+      "deepgemm_bf16_raw": 21.708800792694092,
+      "deepgemm_bf16_cast_inclusive": 38.20159912109375,
+      "deepgemm_bf16_input_cast": 14.05392050743103,
+      "deepgemm_bf16_output_cast": 14.01360034942627,
+      "cublaslt_bf16_raw": 18.409440517425537
+    },
+    "ratios": {
+      "raw_deepgemm_vs_id70_s1": 1.2007785297822338,
+      "raw_deepgemm_vs_id70_s2": 1.174098560733859,
+      "cast_inclusive_deepgemm_vs_id70_s1": 4.60167216974089,
+      "cast_inclusive_deepgemm_vs_id70_s2": 2.0660948973700437,
+      "cast_tax_over_raw_deepgemm_s1": 2.832240546952004,
+      "cast_tax_over_raw_deepgemm_s2": 0.7597286688424616,
+      "raw_deepgemm_vs_cublaslt_bf16_s1": 1.366643694593934,
+      "raw_deepgemm_vs_cublaslt_bf16_s2": 1.1792211051794612
+    },
+    "five_repeat_samples_us": {
+      "s1_id70_fp16": [5.930399894714356, 5.620959997177124, 5.548800230026245, 5.537599921226501, 5.52735984325409],
+      "s1_deepgemm_raw": [6.988639831542969, 6.671839952468872, 6.64463996887207, 6.6628801822662355, 6.627200245857239],
+      "s1_deepgemm_cast_inclusive": [25.577919483184816, 25.533759593963624, 25.54255962371826, 25.52544116973877, 25.507359504699706],
+      "s2_id70_fp16": [19.103039503097535, 18.489760160446168, 18.416320085525514, 18.66384029388428, 18.445279598236084],
+      "s2_deepgemm_raw": [22.056639194488525, 21.70880079269409, 21.625120639801026, 22.005600929260252, 21.637918949127196],
+      "s2_deepgemm_cast_inclusive": [38.172481060028074, 38.167839050292966, 38.20159912109375, 38.209118843078614, 38.53791952133179]
+    }
+  },
+  "correctness": {
+    "input_distribution": "Deterministic seed 20260818; FP16 activations are N(0,0.75), FP16 weights are N(0,1/sqrt(384)); FP32 reference accumulates the exact FP16 source tensors with TF32 disabled.",
+    "id70_fp16_vs_fp32": {
+      "max_abs": 0.006840705871582031,
+      "rmse": 0.0005491694901138544,
+      "relative_l2": 0.0007326501654461026,
+      "cosine_similarity": 0.9999995827674866
+    },
+    "deepgemm_roundtrip_fp16_vs_fp32": {
+      "max_abs": 0.014338970184326172,
+      "rmse": 0.0021681413054466248,
+      "relative_l2": 0.0028925298247486353,
+      "cosine_similarity": 0.9999958872795105
+    },
+    "deepgemm_roundtrip_fp16_vs_id70_fp16": {
+      "max_abs": 0.017578125,
+      "rmse": 0.0022363848984241486,
+      "relative_l2": 0.002983572194352746,
+      "cosine_similarity": 0.9999954700469971
+    },
+    "deepgemm_vs_native_cublaslt_bf16": {
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "byte_equivalent_values": true
+    },
+    "nan_or_inf": false,
+    "interpretation": "The BF16 route is numerically coherent rather than an implementation failure, but BF16 operand rounding has about 3.95x the id70 FP16 RMSE on this boundary tensor. Performance alone already closes the route, so no request-level integration or gate is authorized."
+  },
+  "hard_gates": {
+    "sm100f_authenticated_and_runs_on_cc103": true,
+    "actual_config_matches_source_derived_contract": true,
+    "cast_tax_at_most_10_percent_s1": false,
+    "cast_tax_at_most_10_percent_s2": false,
+    "conversion_inclusive_s2_beats_current_fp16": false,
+    "conversion_inclusive_s2_within_10_percent_of_current_fp16": false,
+    "correctness_is_not_a_gross_implementation_failure": true,
+    "ncu_or_full_graph_required": false,
+    "ncu_or_full_graph_skip_reason": "The authorized isolated stop condition fired by 106.61 percent versus id70. The audit requires NCU/full-graph work only if all isolated gates pass."
+  },
+  "artifacts": {
+    "raw_result": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/result.json",
+      "sha256": "35e43721772f0b6224bc14c8856bcd7dd2f9d2388a48fd0778f22bc38fb06f36"
+    },
+    "benchmark_log": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/logs/benchmark.log",
+      "sha256": "9ac1e841cfd96e20d0da45383fd5a63a7c2bf85d9a5fce3a43f700ede0e1bf9e"
+    },
+    "jit_run_log": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/logs/jit-run.log",
+      "sha256": "b73b5217c7ad90d06b74a7d9b58974c2a14a1373235423d9a5128d83e4cc6880"
+    },
+    "jit_auth_diagnostic_log": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/logs/jit-auth.log",
+      "sha256": "a55cc258b39364f0d6727a9ee53d7bf44355136f110c18c5f0590c3538d39458"
+    },
+    "benchmark_driver": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/benchmark.py",
+      "sha256": "b54827dfa4d0bb4c02be8c1812ad6fa9be570897d7ee4bd2f99d0451ad4ae8c8"
+    },
+    "id70_control_source": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/id70_projection.cpp",
+      "sha256": "105a495f9ef097da82fae79bedb43147bc9f8e29bd8f8f8e9dd55a7e2bc95f71"
+    },
+    "id70_control_extension": {
+      "path": ".final-migration-env/research/deepgemm-bf16-killtest-559d79f/id70-extension-build/katagomo_deepgemm_killtest_id70.so",
+      "sha256": "f4bfdddd8ad19490c24117aa66123518c6f9c1fc20fda7a6993767b08a37593a"
+    }
+  }
+}
