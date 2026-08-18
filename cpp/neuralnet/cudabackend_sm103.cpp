@@ -10,8 +10,8 @@ using namespace std;
 
 namespace Sm103Backend {
 
-constexpr const char* CudnnOssB29VariantAFfnTactic =
-  "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29";
+constexpr const char* CudnnOssB29NoAb12FfnTactic =
+  "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29";
 
 namespace {
 
@@ -65,10 +65,10 @@ Options parseOptions(ConfigParser& cfg) {
       "cudaSm103DualFFNTactic requires cudaSm103Backend=true"
     );
   if(options.dualFfnTactic != "disabled" &&
-     options.dualFfnTactic != CudnnOssB29VariantAFfnTactic)
+     options.dualFfnTactic != CudnnOssB29NoAb12FfnTactic)
     throw StringError(
       string("cudaSm103DualFFNTactic must be disabled or ") +
-      CudnnOssB29VariantAFfnTactic
+      CudnnOssB29NoAb12FfnTactic
     );
   return options;
 }
@@ -113,11 +113,11 @@ Sm103Model::Sm103Model(
       "cudaSm103AllowOfficialForwardScaffold=true is required for wiring tests"
     );
 
-  if(options.dualFfnTactic == CudnnOssB29VariantAFfnTactic) {
+  if(options.dualFfnTactic == CudnnOssB29NoAb12FfnTactic) {
     if(maxBatchSize != 29 || !useFP16 ||
        !isSm103Arch(majorComputeCapability,minorComputeCapability))
       throw StringError(
-        "SM103 cuDNN OSS Variant A requires exact B29/CC10.3 "
+        "SM103 cuDNN OSS no-AB12 fast candidate requires exact B29/CC10.3 "
         "R10469/K384/N2304->1152 FP16"
       );
     cudaError_t cudaStatus = cudaGetDevice(&device);
@@ -127,7 +127,7 @@ Sm103Model::Sm103Model(
     cudnnOssB29Context = katagoCudnnOssB29Create(device,&status);
     if(cudnnOssB29Context == nullptr || status != KATAGO_CUDNN_OSS_B29_SUCCESS)
       throw StringError(
-        "SM103 cuDNN OSS Variant A AOT module unavailable, status=" +
+        "SM103 cuDNN OSS no-AB12 fast AOT module unavailable, status=" +
         Global::intToString(status)
       );
   }
@@ -164,7 +164,7 @@ bool Sm103Model::fusedFFN(
   bool usingFP16,
   cudaStream_t stream
 ) {
-  if(options.dualFfnTactic != CudnnOssB29VariantAFfnTactic)
+  if(options.dualFfnTactic != CudnnOssB29NoAb12FfnTactic)
     return false;
   if(matBatchSize != B29Rows || inputChannels != InputChannels ||
      ffnChannels != OutputChannels || !usingFP16)
@@ -228,8 +228,8 @@ bool Sm103Model::fusedFFN(
   if(!loggedCudnnOssFfn) {
     if(logger != nullptr)
       logger->write(
-        "SM103 backend: cuDNN OSS fused FFN active, tactic=" +
-        string(CudnnOssB29VariantAFfnTactic)
+        "SM103 backend: cuDNN OSS no-AB12 fast fused FFN active, tactic=" +
+        string(CudnnOssB29NoAb12FfnTactic)
       );
     loggedCudnnOssFfn = true;
   }

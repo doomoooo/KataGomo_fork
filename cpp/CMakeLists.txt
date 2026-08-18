@@ -83,9 +83,9 @@ if(USE_BACKEND STREQUAL "CUDA")
   enable_language(CUDA)
   set(CUDA_STANDARD 11)
   set(SM103_CUDNN_OSS_B29_AOT_DIR "" CACHE PATH
-    "Exact Variant-A cuDNN OSS B29 AOT artifact directory (default: disabled stub)")
+    "Exact no-AB12 fast cuDNN OSS B29 AOT artifact directory (default: disabled stub)")
   set(SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE "" CACHE FILEPATH
-    "Static CUDA dialect runtime archive authenticated by the Variant-A manifest")
+    "Static CUDA dialect runtime archive authenticated by the no-AB12 manifest")
   set(SM103_CUDNN_OSS_B29_SOURCE
     neuralnet/cudnn_oss_b29_aot_stub.cpp)
   set(SM103_CUDNN_OSS_B29_OBJECT "")
@@ -94,7 +94,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     if(NOT SM103_CUDNN_OSS_B29_AOT_DIR OR
        NOT SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE)
       message(FATAL_ERROR
-        "SM103 Variant-A AOT requires both SM103_CUDNN_OSS_B29_AOT_DIR and SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE")
+        "SM103 no-AB12 AOT requires both SM103_CUDNN_OSS_B29_AOT_DIR and SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE")
     endif()
     set(SM103_CUDNN_OSS_B29_HEADER
       "${SM103_CUDNN_OSS_B29_AOT_DIR}/katago_sm103_b29_cudnn_swiglu.h")
@@ -109,7 +109,7 @@ if(USE_BACKEND STREQUAL "CUDA")
     endif()
     if(NOT EXISTS "${SM103_CUDNN_OSS_B29_MANIFEST}")
       message(FATAL_ERROR
-        "SM103 Variant-A sibling aot-manifest.json is required")
+        "SM103 no-AB12 sibling aot-manifest.json is required")
     endif()
     if(NOT EXISTS "${SM103_CUDNN_OSS_B29_RUNTIME_ARCHIVE}")
       message(FATAL_ERROR
@@ -119,8 +119,8 @@ if(USE_BACKEND STREQUAL "CUDA")
     file(READ "${SM103_CUDNN_OSS_B29_MANIFEST}"
       SM103_CUDNN_OSS_B29_MANIFEST_CONTENT)
     foreach(SM103_CUDNN_OSS_B29_REQUIRED_IDENTITY IN ITEMS
-      "\"candidate_id\": \"cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29\""
-      "\"numeric_semantics_selector\": \"projection-fp16-roundtrip\""
+      "\"candidate_id\": \"cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29\""
+      "\"numeric_semantics_selector\": \"projection-fp16-roundtrip-no-ab12\""
       "\"compile_target\": \"sm_103a\""
       "\"--gpu-arch=sm_103a\"")
       string(FIND "${SM103_CUDNN_OSS_B29_MANIFEST_CONTENT}"
@@ -128,7 +128,7 @@ if(USE_BACKEND STREQUAL "CUDA")
         SM103_CUDNN_OSS_B29_IDENTITY_OFFSET)
       if(SM103_CUDNN_OSS_B29_IDENTITY_OFFSET EQUAL -1)
         message(FATAL_ERROR
-          "SM103 AOT manifest is not the exact Variant A candidate")
+          "SM103 AOT manifest is not the exact no-AB12 fast candidate")
       endif()
     endforeach()
 

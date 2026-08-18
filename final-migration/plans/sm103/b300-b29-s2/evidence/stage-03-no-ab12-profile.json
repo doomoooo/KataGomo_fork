@@ -1,0 +1,193 @@
+{
+  "schema": 1,
+  "stage": "03-no-ab12-fast-variant-a",
+  "timestamp_utc": "2026-08-18T10:22:00Z",
+  "status": "retained",
+  "hypothesis": "The accepted Variant-A C result never reads AB12. Removing its descriptor, register/shared fragments, four-stage shared ring, and all S2G stores should improve dual-stream overlap without changing C bytes or the external ABI.",
+  "parent": {
+    "candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-b29",
+    "derivative_sha256": "99247c64d70a5f0b14ff75c08ba8d28fde31f159248e1e86c934cec6152777bc",
+    "library": ".final-migration-env/aot/cudnn-oss-b29-fast-a-private-final-20260818/libkatago_sm103_b29_cudnn_swiglu.so",
+    "library_sha256": "f19f97a4612586b2220af5ea1b91100c0e1e8ac54b608595cc045efec01adc27",
+    "timing_record": "final-migration/records/sm103-b29-cudnn-oss-timing-20260818.json",
+    "timing_record_sha256": "76955e0cb30da13e8b8ee7c8273e21bfe77e85f60fed6ae937e5ac91c1d6025f"
+  },
+  "candidate": {
+    "candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29",
+    "numeric_semantics_selector": "projection-fp16-roundtrip-no-ab12",
+    "derivative_sha256": "f5a010550e7ba3581e7e1695e80e9a63f8203d57081390e67b4a62981c146081",
+    "artifact_dir": ".final-migration-env/aot/cudnn-oss-b29-no-ab12-fast-sm103-20260818-final",
+    "manifest_sha256": "8e6e8a57593263c8d67707e4282b4bd1d6e1005d6efc04cbbb3343a78c8088da",
+    "library_sha256": "33aaf245e34b35c0fa42a5f2c41a90259bf0a5b7c51f6aa292b7b206e6404654",
+    "object_sha256": "7b2a0e1c9ee0da415c950259746ecf7ed3bb9bdbf9b888277b6729b5bdb8e815",
+    "source_sha256": "f5a010550e7ba3581e7e1695e80e9a63f8203d57081390e67b4a62981c146081",
+    "compile_target": "sm_103a",
+    "max_active_clusters": 148,
+    "c_abi": "unchanged; AB12 pointer and shape retained but device kernel receives no AB12 pointer"
+  },
+  "bounded_transform": {
+    "contexts": 24,
+    "all_context_counts": 1,
+    "forbidden_device_path_counts": {
+      "tma_atom_ab12": 0,
+      "tma_tensor_ab12": 0,
+      "mAB12_mnl": 0,
+      "ab12_smem_layout_staged": 0,
+      "num_ab12_stage": 0,
+      "sAB12": 0,
+      "gAB12": 0,
+      "tCgAB12": 0,
+      "rAB12": 0,
+      "ab12_buffer": 0
+    },
+    "preserved_byte_exact": [
+      "tcgen05 MMA mainloop",
+      "A/B TMA setup and copies",
+      "FP32-to-FP16-to-FP32 projection roundtrip",
+      "fast exp2 plus rcp_approx SwiGLU math",
+      "C register/shared/TMA store path"
+    ]
+  },
+  "compile_debug": {
+    "first_attempt": "rejected by CuTe IR verifier: partition_S-derived register fragment had restAtomV 1024 versus required 32",
+    "resolution": "derive destination lane ownership with a compile-time identity coordinate tensor and partition_D, matching the existing Quack SM100 GEMM epilogue pattern",
+    "final_compile": "passed",
+    "site_packages_modified": false
+  },
+  "tight_correctness": {
+    "status": "passed",
+    "seed": 20260818,
+    "reference_max_abs": 0.161865234375,
+    "reference_rms": 0.007944605313241482,
+    "output_max_abs_error": 0.00006103515625,
+    "output_rmse": 2.2917204489658616e-7,
+    "output_max_rel_error": 0.0018779343226924539,
+    "ab12_sentinel_untouched": true,
+    "limits": {
+      "output_max_abs_maximum": 0.0005,
+      "output_rmse_maximum": 0.00005
+    }
+  },
+  "isolated_timing": {
+    "candidate_record": ".final-migration-env/benchmarks/sm103-b29-cudnn-oss-no-ab12-fast-20260818/isolated-timing-confirm.json",
+    "candidate_record_sha256": "84b5f3a64223d128c2eb2dae6946e3cd9581d9edcb1dbb7b486b40241386549e",
+    "method": "preallocated native C ABI; CUDA coordinator-stream events; warmup 1000; 3000 iterations; 5 repeats",
+    "s1": {
+      "parent_milliseconds": 0.02860037600112264,
+      "candidate_milliseconds": 0.023288363138834634,
+      "speedup": 1.228097304676168,
+      "latency_reduction_percent": 18.573227366239852,
+      "candidate_relative_spread": 0.0751258250606588
+    },
+    "s2": {
+      "parent_round_milliseconds": 0.053456170000572456,
+      "candidate_round_milliseconds": 0.04351699320475261,
+      "candidate_effective_milliseconds_per_call": 0.021758496602376304,
+      "speedup": 1.2283975997389076,
+      "latency_reduction_percent": 18.593133020404217,
+      "candidate_relative_spread": 0.03652836693378016
+    }
+  },
+  "ncu": {
+    "method": "profile-from-start off; one native launch; LaunchStats, Occupancy, SpeedOfLight, MemoryWorkloadAnalysis; ten replay passes",
+    "parent_report": ".final-migration-env/profiles/sm103-b29/stage-03-no-ab12/parent-fast-a.ncu-rep",
+    "parent_report_sha256": "8ed92fd7b1d95295b8db9d65da2825d4c2161ed1606ed3d6c490e3b825d7f9e0",
+    "candidate_report": ".final-migration-env/profiles/sm103-b29/stage-03-no-ab12/no-ab12.ncu-rep",
+    "candidate_report_sha256": "7288dbdaad31fd4c730a4b552a184d572dfd7c2a3ecab0106cc41d98f1dac599",
+    "same_launch_shape": {
+      "grid": 148,
+      "block_threads": 192,
+      "cluster_size": 1
+    },
+    "comparison": {
+      "dynamic_shared_memory_bytes": {
+        "parent": 214016,
+        "candidate": 181248,
+        "reduction": 32768
+      },
+      "registers_per_thread": {
+        "parent": 74,
+        "candidate": 66,
+        "reduction": 8
+      },
+      "l2_compression_input_sectors": {
+        "parent": 2262595,
+        "candidate": 754848,
+        "reduction": 1507747,
+        "reduction_percent": 66.63795332350686,
+        "sector_bytes_delta": 48247904,
+        "expected_ab12_payload_bytes": 48241152
+      },
+      "ncu_replay_duration_microseconds": {
+        "parent": 44.58,
+        "candidate": 40.10,
+        "reduction_percent": 10.049349484073566
+      },
+      "max_memory_bandwidth_percent": {
+        "parent": 61.88,
+        "candidate": 43.90
+      },
+      "local_memory_spill_requests": {
+        "parent": 0,
+        "candidate": 0
+      },
+      "achieved_occupancy_percent": {
+        "parent": 8.92,
+        "candidate": 9.07
+      }
+    }
+  },
+  "whole_graph": {
+    "short_samples_nn_evals_per_sec": [
+      8548.308536,
+      8570.765782
+    ],
+    "profiled_parent_nn_evals_per_sec": 7866.259705,
+    "profiled_candidate_nn_evals_per_sec": 8315.91445,
+    "profiled_gain_percent": 5.7162458635097835,
+    "parent_kernel_time_sum_ns": 668464118,
+    "candidate_kernel_time_sum_ns": 637220218,
+    "kernel_time_reduction_percent": 4.67398311422903,
+    "parent_fused_ffn_ns": 110523899,
+    "candidate_fused_ffn_ns": 95244823,
+    "fused_ffn_reduction_percent": 13.824228187968647,
+    "nsys_report_sha256": "853e7f8dc8907e863b82fae203de6c321a4341bf2102dbb9415a07891d101306",
+    "kernel_csv_sha256": "444155c53f9bcdc40f6f3a3515e79801e0731e7ce02970617c4c6df06a545a6c"
+  },
+  "long_s2": {
+    "iterations_per_sample": 1000,
+    "warmup": 200,
+    "samples_nn_evals_per_sec": [
+      8552.534123,
+      8623.889233,
+      8592.663766,
+      8578.288206,
+      8587.808904
+    ],
+    "median_nn_evals_per_sec": 8587.808904,
+    "relative_spread": 0.008308884233179069,
+    "gain_vs_fast_parent_percent": 6.315856551404786,
+    "gain_vs_tensorrt_percent": 27.534408908011798,
+    "binary_sha256": "97370f2bfa55eab4bc09c9dd1968179d487bfaa285d26af9867b7cb49c2300ed"
+  },
+  "full_accuracy": {
+    "rows": 8192,
+    "replay_sha256": "f74185e9e428dbbc10fe78eba741f4242ebb0827a3e3314adfbfdadb281efe1e",
+    "comparison_sha256": "8ac78ada9120f3267c7e548300774bbd2fe6df03c8a16d7d9cb26fcce0328795",
+    "policy_top1_vs_fp32": 0.99853515625,
+    "policy_probability_rmse": 0.00009493831021245569,
+    "maximum_request_ratio_to_trt16": 1.6079659318068302,
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true,
+    "note": "C output differs in final ulps from parent because removing AB12 changes register/shared scheduling; full accuracy improves and the common row5183 worst case returns"
+  },
+  "decision": {
+    "isolated_gate": "pass",
+    "whole_graph_gate": "pass",
+    "long_gate": "pass",
+    "accuracy_gate": "pass",
+    "remaining_gates": [],
+    "retained": true,
+    "production_ready": false
+  }
+}

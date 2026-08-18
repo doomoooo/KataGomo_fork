@@ -365,3 +365,33 @@ accumulated numerical compromise, not an implementation error. Per user
 direction, the implementation-error request guard is calibrated to `2.25x`
 TRT; fast's maximum request ratio is `2.148x`, while the broken no-roundtrip
 implementation remains at `10-20x` and fails closed.
+
+## Stage 03b — remove unused fused-FFN AB12 output
+
+Status: retained; cumulative on Stage 03a fast math.
+
+KataGo consumes only fused C, but the provider kernel also wrote the two FP16
+projections as a `48,241,152 B` AB12 tensor per stream. The bounded derivative
+retains the external ABI/shape argument yet removes the AB12 device pointer,
+descriptor, four-stage shared ring, register/shared copies, and all TMA stores.
+The tcgen05 mainloop, FP16 projection round-trip, fast SwiGLU, and C store are
+unchanged.
+
+Targeted NCU verifies the exact hypothesis:
+
+- dynamic shared memory `214016 -> 181248 B`;
+- registers/thread `74 -> 66`, spills remain zero;
+- L2 sectors `2262595 -> 754848` (`-66.64%`);
+- replay duration `44.58 -> 40.10 us`;
+- the 148-block/192-thread one-wave launch is unchanged.
+
+Full-graph NSYS improves `7866.259705 -> 8315.914450` profiled nnEval/s;
+fused-kernel time falls `110.523899 -> 95.244823 ms`. Five unprofiled
+1000-iteration samples are `8552.534123, 8623.889233, 8592.663766,
+8578.288206, 8587.808904`; median `8587.808904`, spread `0.831%`. This is
+`+6.316%` over Stage 03a and `+27.534%` over TRT 10.16.
+
+The full replay is not byte-identical to the parent because changed resource
+scheduling perturbs final reduction ulps, but accuracy improves: policy RMSE
+is `9.4938e-5`, worst request returns to the common row5183 family, maximum TRT
+request ratio is `1.608x`, and every aggregate/request gate passes.

@@ -7,7 +7,7 @@
 
 // Stable, architecture-exact C ABI around the generated CuTe-DSL header. The
 // default build links the fail-closed stub; an authenticated CMake opt-in swaps
-// in this bridge and the exact Variant-A object without Python,
+// in this bridge and the exact no-AB12 fast object without Python,
 // TVM-FFI, or cuDNN Frontend runtime dependency.
 
 struct KatagoCudnnOssB29Context;

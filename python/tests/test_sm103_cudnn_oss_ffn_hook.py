@@ -12,6 +12,7 @@ import sm103_cudnn_oss_b29 as upstream_candidate  # noqa: E402
 import sm103_cudnn_oss_b29_roundtrip as variant_a  # noqa: E402
 import sm103_cudnn_oss_b29_precise as variant_b  # noqa: E402
 import sm103_cudnn_oss_b29_newton as variant_c  # noqa: E402
+import sm103_cudnn_oss_b29_no_ab12 as no_ab12  # noqa: E402
 
 
 class Sm103CudnnOssFfnHookTests(unittest.TestCase):
@@ -33,17 +34,18 @@ class Sm103CudnnOssFfnHookTests(unittest.TestCase):
         self.assertIn('std::string dualFfnTactic = "disabled"', self.header)
         self.assertIn('cfg.contains("cudaSm103DualFFNTactic")', self.source)
         tactic = re.search(
-            r'constexpr const char\* CudnnOssB29VariantAFfnTactic\s*=\s*'
+            r'constexpr const char\* CudnnOssB29NoAb12FfnTactic\s*=\s*'
             r'"([^"]+)";',
             self.source,
         )
         self.assertIsNotNone(tactic)
-        self.assertEqual(tactic.group(1), variant_a.CANDIDATE_ID)
+        self.assertEqual(tactic.group(1), no_ab12.CANDIDATE_ID)
         self.assertNotIn(upstream_candidate.CANDIDATE_ID, self.source)
+        self.assertNotIn(variant_a.CANDIDATE_ID, self.source)
         self.assertNotIn(variant_b.CANDIDATE_ID, self.source)
         self.assertNotIn(variant_c.CANDIDATE_ID, self.source)
         self.assertIn(
-            "options.dualFfnTactic != CudnnOssB29VariantAFfnTactic",
+            "options.dualFfnTactic != CudnnOssB29NoAb12FfnTactic",
             self.source,
         )
         self.assertIn(
@@ -64,14 +66,15 @@ class Sm103CudnnOssFfnHookTests(unittest.TestCase):
         self.assertIn(
             'file(READ "${SM103_CUDNN_OSS_B29_MANIFEST}"', self.cmake
         )
-        self.assertIn(variant_a.CANDIDATE_ID, self.cmake)
+        self.assertIn(no_ab12.CANDIDATE_ID, self.cmake)
+        self.assertNotIn(variant_a.CANDIDATE_ID, self.cmake)
         self.assertNotIn(variant_b.CANDIDATE_ID, self.cmake)
         self.assertNotIn(upstream_candidate.CANDIDATE_ID, self.cmake)
         self.assertNotIn(variant_c.CANDIDATE_ID, self.cmake)
-        self.assertIn("projection-fp16-roundtrip", self.cmake)
+        self.assertIn(no_ab12.NUMERIC_SEMANTICS_SELECTOR, self.cmake)
         self.assertIn("sm_103a", self.cmake)
         self.assertIn(
-            "AOT manifest is not the exact Variant A candidate",
+            "AOT manifest is not the exact no-AB12 fast candidate",
             self.cmake,
         )
         for token in (
@@ -142,11 +145,11 @@ class Sm103CudnnOssFfnHookTests(unittest.TestCase):
     def test_successful_launch_has_unambiguous_activation_log(self) -> None:
         self.assertIn("katagoCudnnOssB29Launch(", self.source)
         self.assertIn(
-            "SM103 backend: cuDNN OSS fused FFN active, tactic=",
+            "SM103 backend: cuDNN OSS no-AB12 fast fused FFN active, tactic=",
             self.source,
         )
         self.assertIn(
-            "string(CudnnOssB29VariantAFfnTactic)", self.source
+            "string(CudnnOssB29NoAb12FfnTactic)", self.source
         )
         self.assertIn("loggedCudnnOssFfn = true", self.source)
         self.assertIn(

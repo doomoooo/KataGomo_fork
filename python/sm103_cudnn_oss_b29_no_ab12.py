@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from dataclasses import asdict, dataclass
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -1046,6 +1047,281 @@ def build_gpu_correctness_summary(
     return validate_correctness_summary(summary)
 
 
+def _load_native_library(library_path: pathlib.Path) -> Any:
+    library = ctypes.CDLL(str(library_path.resolve()), mode=ctypes.RTLD_LOCAL)
+    library.katagoCudnnOssB29Create.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int32),
+    ]
+    library.katagoCudnnOssB29Create.restype = ctypes.c_void_p
+    library.katagoCudnnOssB29Launch.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_float,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    library.katagoCudnnOssB29Launch.restype = ctypes.c_int32
+    library.katagoCudnnOssB29Destroy.argtypes = [ctypes.c_void_p]
+    library.katagoCudnnOssB29Destroy.restype = None
+    return library
+
+
+def authenticate_aot_library(library_path: pathlib.Path) -> dict[str, Any]:
+    resolved = library_path.resolve()
+    manifest_path = resolved.parent / "aot-manifest.json"
+    if not resolved.is_file() or not manifest_path.is_file():
+        raise NoAb12DerivativeError("AOT library or sibling manifest is missing")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise NoAb12DerivativeError("AOT manifest is unreadable") from error
+    _, evidence, _ = inspect_derivative()
+    bridge = manifest.get("artifacts", {}).get("bridge_shared_library", {})
+    derivative = manifest.get("derivative", {}).get("evidence")
+    launch = manifest.get("launch_validation", {})
+    checks = {
+        "candidate_id": manifest.get("candidate_id") == CANDIDATE_ID,
+        "numeric_semantics_selector": manifest.get("numeric_semantics_selector")
+        == NUMERIC_SEMANTICS_SELECTOR,
+        "compile_target": manifest.get("compile_target") == "sm_103a",
+        "library_path": pathlib.Path(bridge.get("path", "")).resolve() == resolved,
+        "library_sha256": bridge.get("sha256") == _sha256_bytes(resolved.read_bytes()),
+        "derivative_evidence": derivative == evidence.to_dict(),
+        "tight_correctness": launch.get("status") == "passed"
+        and launch.get("tight_correctness", {}).get("passed") is True
+        and launch.get("tight_correctness", {}).get("ab12_untouched") is True,
+        "nonproduction": manifest.get("production_ready") is False,
+    }
+    if not all(checks.values()):
+        failed = [name for name, passed in checks.items() if not passed]
+        raise NoAb12DerivativeError(
+            "AOT library authentication failed: " + ", ".join(failed)
+        )
+    return {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": _sha256_bytes(manifest_path.read_bytes()),
+        "library_path": str(resolved),
+        "library_sha256": _sha256_bytes(resolved.read_bytes()),
+        "checks": checks,
+    }
+
+
+def _timing_summary(
+    samples: list[float], iterations: int, streams: int
+) -> dict[str, Any]:
+    iteration_ms = [sample * 1000.0 / iterations for sample in samples]
+    median_ms = statistics.median(iteration_ms)
+    return {
+        "cuda_event_seconds_samples": samples,
+        "milliseconds_per_concurrent_iteration_samples": iteration_ms,
+        "median_stream_call_wall_milliseconds": median_ms,
+        "median_effective_milliseconds_per_call": median_ms / streams,
+        "calls_per_iteration": streams,
+        "calls_per_second": 1000.0 * streams / median_ms,
+        "relative_spread": (max(iteration_ms) - min(iteration_ms)) / median_ms,
+    }
+
+
+def benchmark_aot(
+    *,
+    allow_gpu: bool,
+    device: int,
+    library_path: pathlib.Path,
+    warmup: int = 100,
+    iterations: int = 1000,
+    repeats: int = 5,
+    seed: int = 20260818,
+) -> dict[str, Any]:
+    """Tight-check and time the standalone native C ABI on S1 and S2."""
+
+    if not allow_gpu:
+        raise NoAb12DerivativeError(
+            "AOT benchmark requires the explicit --allow-gpu acknowledgement"
+        )
+    for name, value in (
+        ("device", device),
+        ("warmup", warmup),
+        ("iterations", iterations),
+        ("repeats", repeats),
+        ("seed", seed),
+    ):
+        if type(value) is not int:  # noqa: E721
+            raise NoAb12DerivativeError(f"{name} must be an integer")
+    if device < 0 or warmup < 1 or iterations < 1 or repeats < 1:
+        raise NoAb12DerivativeError("invalid device or timing count")
+    authentication = authenticate_aot_library(library_path)
+
+    import torch
+
+    if tuple(torch.cuda.get_device_capability(device)) != (10, 3):
+        raise NoAb12DerivativeError("AOT benchmark requires exact SM103")
+    torch.cuda.set_device(device)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    tensors = parent_candidate.upstream_candidate._allocate_gpu_benchmark_inputs(
+        torch, device, seed
+    )
+    signal_scaling = strengthen_probe_signal(torch, tensors)
+    problem = tensors["problem"]
+
+    def allocate_ab12() -> Any:
+        return torch.empty_strided(
+            (problem.m, problem.n_packed, 1),
+            (problem.n_packed, 1, problem.m * problem.n_packed),
+            dtype=torch.float16,
+            device=f"cuda:{device}",
+        )
+
+    def allocate_c() -> Any:
+        return torch.empty_strided(
+            (problem.m, problem.n_output, 1),
+            (problem.n_output, 1, problem.m * problem.n_output),
+            dtype=torch.float16,
+            device=f"cuda:{device}",
+        )
+
+    ab12 = [allocate_ab12(), allocate_ab12()]
+    outputs = [allocate_c(), allocate_c()]
+    library = _load_native_library(library_path)
+    status = ctypes.c_int32(-999)
+    context = library.katagoCudnnOssB29Create(device, ctypes.byref(status))
+    if not context or status.value != 0:
+        raise NoAb12DerivativeError(
+            f"C ABI context creation failed with status {status.value}"
+        )
+
+    def launch(index: int) -> Any:
+        stream = torch.cuda.current_stream(device)
+        launch_status = library.katagoCudnnOssB29Launch(
+            context,
+            ctypes.c_void_p(tensors["a_tensor"].data_ptr()),
+            ctypes.c_void_p(tensors["b_tensor"].data_ptr()),
+            ctypes.c_void_p(ab12[index].data_ptr()),
+            ctypes.c_void_p(outputs[index].data_ptr()),
+            ctypes.c_float(1.0),
+            ctypes.c_void_p(stream.cuda_stream),
+            problem.m,
+            problem.k,
+            problem.n_packed,
+            problem.n_output,
+            1,
+        )
+        if launch_status != 0:
+            raise NoAb12DerivativeError(
+                f"C ABI launch failed with status {launch_status}"
+            )
+        return outputs[index]
+
+    try:
+        ab12[0].fill_(float("nan"))
+        outputs[0].fill_(float("nan"))
+        launch(0)
+        torch.cuda.synchronize(device)
+        reference = projection_fp16_roundtrip_reference(
+            torch,
+            tensors["input_2d"],
+            tensors["linear1"],
+            tensors["linear_gate"],
+        )
+        correctness = build_gpu_correctness_summary(
+            torch,
+            actual_output=outputs[0][:, :, 0],
+            reference_output=reference,
+            ab12_untouched=bool(torch.isnan(ab12[0]).all().item()),
+        )
+
+        def measure(stream_count: int) -> dict[str, Any]:
+            streams = [torch.cuda.Stream(device=device) for _ in range(stream_count)]
+            coordinator = torch.cuda.Stream(device=device)
+            live: list[Any] = [None] * stream_count
+            for _ in range(warmup):
+                for index, stream in enumerate(streams):
+                    with torch.cuda.stream(stream):
+                        live[index] = launch(index)
+            torch.cuda.synchronize(device)
+            samples: list[float] = []
+            for _ in range(repeats):
+                torch.cuda.synchronize(device)
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                if stream_count == 1:
+                    with torch.cuda.stream(streams[0]):
+                        start.record()
+                        for _ in range(iterations):
+                            live[0] = launch(0)
+                        end.record()
+                else:
+                    done = [torch.cuda.Event() for _ in streams]
+                    with torch.cuda.stream(coordinator):
+                        start.record()
+                    for stream in streams:
+                        stream.wait_event(start)
+                    for _ in range(iterations):
+                        for index, stream in enumerate(streams):
+                            with torch.cuda.stream(stream):
+                                live[index] = launch(index)
+                    for event, stream in zip(done, streams, strict=True):
+                        event.record(stream)
+                    with torch.cuda.stream(coordinator):
+                        for event in done:
+                            coordinator.wait_event(event)
+                        end.record()
+                end.synchronize()
+                samples.append(start.elapsed_time(end) / 1000.0)
+            return _timing_summary(samples, iterations, stream_count)
+
+        timings = {f"s{count}": measure(count) for count in (1, 2)}
+    finally:
+        try:
+            torch.cuda.synchronize(device)
+        finally:
+            library.katagoCudnnOssB29Destroy(context)
+
+    return {
+        "schema": 1,
+        "kind": "katago-sm103-b29-cudnn-oss-no-ab12-aot-timing",
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "candidate_id": CANDIDATE_ID,
+        "numeric_semantics_selector": NUMERIC_SEMANTICS_SELECTOR,
+        "device": {
+            "ordinal": device,
+            "name": torch.cuda.get_device_name(device),
+            "compute_capability": list(torch.cuda.get_device_capability(device)),
+        },
+        "library": {
+            "path": str(library_path.resolve()),
+            "sha256": _sha256_bytes(library_path.read_bytes()),
+            "bytes": library_path.stat().st_size,
+        },
+        "authentication": authentication,
+        "method": {
+            "clock": "CUDA coordinator-stream events spanning all worker streams",
+            "warmup_iterations": warmup,
+            "timed_iterations": iterations,
+            "repeats": repeats,
+            "allocation": "all caller-owned buffers preallocated before timing",
+            "s2": "two independent streams with per-stream ABI-only AB12 and C",
+        },
+        "correctness": {
+            "status": "passed",
+            "signal_scaling": signal_scaling,
+            "tight_correctness": correctness,
+        },
+        "timings": timings,
+        "production_ready": False,
+    }
+
+
 def stage_hypothesis() -> dict[str, Any]:
     derivative, evidence, audit = inspect_derivative()
     return {
@@ -1065,17 +1341,51 @@ def stage_hypothesis() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=pathlib.Path)
+    parser.add_argument("--aot-benchmark", action="store_true")
+    parser.add_argument("--allow-gpu", action="store_true")
+    parser.add_argument("--library", type=pathlib.Path)
+    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--warmup", type=int, default=100)
+    parser.add_argument("--iterations", type=int, default=1000)
+    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--benchmark-output", type=pathlib.Path)
     args = parser.parse_args()
-    if args.output is None:
+    if args.aot_benchmark:
+        if args.library is None:
+            raise NoAb12DerivativeError("--aot-benchmark requires --library")
+        if args.output is not None:
+            raise NoAb12DerivativeError(
+                "--output materialization is invalid with --aot-benchmark"
+            )
+        payload = benchmark_aot(
+            allow_gpu=args.allow_gpu,
+            device=args.device,
+            library_path=args.library,
+            warmup=args.warmup,
+            iterations=args.iterations,
+            repeats=args.repeats,
+        )
+    elif args.output is None:
+        if args.allow_gpu or args.library is not None or args.benchmark_output:
+            raise NoAb12DerivativeError(
+                "GPU/benchmark options require --aot-benchmark"
+            )
         payload = stage_hypothesis()
     else:
+        if args.allow_gpu or args.library is not None or args.benchmark_output:
+            raise NoAb12DerivativeError(
+                "GPU/benchmark options require --aot-benchmark"
+            )
         source, provenance, evidence = materialize_derivative(args.output)
         payload = {
             "source": str(source),
             "provenance": str(provenance),
             "evidence": evidence.to_dict(),
         }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if args.benchmark_output is not None:
+        args.benchmark_output.write_text(serialized, encoding="utf-8")
+    print(serialized, end="")
     return 0
 
 

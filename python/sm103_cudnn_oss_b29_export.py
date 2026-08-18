@@ -367,10 +367,6 @@ def _validate_bridge_launch(
                 tensors["linear1"],
                 tensors["linear_gate"],
             )
-            packed_reference = (
-                tensors["input_2d"].float()
-                @ tensors["b_tensor"][:, :, 0].float().transpose(0, 1)
-            ).half()
             try:
                 if numeric_semantics == NO_AB12_NUMERIC_SEMANTICS:
                     tight_summary = selected_candidate.build_gpu_correctness_summary(
@@ -380,6 +376,10 @@ def _validate_bridge_launch(
                         ab12_untouched=bool(torch.isnan(ab12).all().item()),
                     )
                 else:
+                    packed_reference = (
+                        tensors["input_2d"].float()
+                        @ tensors["b_tensor"][:, :, 0].float().transpose(0, 1)
+                    ).half()
                     tight_summary = selected_candidate.build_gpu_correctness_summary(
                         torch,
                         actual_output=actual,

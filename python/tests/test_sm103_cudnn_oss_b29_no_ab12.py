@@ -12,6 +12,7 @@ PYTHON_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
 import sm103_cudnn_oss_b29_no_ab12 as variant  # noqa: E402
+import sm103_cudnn_oss_b29_export as exporter  # noqa: E402
 
 
 class Sm103CudnnOssB29NoAb12Tests(unittest.TestCase):
@@ -203,6 +204,56 @@ class Sm103CudnnOssB29NoAb12Tests(unittest.TestCase):
         self.assertEqual(evidence.removal_patch_spec_sha256, variant.PATCH_SPEC_SHA256)
         self.assertEqual(evidence.derivative_sha256, audit["derivative_sha256"])
         self.assertFalse(evidence.site_packages_modified)
+
+    def test_manifest_and_export_selector_are_cumulative_fast_variant_a(self) -> None:
+        manifest = variant.validate_candidate_manifest(
+            variant.build_candidate_manifest()
+        )
+        self.assertEqual(manifest["candidate_id"], variant.CANDIDATE_ID)
+        semantics = manifest["operation"]["numeric_semantics"]
+        self.assertIn("fast exp2", semantics["activation"])
+        self.assertIn("no AB12", semantics["ab12"])
+        self.assertEqual(
+            manifest["static_support"]["derivative"]["parent_derivative_sha256"],
+            variant.PARENT_DERIVATIVE_SHA256,
+        )
+        plan = exporter.build_export_plan(
+            numeric_semantics=exporter.NO_AB12_NUMERIC_SEMANTICS
+        )
+        self.assertEqual(plan["candidate_id"], variant.CANDIDATE_ID)
+        self.assertEqual(
+            plan["numeric_semantics_selector"], variant.NUMERIC_SEMANTICS_SELECTOR
+        )
+        self.assertIn(variant.DERIVATIVE_FILENAME, plan["expected_artifacts"])
+        self.assertIn("AB12", plan["c_abi"]["caller_owned_buffers"])
+        self.assertFalse(plan["production_ready"])
+
+    def test_output_only_tight_gate_requires_untouched_abi_buffer(self) -> None:
+        summary = {
+            "reference_signal": {"max_abs": 0.2, "rms": 0.02},
+            "output": {
+                "max_abs_error": 1.0e-5,
+                "rmse": 1.0e-6,
+                "max_rel_error": 1.0e-4,
+            },
+            "ab12_untouched": True,
+        }
+        self.assertTrue(variant.validate_correctness_summary(summary)["passed"])
+        summary["ab12_untouched"] = False
+        with self.assertRaisesRegex(
+            variant.NoAb12DerivativeError, "ab12_abi_only"
+        ):
+            variant.validate_correctness_summary(summary)
+
+    def test_aot_benchmark_requires_explicit_gpu_acknowledgement(self) -> None:
+        with self.assertRaisesRegex(
+            variant.NoAb12DerivativeError, "explicit --allow-gpu"
+        ):
+            variant.benchmark_aot(
+                allow_gpu=False,
+                device=0,
+                library_path=pathlib.Path("missing.so"),
+            )
 
     def test_derivation_rejects_parent_byte_drift_before_any_patch(self) -> None:
         drifted = bytearray(self.parent)
