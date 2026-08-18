@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "stage": "07-explicit-cublaslt-qkv",
+  "timestamp_utc": "2026-08-18T13:24:00Z",
+  "status": "retained",
+  "hypothesis": "The remaining three beta-zero Q/K/V projections use a 2-SM cluster cuBLAS kernel. A complete cuBLASLt algorithm tuple can deliberately trade higher isolated kernel work for a one-SM launch that overlaps more effectively with the second inference stream and reduces whole-graph interval union.",
+  "scope": {
+    "architecture": "exact CC10.3",
+    "batch": 29,
+    "streams": 2,
+    "board": [19, 19],
+    "precision": "FP16/NHWC",
+    "shape_m_n_k": [384, 10469, 384],
+    "calls_per_forward": 99,
+    "initial_global": "legacy cublasHgemm; explicitly excluded from the retained cuBLASLt tactic",
+    "qkv_rope_tactic": "disabled",
+    "attention": "fa4-main-sm103a-b29-s361-h12-d32-m128n128-q2-kv24-fp32",
+    "ffn": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-b29"
+  },
+  "retained_tactic": {
+    "config_key": "cudaProjectionGemmLtTacticSm103",
+    "config_value": "b29-qkv-id70-tile23-stages35-cluster5",
+    "master_switch": "cudaUseProjectionGemmLt=true",
+    "selection": "cublasLtMatmulAlgoInit plus every writable AlgoConfig attribute, cublasLtMatmulAlgoCheck, and complete GetAttribute readback",
+    "algo_config": {
+      "id": 70,
+      "tile_id": 23,
+      "split_k": 1,
+      "reduction_scheme": 0,
+      "cta_swizzling": 0,
+      "custom_option": 0,
+      "stages_id": 35,
+      "inner_shape_id": 0,
+      "cluster_shape_id": 5,
+      "workspace_bytes": 0
+    },
+    "algo_cap": {
+      "numerical_impl_flags": 0,
+      "min_alignment_a_bytes": 16,
+      "min_alignment_b_bytes": 16,
+      "min_alignment_c_bytes": 16,
+      "min_alignment_d_bytes": 16
+    },
+    "runtime_proof": "every benchmark handle logged exactly the retained tuple; replay logged the same tuple for all four initialization/manual handles; no initial-global cuBLASLt plan was created",
+    "smoke_log": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/explicit-smoke-id70.log",
+    "smoke_log_sha256": "3bf8af8a66f42c076335c5af7574749686d4e683d47a299be9721c41f77dd506"
+  },
+  "autotune_discovery_rejection": {
+    "status": "discovery-only; not production eligible",
+    "reason": "cold-process and replay handle generations selected different full tuples; one 5x1000 run selected two different id71 tuples across its two handles and fell to 8780.673537 nnEval/s",
+    "stable_id70_long_samples": [9041.862088, 9058.865267, 9069.529039, 9073.308694],
+    "drifted_sample": 8780.673537,
+    "drifted_handle_tuples": [
+      {"id": 71, "tile_id": 17, "stages_id": 35, "cluster_shape_id": 9},
+      {"id": 71, "tile_id": 19, "stages_id": 35, "cluster_shape_id": 9}
+    ],
+    "accuracy_root_cause": "the broad autotune route also replaced initial-global; its replay failed only the ownership request guard. QKV-only id70 and id71 are byte-identical to each other and to the accepted Stage06 raw outputs, proving the ownership regression came from initial-global cuBLASLt rather than QKV"
+  },
+  "diagnostic_id71": {
+    "config_value": "b29-qkv-id71-tile19-stages35-cluster6-diagnostic",
+    "algo_config": {
+      "id": 71,
+      "tile_id": 19,
+      "split_k": 1,
+      "reduction_scheme": 0,
+      "cta_swizzling": 0,
+      "custom_option": 0,
+      "stages_id": 35,
+      "inner_shape_id": 0,
+      "cluster_shape_id": 6,
+      "workspace_bytes": 0
+    },
+    "short_center_nn_evals_per_sec": 8929.6170675,
+    "gain_vs_control_percent": -0.04267,
+    "replay_sha256": "fa89ef9a5479eb7f5535233739b25ff4a08bdb9da4f2db73c12ea14bde0931ef",
+    "decision": "closed as a performance candidate; retained only as numerical and autotune-drift evidence"
+  },
+  "short_symmetric": {
+    "method": "same binary, exact B29/S2, 50 warmups and 300 iterations, control-id70-id71-id71-id70-control",
+    "control_samples_nn_evals_per_sec": [8921.122491, 8945.735661],
+    "id70_samples_nn_evals_per_sec": [9027.338571, 9028.994407],
+    "id71_samples_nn_evals_per_sec": [8927.394913, 8931.839222],
+    "control_center_nn_evals_per_sec": 8933.429076,
+    "id70_center_nn_evals_per_sec": 9028.166489,
+    "id70_gain_percent": 1.0605,
+    "id71_center_nn_evals_per_sec": 8929.6170675,
+    "id71_gain_percent": -0.04267
+  },
+  "whole_graph_nsys": {
+    "method": "same final binary and exact control/id70 configurations; 20 warmups plus 50 timed iterations per stream; steady analysis takes the last 50 of exactly 72 initial-convolution forward markers on each stream",
+    "control_report": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/final-control.nsys-rep",
+    "control_report_sha256": "06a5f35d9b2aec9c70a0bbd11692bde21c139eea98d578c53bb6702362596f39",
+    "candidate_report": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/final-id70.nsys-rep",
+    "candidate_report_sha256": "89461a2e7bfa45d4b6f5be834a710a737bcbbaaa170d3dd631f2af1e9fb8379c",
+    "steady_summary": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/final-steady-last50-summary.json",
+    "steady_summary_sha256": "ea0b961e18ffd721abaf75023609d43ecffb6c3d02485f74c666f4fa7a2317d6",
+    "profiled_nn_evals_per_sec": {
+      "control": 8665.936134,
+      "id70": 8704.811643,
+      "gain_percent": 0.4486
+    },
+    "steady_kernel_launches": {"control": 40596, "id70": 40596},
+    "steady_kernel_sum_ms": {"control": 505.695876, "id70": 526.820999, "change_percent": 4.1774},
+    "steady_kernel_union_ms": {"control": 334.674970, "id70": 332.457686, "reduction_percent": 0.6625},
+    "steady_overlap_ms": {"control": 171.020906, "id70": 194.363313, "gain_percent": 13.6489},
+    "kernel_replacement": {
+      "control_2sm_family_count": 13400,
+      "id70_2sm_family_count": 3500,
+      "control_1sm_family_count": 4400,
+      "id70_1sm_family_count": 14300,
+      "delta_per_100_forwards": 9900,
+      "interpretation": "exactly 99 QKV calls per forward move from the 2-SM family to the 1-SM family; no launch is removed"
+    },
+    "conclusion": "isolated work increases, but the one-SM schedule creates enough additional cross-stream overlap to reduce critical interval union"
+  },
+  "targeted_ncu": {
+    "method": "NCU full set with application replay; default kernel replay invalidates process-local CuTe driver module handles after the captured library kernel",
+    "control_report": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/qkv-control-app.ncu-rep",
+    "control_report_sha256": "bc58381ba6cf01252bf8a2b449781264d225389f176a9a70d327d9c7875e17e2",
+    "id70_kernel_report": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/qkv-candidate-app.ncu-rep",
+    "id70_kernel_report_sha256": "b1ab9bfc195f95c38944da1e9e60e1d39d1b2bda2e4ef60812f0712d1df530d1",
+    "control": {
+      "cluster_size": 2,
+      "grid_blocks": 252,
+      "block_threads": 256,
+      "registers_per_thread": 71,
+      "dynamic_shared_memory_kib": 231.42,
+      "waves_per_sm": 1.70,
+      "duration_us": 14.43,
+      "no_eligible_percent": 82.90,
+      "theoretical_occupancy_percent": 12.50,
+      "achieved_occupancy_percent": 10.90,
+      "local_spilling_requests": 0
+    },
+    "id70_kernel": {
+      "cluster_size": 1,
+      "grid_blocks": 126,
+      "block_threads": 256,
+      "registers_per_thread": 96,
+      "dynamic_shared_memory_kib": 215.04,
+      "waves_per_sm": 0.85,
+      "duration_us": 19.42,
+      "no_eligible_percent": 87.64,
+      "theoretical_occupancy_percent": 12.50,
+      "achieved_occupancy_percent": 10.27,
+      "local_spilling_requests": 0,
+      "long_scoreboard_percent": 51.1
+    }
+  },
+  "full_accuracy": {
+    "rows": 8192,
+    "reference": ".final-migration-env/baselines/b300-20260818/cudnn-oss-b29-correctness/reference-fp32.krnn",
+    "candidate": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/explicit-id70-b29.krnn",
+    "candidate_sha256": "fa89ef9a5479eb7f5535233739b25ff4a08bdb9da4f2db73c12ea14bde0931ef",
+    "comparison": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/explicit-id70-vs-fp32.json",
+    "comparison_sha256": "1d47e8a752d0dfbce7b3c636da5f2252a651832d1f5e1a7039d5c5ca264868e9",
+    "stage06_byte_identity_report": ".final-migration-env/profiles/sm103-b29/stage-07-cublaslt/id70-vs-stage06-fa4.json",
+    "stage06_byte_identity_report_sha256": "a2de4955d4868ba1f4366e7b649b8c45df1803c8a5bed5d5bcb75d2ecd2896d7",
+    "raw_outputs_byte_identical_to_stage06": true,
+    "input_and_target_sections_byte_exact": true,
+    "policy_probability_rmse": 0.00009529080853099003,
+    "policy_top1_vs_fp32": 0.998291015625,
+    "value_outcome_rmse": 0.002122806617990136,
+    "score_mean_rmse": 0.0018368397140875459,
+    "ownership_sigmoid_rmse": 0.00023349409457296133,
+    "maximum_policy_abs_error": 0.009579360485076904,
+    "maximum_request_ratio_to_trt16": 1.9463556329433207,
+    "request_gate_multiplier": 2.25,
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true
+  },
+  "long_s2": {
+    "warmups": 200,
+    "iterations_per_sample": 1000,
+    "samples_nn_evals_per_sec": [9028.856178, 9058.808862, 9033.266454, 9066.341924, 9063.157243],
+    "median_nn_evals_per_sec": 9058.808862,
+    "relative_spread": 0.004138043596133918,
+    "gain_vs_stage06_percent": 1.2257528941,
+    "gain_vs_tensorrt_10_16_percent": 34.5290570087
+  },
+  "binary": {
+    "path": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4/katago",
+    "tested_sha256": "953e85ae68021d7af33431d001c3443de615af25953edc2cca3baa32a5b091b6",
+    "post_documentation_relink_sha256": "226c6b929eafd9bdff85fecd78c1f420152d665dd8d4539618f68ef9c71bc0e2",
+    "relink_note": "the post-gate relink changed only generated git revision metadata after concurrent documentation commits; the measured backend objects are unchanged",
+    "cuda_toolchain": "13.3.73",
+    "cublaslt_version": 130600
+  },
+  "decision": {
+    "explicit_identity_gate": "pass",
+    "short_symmetric_gate": "pass",
+    "whole_graph_union_gate": "pass",
+    "accuracy_gate": "pass",
+    "long_stability_gate": "pass",
+    "retained": true,
+    "production_ready": false
+  }
+}

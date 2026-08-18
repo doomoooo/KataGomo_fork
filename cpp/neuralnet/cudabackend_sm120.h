@@ -319,7 +319,13 @@ struct Options {
   bool useBatchSharedRoPEUnrolled = false;
   bool useFusedResidual = false;
   bool useFusedResidualGemm = false;
+  // Generic shape-autotuned beta=0 MatMul hook. Native SM120 preserves its
+  // historical fallback behavior. The SM103 portable B29 owner narrows this
+  // to the audited QKV and initial-global shapes and fails closed.
   bool useProjectionGemmLt = false;
+  // SM103-only selector: autotune is discovery; explicit B29 choices pin the
+  // complete QKV algorithm tuple and leave initial-global on legacy Hgemm.
+  std::string projectionGemmLtTacticSm103 = "autotune";
   bool useLinear2ResidualAot = false;
   bool useOutProjectionResidualAot = false;
   std::string outProjectionAotTactic = "disabled";

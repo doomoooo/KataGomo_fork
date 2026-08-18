@@ -676,3 +676,61 @@ user-fixed S2 shutdown threshold, so the candidate stopped before NCU,
 full-graph NSYS, throughput, or request replay.  No core/CMake path changed
 and no commit is created.  CPU contracts, race diagnosis, all samples, and
 complete hashes are in `stage-07-ffn-n64-ab4-profile.json`.
+
+## Stage 07a — explicit cuBLASLt QKV resource schedule
+
+Status: retained; cumulative on native FA4 and the no-AB12 fused FFN.
+
+The committed FA4 graph still issues three beta-zero Q/K/V GEMMs for each of
+33 transformer pairs. A first B29/S2 A/B/B/A showed about `+1.18%` from the
+generic shape-autotuned cuBLASLt hook, but its algorithm identity was not
+stable. Four 1000-iteration processes chose the same id70 tuple and measured
+`9042-9073` nnEval/s; a fifth chose two different id71 tuples across its two
+handles and fell to `8780.674`. Replay also created two handle generations:
+the warmup generation chose id70 while the output-producing generation chose
+id71. The generic runtime autotuner is therefore retained only as a discovery
+tool and is not production eligible.
+
+The accepted candidate constructs the complete QKV tuple directly with
+`cublasLtMatmulAlgoInit`, sets tile 23, split-K 1, reduction 0, swizzle 0,
+custom option 0, stages 35, inner shape 0, and cluster shape 5 for algorithm
+70, checks it with `cublasLtMatmulAlgoCheck`, and reads every attribute back.
+Any construction, readback, or launch mismatch fails closed. Every handle in
+smoke, short, replay, and long testing logged exactly that tuple and zero
+workspace bytes. The explicit route is QKV-only: initial-global remains on
+legacy `cublasHgemm`. An id71/tile19/stages35/cluster6 tuple was pinned as a
+diagnostic control; it measured `-0.043%` and is closed.
+
+Exact final-binary NSYS explains the gain as a scheduling trade, not lower raw
+work. Across the last 50 timed forwards on each stream, both graphs launch
+40,596 kernels. Exactly 9,900 launches—99 per forward—move from the 2-SM
+cluster family to the 1-SM family. Kernel sum rises
+`505.696 -> 526.821 ms` (`+4.177%`), but overlap rises
+`171.021 -> 194.363 ms` (`+13.649%`) and interval union falls
+`334.675 -> 332.458 ms` (`-0.663%`). Profiled throughput rises
+`8665.936 -> 8704.812` nnEval/s. This is the intended dual-stream resource
+rounding behavior.
+
+Application-replay NCU confirms the physical change. The control is a
+252-block, 2-SM-cluster kernel with 71 registers, `231.42 KiB` dynamic shared
+memory, 1.70 waves, and `14.43 us` isolated duration. The id70 kernel is a
+126-block, one-SM kernel with 96 registers, `215.04 KiB`, 0.85 waves, and
+`19.42 us`; neither spills. The candidate is deliberately slower in isolation
+and has 87.64% no-eligible cycles, but its smaller scheduling unit restores
+cross-stream overlap. NCU application replay is required because kernel replay
+invalidates the process-local CuTe driver-module handles after the captured
+library kernel.
+
+Removing initial-global from the Lt route also isolated the earlier ownership
+request failure. Explicit id70 and diagnostic id71 produce identical replay
+outputs, and id70 is byte-identical in every raw output section to the accepted
+Stage 06 FA4 graph. The 8192-row comparison therefore retains policy RMSE
+`9.5291e-5`, policy top-1 `99.8291%`, and maximum TRT request ratio `1.946x`;
+all request and aggregate guards pass.
+
+The final five 1000-iteration B29/S2 samples are
+`9028.856178, 9058.808862, 9033.266454, 9066.341924, 9063.157243` nnEval/s.
+Median is `9058.808862`, spread `0.414%`, `+1.226%` over Stage 06 and
+`+34.529%` over fixed TRT 10.16. Complete configuration identities, auto-drift
+evidence, profiler reports, replay hashes, and long samples are recorded in
+`stage-07-cublaslt-qkv.json`.

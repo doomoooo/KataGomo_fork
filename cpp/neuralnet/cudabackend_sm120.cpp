@@ -17,13 +17,143 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
 #include <mutex>
+#include <sstream>
+#include <string_view>
 #include <vector>
 
 using namespace std;
 
 namespace Sm120Backend {
+
+namespace {
+
+// The SM103 portable cuBLASLt route is qualified only for the two FP16
+// MatMulLayer shapes that remain in the fixed B29 graph. Keep the classifier
+// constexpr so the compile-time assertions and the live fail-closed check use
+// exactly the same contract.
+struct ProjectionGemmLtShape {
+  int m;
+  int n;
+  int k;
+};
+
+enum class Sm103B29ProjectionGemmLtShapeKind {
+  Unsupported,
+  InitialGlobal,
+  QKV,
+};
+
+constexpr int Sm103B29BatchSize = 29;
+constexpr int Sm103B29BoardArea = 19 * 19;
+constexpr int Sm103B29Rows = Sm103B29BatchSize * Sm103B29BoardArea;
+constexpr int Sm103B29ProjectionGemmLtExpectedShapeCount = 2;
+constexpr ProjectionGemmLtShape Sm103B29InitialGlobalShape = {768,29,19};
+constexpr ProjectionGemmLtShape Sm103B29QKVShape = {384,10469,384};
+
+constexpr const char* Sm103B29ProjectionGemmLtAutotuneTactic = "autotune";
+constexpr const char* Sm103B29ProjectionGemmLtId70Tactic =
+  "b29-qkv-id70-tile23-stages35-cluster5";
+constexpr const char* Sm103B29ProjectionGemmLtId71DiagnosticTactic =
+  "b29-qkv-id71-tile19-stages35-cluster6-diagnostic";
+
+struct ProjectionGemmLtExplicitAlgoConfig {
+  const char* tactic;
+  int32_t algoId;
+  uint32_t tileId;
+  int32_t splitK;
+  uint32_t reductionScheme;
+  uint32_t ctaSwizzling;
+  uint32_t customOption;
+  uint32_t stagesId;
+  uint16_t innerShapeId;
+  uint16_t clusterShapeId;
+};
+
+constexpr ProjectionGemmLtExplicitAlgoConfig Sm103B29ProjectionGemmLtId70Config = {
+  Sm103B29ProjectionGemmLtId70Tactic,
+  70,23,1,0,0,0,35,0,5
+};
+constexpr ProjectionGemmLtExplicitAlgoConfig Sm103B29ProjectionGemmLtId71DiagnosticConfig = {
+  Sm103B29ProjectionGemmLtId71DiagnosticTactic,
+  71,19,1,0,0,0,35,0,6
+};
+
+constexpr const ProjectionGemmLtExplicitAlgoConfig* findProjectionGemmLtExplicitAlgoConfig(
+  const char* tactic
+) {
+  return string_view(tactic) == Sm103B29ProjectionGemmLtId70Tactic ?
+    &Sm103B29ProjectionGemmLtId70Config :
+    string_view(tactic) == Sm103B29ProjectionGemmLtId71DiagnosticTactic ?
+    &Sm103B29ProjectionGemmLtId71DiagnosticConfig : nullptr;
+}
+
+constexpr bool projectionGemmLtShapeEquals(
+  const ProjectionGemmLtShape& a,
+  const ProjectionGemmLtShape& b
+) {
+  return a.m == b.m && a.n == b.n && a.k == b.k;
+}
+
+constexpr Sm103B29ProjectionGemmLtShapeKind classifySm103B29ProjectionGemmLtShape(
+  int m,
+  int n,
+  int k
+) {
+  const ProjectionGemmLtShape shape = {m,n,k};
+  return projectionGemmLtShapeEquals(shape,Sm103B29InitialGlobalShape) ?
+    Sm103B29ProjectionGemmLtShapeKind::InitialGlobal :
+    projectionGemmLtShapeEquals(shape,Sm103B29QKVShape) ?
+    Sm103B29ProjectionGemmLtShapeKind::QKV :
+    Sm103B29ProjectionGemmLtShapeKind::Unsupported;
+}
+
+constexpr const char* sm103B29ProjectionGemmLtShapeName(
+  Sm103B29ProjectionGemmLtShapeKind kind
+) {
+  return kind == Sm103B29ProjectionGemmLtShapeKind::InitialGlobal ?
+    "initial-global" :
+    kind == Sm103B29ProjectionGemmLtShapeKind::QKV ? "qkv" : "unsupported";
+}
+
+static_assert(Sm103B29Rows == 10469, "B29 full-board row count changed");
+static_assert(
+  Sm103B29ProjectionGemmLtExpectedShapeCount == 2,
+  "SM103 B29 projection-GEMM-Lt contract must contain exactly two shapes"
+);
+static_assert(
+  classifySm103B29ProjectionGemmLtShape(768,29,19) ==
+    Sm103B29ProjectionGemmLtShapeKind::InitialGlobal,
+  "SM103 B29 initial-global cuBLASLt shape classifier mismatch"
+);
+static_assert(
+  classifySm103B29ProjectionGemmLtShape(384,10469,384) ==
+    Sm103B29ProjectionGemmLtShapeKind::QKV,
+  "SM103 B29 QKV cuBLASLt shape classifier mismatch"
+);
+static_assert(
+  classifySm103B29ProjectionGemmLtShape(384,10468,384) ==
+    Sm103B29ProjectionGemmLtShapeKind::Unsupported,
+  "SM103 B29 cuBLASLt shape classifier must reject non-B29 rows"
+);
+static_assert(
+  Sm103B29ProjectionGemmLtId70Config.algoId == 70 &&
+  Sm103B29ProjectionGemmLtId70Config.tileId == 23 &&
+  Sm103B29ProjectionGemmLtId70Config.stagesId == 35 &&
+  Sm103B29ProjectionGemmLtId70Config.clusterShapeId == 5,
+  "SM103 B29 id70 QKV tuple changed"
+);
+static_assert(
+  Sm103B29ProjectionGemmLtId71DiagnosticConfig.algoId == 71 &&
+  Sm103B29ProjectionGemmLtId71DiagnosticConfig.tileId == 19 &&
+  Sm103B29ProjectionGemmLtId71DiagnosticConfig.stagesId == 35 &&
+  Sm103B29ProjectionGemmLtId71DiagnosticConfig.clusterShapeId == 6,
+  "SM103 B29 id71 diagnostic QKV tuple changed"
+);
+
+} // namespace
 
 static void setPersistingL2Window(
   cudaStream_t stream,
@@ -50,6 +180,34 @@ static void clearPersistingL2Window(cudaStream_t stream) {
 }
 
 struct Sm120Model::LtMatmulState {
+  struct AlgoIdentity {
+    bool complete;
+    string unavailableReason;
+
+    int32_t algoId;
+    uint32_t tileId;
+    int32_t splitK;
+    uint32_t reductionScheme;
+    uint32_t ctaSwizzling;
+    uint32_t customOption;
+    uint32_t stagesId;
+    uint16_t innerShapeId;
+    uint16_t clusterShapeId;
+
+    uint64_t numericalImplFlags;
+    uint32_t minAlignmentABytes;
+    uint32_t minAlignmentBBytes;
+    uint32_t minAlignmentCBytes;
+    uint32_t minAlignmentDBytes;
+
+    AlgoIdentity()
+      : complete(false), unavailableReason(),
+        algoId(0), tileId(0), splitK(0), reductionScheme(0),
+        ctaSwizzling(0), customOption(0), stagesId(0), innerShapeId(0),
+        clusterShapeId(0), numericalImplFlags(0), minAlignmentABytes(0),
+        minAlignmentBBytes(0), minAlignmentCBytes(0), minAlignmentDBytes(0) {}
+  };
+
   struct Plan {
     cublasLtMatmulDesc_t operationDesc;
     cublasLtMatrixLayout_t aDesc;
@@ -57,11 +215,24 @@ struct Sm120Model::LtMatmulState {
     cublasLtMatrixLayout_t cDesc;
     cublasLtMatmulAlgo_t algo;
     size_t workspaceBytes;
+    int heuristicRank;
+    int heuristicCount;
+    float measuredUs;
+    float wavesCount;
+    size_t cublasLtVersion;
+    AlgoIdentity identity;
+    string selectionTactic;
+    string failureReason;
     bool valid;
+    bool explicitSelection;
+    bool loggedSuccessfulUse;
 
     Plan()
       : operationDesc(NULL), aDesc(NULL), bDesc(NULL), cDesc(NULL),
-        workspaceBytes(0), valid(false) {}
+        workspaceBytes(0), heuristicRank(0), heuristicCount(0),
+        measuredUs(numeric_limits<float>::infinity()), wavesCount(0.0f),
+        cublasLtVersion(0), identity(), selectionTactic(), failureReason(),
+        valid(false), explicitSelection(false), loggedSuccessfulUse(false) {}
 
     ~Plan() {
       if(cDesc != NULL)
@@ -77,13 +248,15 @@ struct Sm120Model::LtMatmulState {
 
   cublasLtHandle_t handle;
   void* workspace;
+  string qkvTactic;
   unordered_map<uint64_t,unique_ptr<Plan>> plans;
 
   static size_t workspaceCapacity() {
     return 64ULL * 1024ULL * 1024ULL;
   }
 
-  LtMatmulState() : handle(NULL), workspace(NULL) {
+  explicit LtMatmulState(const string& qkvTactic_)
+    : handle(NULL), workspace(NULL), qkvTactic(qkvTactic_) {
     CUBLAS_ERR("Sm120Model cuBLASLt create", cublasLtCreate(&handle));
     CUDA_ERR("Sm120Model cuBLASLt workspace", cudaMalloc(&workspace, workspaceCapacity()));
   }
@@ -102,6 +275,233 @@ struct Sm120Model::LtMatmulState {
            static_cast<uint64_t>(k);
   }
 
+  static void appendIdentityFailure(
+    string& failures,
+    const char* attribute,
+    cublasStatus_t status,
+    size_t expectedBytes,
+    size_t writtenBytes
+  ) {
+    if(!failures.empty())
+      failures += ",";
+    failures += attribute;
+    failures += "(status=" + Global::intToString((int)status);
+    failures += ",expectedBytes=" + Global::uint64ToString(expectedBytes);
+    failures += ",writtenBytes=" + Global::uint64ToString(writtenBytes) + ")";
+  }
+
+  template<typename T>
+  static bool getAlgoConfigIdentityAttribute(
+    const cublasLtMatmulAlgo_t& algo,
+    cublasLtMatmulAlgoConfigAttributes_t attribute,
+    const char* attributeName,
+    T& value,
+    string& failures
+  ) {
+    size_t writtenBytes = 0;
+    const cublasStatus_t status = cublasLtMatmulAlgoConfigGetAttribute(
+      &algo,attribute,&value,sizeof(T),&writtenBytes);
+    if(status == CUBLAS_STATUS_SUCCESS && writtenBytes == sizeof(T))
+      return true;
+    appendIdentityFailure(
+      failures,attributeName,status,sizeof(T),writtenBytes);
+    return false;
+  }
+
+  template<typename T>
+  static bool getAlgoCapIdentityAttribute(
+    const cublasLtMatmulAlgo_t& algo,
+    cublasLtMatmulAlgoCapAttributes_t attribute,
+    const char* attributeName,
+    T& value,
+    string& failures
+  ) {
+    size_t writtenBytes = 0;
+    const cublasStatus_t status = cublasLtMatmulAlgoCapGetAttribute(
+      &algo,attribute,&value,sizeof(T),&writtenBytes);
+    if(status == CUBLAS_STATUS_SUCCESS && writtenBytes == sizeof(T))
+      return true;
+    appendIdentityFailure(
+      failures,attributeName,status,sizeof(T),writtenBytes);
+    return false;
+  }
+
+  static AlgoIdentity getAlgoIdentity(const cublasLtMatmulAlgo_t& algo) {
+    AlgoIdentity identity;
+    bool complete = true;
+
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_ID,"config-id",
+         identity.algoId,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_TILE_ID,"tile-id",
+         identity.tileId,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_SPLITK_NUM,"split-k",
+         identity.splitK,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,"reduction-scheme",
+         identity.reductionScheme,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING,"cta-swizzling",
+         identity.ctaSwizzling,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION,"custom-option",
+         identity.customOption,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_STAGES_ID,"stages-id",
+         identity.stagesId,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID,"inner-shape-id",
+         identity.innerShapeId,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoConfigIdentityAttribute(
+         algo,CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID,"cluster-shape-id",
+         identity.clusterShapeId,identity.unavailableReason))
+      complete = false;
+
+    if(!getAlgoCapIdentityAttribute(
+         algo,CUBLASLT_ALGO_CAP_NUMERICAL_IMPL_FLAGS,"numerical-impl-flags",
+         identity.numericalImplFlags,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoCapIdentityAttribute(
+         algo,CUBLASLT_ALGO_CAP_MIN_ALIGNMENT_A_BYTES,"min-alignment-a-bytes",
+         identity.minAlignmentABytes,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoCapIdentityAttribute(
+         algo,CUBLASLT_ALGO_CAP_MIN_ALIGNMENT_B_BYTES,"min-alignment-b-bytes",
+         identity.minAlignmentBBytes,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoCapIdentityAttribute(
+         algo,CUBLASLT_ALGO_CAP_MIN_ALIGNMENT_C_BYTES,"min-alignment-c-bytes",
+         identity.minAlignmentCBytes,identity.unavailableReason))
+      complete = false;
+    if(!getAlgoCapIdentityAttribute(
+         algo,CUBLASLT_ALGO_CAP_MIN_ALIGNMENT_D_BYTES,"min-alignment-d-bytes",
+         identity.minAlignmentDBytes,identity.unavailableReason))
+      complete = false;
+
+    identity.complete = complete;
+    return identity;
+  }
+
+  template<typename T>
+  static bool setAlgoConfigAttribute(
+    cublasLtMatmulAlgo_t& algo,
+    cublasLtMatmulAlgoConfigAttributes_t attribute,
+    const char* attributeName,
+    const T& value,
+    string& failureReason
+  ) {
+    const cublasStatus_t status = cublasLtMatmulAlgoConfigSetAttribute(
+      &algo,attribute,&value,sizeof(T));
+    if(status == CUBLAS_STATUS_SUCCESS)
+      return true;
+    if(!failureReason.empty())
+      failureReason += ",";
+    failureReason += string(attributeName) + "-set(status=" +
+      Global::intToString((int)status) + ")";
+    return false;
+  }
+
+  static bool algoIdentityMatchesExplicitConfig(
+    const AlgoIdentity& identity,
+    const ProjectionGemmLtExplicitAlgoConfig& config
+  ) {
+    return identity.complete &&
+      identity.algoId == config.algoId &&
+      identity.tileId == config.tileId &&
+      identity.splitK == config.splitK &&
+      identity.reductionScheme == config.reductionScheme &&
+      identity.ctaSwizzling == config.ctaSwizzling &&
+      identity.customOption == config.customOption &&
+      identity.stagesId == config.stagesId &&
+      identity.innerShapeId == config.innerShapeId &&
+      identity.clusterShapeId == config.clusterShapeId;
+  }
+
+  bool initializeExplicitAlgo(
+    const ProjectionGemmLtExplicitAlgoConfig& config,
+    cublasLtMatmulDesc_t operationDesc,
+    cublasLtMatrixLayout_t aDesc,
+    cublasLtMatrixLayout_t bDesc,
+    cublasLtMatrixLayout_t cDesc,
+    cublasLtMatmulHeuristicResult_t& result,
+    string& failureReason
+  ) {
+    cublasStatus_t status = cublasLtMatmulAlgoInit(
+      handle,CUBLAS_COMPUTE_16F,CUDA_R_16F,
+      CUDA_R_16F,CUDA_R_16F,CUDA_R_16F,CUDA_R_16F,
+      config.algoId,&result.algo);
+    if(status != CUBLAS_STATUS_SUCCESS) {
+      failureReason = "algo-init(status=" + Global::intToString((int)status) + ")";
+      return false;
+    }
+
+    bool configured = true;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_TILE_ID,"tile-id",
+         config.tileId,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_SPLITK_NUM,"split-k",
+         config.splitK,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,"reduction-scheme",
+         config.reductionScheme,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING,"cta-swizzling",
+         config.ctaSwizzling,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION,"custom-option",
+         config.customOption,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_STAGES_ID,"stages-id",
+         config.stagesId,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID,"inner-shape-id",
+         config.innerShapeId,failureReason))
+      configured = false;
+    if(!setAlgoConfigAttribute(
+         result.algo,CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID,"cluster-shape-id",
+         config.clusterShapeId,failureReason))
+      configured = false;
+    if(!configured)
+      return false;
+
+    status = cublasLtMatmulAlgoCheck(
+      handle,operationDesc,aDesc,bDesc,cDesc,cDesc,&result.algo,&result);
+    if(status != CUBLAS_STATUS_SUCCESS) {
+      failureReason =
+        "algo-check(status=" + Global::intToString((int)status) + ")";
+      return false;
+    }
+    if(result.state != CUBLAS_STATUS_SUCCESS) {
+      failureReason =
+        "algo-check(state=" + Global::intToString((int)result.state) + ")";
+      return false;
+    }
+    if(result.workspaceSize > workspaceCapacity()) {
+      failureReason = "algo-check workspace=" +
+        Global::uint64ToString(result.workspaceSize) + " exceeds capacity=" +
+        Global::uint64ToString(workspaceCapacity());
+      return false;
+    }
+    return true;
+  }
+
   Plan* getOrCreatePlan(
     int m,
     int n,
@@ -117,46 +517,92 @@ struct Sm120Model::LtMatmulState {
       return existing->second.get();
 
     unique_ptr<Plan> plan = make_unique<Plan>();
+    const Sm103B29ProjectionGemmLtShapeKind shapeKind =
+      classifySm103B29ProjectionGemmLtShape(m,n,k);
+    const ProjectionGemmLtExplicitAlgoConfig* explicitConfig =
+      shapeKind == Sm103B29ProjectionGemmLtShapeKind::QKV ?
+      findProjectionGemmLtExplicitAlgoConfig(qkvTactic.c_str()) : nullptr;
+    plan->selectionTactic = explicitConfig != nullptr ?
+      explicitConfig->tactic : Sm103B29ProjectionGemmLtAutotuneTactic;
+    plan->explicitSelection = explicitConfig != nullptr;
     const __half alpha = __float2half(1.0f);
     const __half beta = __float2half(0.0f);
 
     cublasStatus_t status = cublasLtMatmulDescCreate(
       &plan->operationDesc, CUBLAS_COMPUTE_16F, CUDA_R_16F);
-    if(status == CUBLAS_STATUS_SUCCESS)
+    if(status != CUBLAS_STATUS_SUCCESS)
+      plan->failureReason =
+        "operation-desc-create status=" + Global::intToString((int)status);
+    if(status == CUBLAS_STATUS_SUCCESS) {
       status = cublasLtMatrixLayoutCreate(&plan->aDesc, CUDA_R_16F, m, k, m);
-    if(status == CUBLAS_STATUS_SUCCESS)
+      if(status != CUBLAS_STATUS_SUCCESS)
+        plan->failureReason =
+          "a-layout-create status=" + Global::intToString((int)status);
+    }
+    if(status == CUBLAS_STATUS_SUCCESS) {
       status = cublasLtMatrixLayoutCreate(&plan->bDesc, CUDA_R_16F, k, n, k);
-    if(status == CUBLAS_STATUS_SUCCESS)
+      if(status != CUBLAS_STATUS_SUCCESS)
+        plan->failureReason =
+          "b-layout-create status=" + Global::intToString((int)status);
+    }
+    if(status == CUBLAS_STATUS_SUCCESS) {
       status = cublasLtMatrixLayoutCreate(&plan->cDesc, CUDA_R_16F, m, n, m);
+      if(status != CUBLAS_STATUS_SUCCESS)
+        plan->failureReason =
+          "c-layout-create status=" + Global::intToString((int)status);
+    }
 
     cublasLtMatmulPreference_t preference = NULL;
-    if(status == CUBLAS_STATUS_SUCCESS)
+    if(status == CUBLAS_STATUS_SUCCESS) {
       status = cublasLtMatmulPreferenceCreate(&preference);
+      if(status != CUBLAS_STATUS_SUCCESS)
+        plan->failureReason =
+          "preference-create status=" + Global::intToString((int)status);
+    }
     const uint64_t maxWorkspaceBytes = workspaceCapacity();
-    if(status == CUBLAS_STATUS_SUCCESS)
+    if(status == CUBLAS_STATUS_SUCCESS) {
       status = cublasLtMatmulPreferenceSetAttribute(
         preference,
         CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
         &maxWorkspaceBytes,
         sizeof(maxWorkspaceBytes)
       );
+      if(status != CUBLAS_STATUS_SUCCESS)
+        plan->failureReason =
+          "preference-workspace status=" + Global::intToString((int)status);
+    }
 
     const int requestedAlgoCount = 16;
     vector<cublasLtMatmulHeuristicResult_t> heuristics(requestedAlgoCount);
     int returnedAlgoCount = 0;
-    if(status == CUBLAS_STATUS_SUCCESS)
-      status = cublasLtMatmulAlgoGetHeuristic(
-        handle,
-        plan->operationDesc,
-        plan->aDesc,
-        plan->bDesc,
-        plan->cDesc,
-        plan->cDesc,
-        preference,
-        requestedAlgoCount,
-        heuristics.data(),
-        &returnedAlgoCount
-      );
+    if(status == CUBLAS_STATUS_SUCCESS) {
+      if(explicitConfig != nullptr) {
+        if(initializeExplicitAlgo(
+             *explicitConfig,plan->operationDesc,plan->aDesc,plan->bDesc,
+             plan->cDesc,heuristics[0],plan->failureReason))
+          returnedAlgoCount = 1;
+        else
+          status = CUBLAS_STATUS_NOT_SUPPORTED;
+      }
+      else {
+        status = cublasLtMatmulAlgoGetHeuristic(
+          handle,
+          plan->operationDesc,
+          plan->aDesc,
+          plan->bDesc,
+          plan->cDesc,
+          plan->cDesc,
+          preference,
+          requestedAlgoCount,
+          heuristics.data(),
+          &returnedAlgoCount
+        );
+        if(status != CUBLAS_STATUS_SUCCESS)
+          plan->failureReason =
+            "get-heuristic status=" + Global::intToString((int)status);
+      }
+    }
+    plan->heuristicCount = returnedAlgoCount;
     if(preference != NULL)
       cublasLtMatmulPreferenceDestroy(preference);
 
@@ -167,6 +613,7 @@ struct Sm120Model::LtMatmulState {
       CUDA_ERR("Sm120Model cuBLASLt tune stop event", cudaEventCreate(&stop));
 
       float bestUs = numeric_limits<float>::infinity();
+      cublasStatus_t lastCandidateStatus = CUBLAS_STATUS_SUCCESS;
       const int timingIterations = 8;
       for(int i = 0; i < returnedAlgoCount; i++) {
         if(heuristics[i].state != CUBLAS_STATUS_SUCCESS ||
@@ -191,8 +638,10 @@ struct Sm120Model::LtMatmulState {
           heuristics[i].workspaceSize,
           stream
         );
-        if(status != CUBLAS_STATUS_SUCCESS)
+        if(status != CUBLAS_STATUS_SUCCESS) {
+          lastCandidateStatus = status;
           continue;
+        }
 
         CUDA_ERR("Sm120Model cuBLASLt tune record start", cudaEventRecord(start,stream));
         bool launchSucceeded = true;
@@ -216,6 +665,7 @@ struct Sm120Model::LtMatmulState {
             stream
           );
           if(status != CUBLAS_STATUS_SUCCESS) {
+            lastCandidateStatus = status;
             launchSucceeded = false;
             break;
           }
@@ -231,12 +681,45 @@ struct Sm120Model::LtMatmulState {
           bestUs = averageUs;
           plan->algo = heuristics[i].algo;
           plan->workspaceBytes = heuristics[i].workspaceSize;
+          plan->heuristicRank = i + 1;
+          plan->measuredUs = averageUs;
+          plan->wavesCount = heuristics[i].wavesCount;
           plan->valid = true;
         }
       }
 
       cudaEventDestroy(stop);
       cudaEventDestroy(start);
+
+      if(!plan->valid && plan->failureReason.empty())
+        plan->failureReason =
+          "no-runnable-heuristic returned=" +
+          Global::intToString(returnedAlgoCount) +
+          " lastStatus=" + Global::intToString((int)lastCandidateStatus);
+    }
+    else if(status == CUBLAS_STATUS_SUCCESS && returnedAlgoCount == 0 &&
+            plan->failureReason.empty())
+      plan->failureReason = "no-heuristics-returned";
+
+    if(plan->valid) {
+      plan->cublasLtVersion = cublasLtGetVersion();
+      plan->identity = getAlgoIdentity(plan->algo);
+      if(explicitConfig != nullptr &&
+         !algoIdentityMatchesExplicitConfig(plan->identity,*explicitConfig)) {
+        plan->valid = false;
+        plan->failureReason =
+          "explicit tuple readback mismatch tactic=" +
+          string(explicitConfig->tactic) +
+          " actual={id=" + Global::intToString(plan->identity.algoId) +
+          ",tile=" + Global::uint64ToString(plan->identity.tileId) +
+          ",splitK=" + Global::intToString(plan->identity.splitK) +
+          ",reduction=" + Global::uint64ToString(plan->identity.reductionScheme) +
+          ",swizzle=" + Global::uint64ToString(plan->identity.ctaSwizzling) +
+          ",custom=" + Global::uint64ToString(plan->identity.customOption) +
+          ",stages=" + Global::uint64ToString(plan->identity.stagesId) +
+          ",inner=" + Global::uint64ToString(plan->identity.innerShapeId) +
+          ",cluster=" + Global::uint64ToString(plan->identity.clusterShapeId) + "}";
+      }
     }
 
     Plan* result = plan.get();
@@ -280,6 +763,23 @@ Options parseOptions(ConfigParser& cfg) {
   o.useFusedResidual = getBoolOpt(cfg, "cudaUseFusedResidual", false);
   o.useFusedResidualGemm = getBoolOpt(cfg, "cudaUseFusedResidualGemmSm120", false);
   o.useProjectionGemmLt = getBoolOpt(cfg, "cudaUseProjectionGemmLt", false);
+  o.projectionGemmLtTacticSm103 =
+    cfg.contains("cudaProjectionGemmLtTacticSm103") ?
+    cfg.getString("cudaProjectionGemmLtTacticSm103") :
+    Sm103B29ProjectionGemmLtAutotuneTactic;
+  if(o.projectionGemmLtTacticSm103 != Sm103B29ProjectionGemmLtAutotuneTactic &&
+     o.projectionGemmLtTacticSm103 != Sm103B29ProjectionGemmLtId70Tactic &&
+     o.projectionGemmLtTacticSm103 != Sm103B29ProjectionGemmLtId71DiagnosticTactic)
+    throw StringError(
+      "cudaProjectionGemmLtTacticSm103 must be autotune, " +
+      string(Sm103B29ProjectionGemmLtId70Tactic) + ", or " +
+      Sm103B29ProjectionGemmLtId71DiagnosticTactic
+    );
+  if(!o.useProjectionGemmLt &&
+     o.projectionGemmLtTacticSm103 != Sm103B29ProjectionGemmLtAutotuneTactic)
+    throw StringError(
+      "cudaProjectionGemmLtTacticSm103 requires cudaUseProjectionGemmLt=true"
+    );
   o.useLinear2ResidualAot = getBoolOpt(cfg, "cudaUseLinear2ResidualAot", false);
   o.useOutProjectionResidualAot = getBoolOpt(cfg, "cudaUseOutProjectionResidualAot", false);
   o.outProjectionAotTacticExplicit = cfg.contains("cudaOutProjectionAotTacticSm120");
@@ -947,7 +1447,9 @@ Sm120Model::Sm120Model(
     }
   }
   if(options.useProjectionGemmLt)
-    ltMatmulState = make_unique<LtMatmulState>();
+    ltMatmulState = make_unique<LtMatmulState>(
+      options.portableSm103Adapter ? options.projectionGemmLtTacticSm103 :
+      Sm103B29ProjectionGemmLtAutotuneTactic);
   if((options.usePersistingL2Trunk || options.usePersistingL2Inner) &&
      nnXLen == 19 && nnYLen == 19 &&
      useFP16 && useNHWC && desc->trunk.trunkNumChannels == 768) {
@@ -1338,10 +1840,54 @@ bool Sm120Model::matMulLt(
      nnXLen != 19 || nnYLen != 19 || matBatchSize <= 0)
     return false;
 
+  const bool strictSm103B29Contract =
+    options.portableSm103Adapter && options.useProjectionGemmLt &&
+    maxBatchSize == Sm103B29BatchSize && inputsUseNHWC && useFP16 && useNHWC;
+  const Sm103B29ProjectionGemmLtShapeKind strictShapeKind =
+    classifySm103B29ProjectionGemmLtShape(
+      outChannels,matBatchSize,inChannels);
+  const bool explicitSm103B29QKVTactic =
+    strictSm103B29Contract &&
+    ltMatmulState->qkvTactic != Sm103B29ProjectionGemmLtAutotuneTactic;
+  if(strictSm103B29Contract &&
+     strictShapeKind == Sm103B29ProjectionGemmLtShapeKind::Unsupported)
+    throw StringError(
+      "SM103 B29 cuBLASLt MatMul received unexpected FP16 shape (m,n,k)=(" +
+      Global::intToString(outChannels) + "," +
+      Global::intToString(matBatchSize) + "," +
+      Global::intToString(inChannels) +
+      "); expected exactly initial-global (768,29,19) or QKV (384,10469,384)"
+    );
+  // Explicit production/diagnostic candidates pin only the hot QKV shape.
+  // Keep the tiny initial-global call on legacy Hgemm so its independently
+  // drifting autotuned identity cannot contaminate performance or accuracy.
+  if(explicitSm103B29QKVTactic &&
+     strictShapeKind == Sm103B29ProjectionGemmLtShapeKind::InitialGlobal)
+    return false;
+
   LtMatmulState::Plan* plan = ltMatmulState->getOrCreatePlan(
     outChannels, matBatchSize, inChannels, weights, input, output, stream);
-  if(plan == NULL || !plan->valid)
+  if(plan == NULL || !plan->valid) {
+    if(strictSm103B29Contract)
+      throw StringError(
+        "SM103 B29 cuBLASLt MatMul plan creation failed for " +
+        string(sm103B29ProjectionGemmLtShapeName(strictShapeKind)) +
+        " shape (m,n,k)=(" + Global::intToString(outChannels) + "," +
+        Global::intToString(matBatchSize) + "," +
+        Global::intToString(inChannels) + "): " +
+        (plan == NULL ? string("null plan") : plan->failureReason)
+      );
     return false;
+  }
+  if(strictSm103B29Contract && !plan->identity.complete)
+    throw StringError(
+      "SM103 B29 cuBLASLt MatMul algorithm identity unavailable for " +
+      string(sm103B29ProjectionGemmLtShapeName(strictShapeKind)) +
+      " shape (m,n,k)=(" + Global::intToString(outChannels) + "," +
+      Global::intToString(matBatchSize) + "," +
+      Global::intToString(inChannels) + "): " +
+      plan->identity.unavailableReason
+    );
 
   const __half alpha = __float2half(1.0f);
   const __half beta = __float2half(0.0f);
@@ -1363,8 +1909,65 @@ bool Sm120Model::matMulLt(
     plan->workspaceBytes,
     stream
   );
-  if(status != CUBLAS_STATUS_SUCCESS)
+  if(status != CUBLAS_STATUS_SUCCESS) {
+    if(strictSm103B29Contract)
+      throw StringError(
+        "SM103 B29 cuBLASLt MatMul launch failed for " +
+        string(sm103B29ProjectionGemmLtShapeName(strictShapeKind)) +
+        " shape (m,n,k)=(" + Global::intToString(outChannels) + "," +
+        Global::intToString(matBatchSize) + "," +
+        Global::intToString(inChannels) + ") status=" +
+        Global::intToString((int)status)
+      );
     return false;
+  }
+
+  if(!plan->loggedSuccessfulUse && logger != NULL) {
+    ostringstream message;
+    message << "shape-keyed autotuned cuBLASLt FP16 MatMul plan active"
+            << " contractShape="
+            << sm103B29ProjectionGemmLtShapeName(strictShapeKind)
+            << " m=" << outChannels
+            << " n=" << matBatchSize
+            << " k=" << inChannels
+            << " selectionTactic=" << plan->selectionTactic
+            << " handle=0x" << hex
+            << reinterpret_cast<uintptr_t>(ltMatmulState.get())
+            << " stream=0x" << reinterpret_cast<uintptr_t>(stream) << dec
+            << " heuristicRank=" << plan->heuristicRank
+            << " heuristicCount=" << plan->heuristicCount
+            << " measuredUs=" << fixed << setprecision(6) << plan->measuredUs
+            << " wavesCount=" << plan->wavesCount
+            << " workspaceBytes=" << plan->workspaceBytes
+            << " cublasLtVersion=" << plan->cublasLtVersion;
+    if(plan->identity.complete) {
+      message << " algoConfig={id=" << plan->identity.algoId
+              << ",tileId=" << plan->identity.tileId
+              << ",splitK=" << plan->identity.splitK
+              << ",reductionScheme=" << plan->identity.reductionScheme
+              << ",ctaSwizzling=" << plan->identity.ctaSwizzling
+              << ",customOption=" << plan->identity.customOption
+              << ",stagesId=" << plan->identity.stagesId
+              << ",innerShapeId=" << plan->identity.innerShapeId
+              << ",clusterShapeId=" << plan->identity.clusterShapeId << "}"
+              << " algoCap={numericalImplFlags=0x" << hex
+              << plan->identity.numericalImplFlags << dec
+              << ",minAlignmentABytes=" << plan->identity.minAlignmentABytes
+              << ",minAlignmentBBytes=" << plan->identity.minAlignmentBBytes
+              << ",minAlignmentCBytes=" << plan->identity.minAlignmentCBytes
+              << ",minAlignmentDBytes=" << plan->identity.minAlignmentDBytes
+              << "}";
+    }
+    else {
+      // Native SM120 preserves its historical fallback/launch semantics when
+      // a runtime cannot expose an identity attribute. Never print fabricated
+      // numeric sentinels as if they were a complete algorithm identity.
+      message << " algoIdentity=unavailable reason={"
+              << plan->identity.unavailableReason << "}";
+    }
+    logger->write(logMessage(message.str()));
+    plan->loggedSuccessfulUse = true;
+  }
 
   if(!loggedProjectionGemmLt) {
     if(logger != NULL)
