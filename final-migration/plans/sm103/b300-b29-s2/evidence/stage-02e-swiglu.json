@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-incremental-tactic-evidence",
+  "stage": "02e",
+  "tactic": "swiglu_c1152_half8",
+  "status": "retained",
+  "config_delta": {
+    "cudaUseSwiGLU1152Sm120": true
+  },
+  "incumbent": {
+    "name": "affine_silu_half2",
+    "samples_nn_evals_per_sec": [
+      6712.092932,
+      6763.835599
+    ],
+    "median_nn_evals_per_sec": 6737.9642655
+  },
+  "challenger": {
+    "discarded_clock_warmup_sample": 7029.499573,
+    "samples_nn_evals_per_sec": [
+      7150.536082,
+      7149.647579
+    ],
+    "median_nn_evals_per_sec": 7150.0918305,
+    "relative_spread": 0.00012426455786331995,
+    "gain_percent": 6.11649971357362
+  },
+  "measurement": {
+    "batch": 29,
+    "streams": 2,
+    "iterations_per_sample": 1000,
+    "warmup_iterations": [
+      80,
+      200
+    ],
+    "measurement_binary_sha256": "b514d85c5e4d8b33dc0ab2eb26a26030d199d6a5d53a1c48b6b66c21bb3f8738",
+    "clean_split_binary_sha256": "a00157f08a37b91bbf12956d36f6c92fae06f7d9a0856d614a6a38499e7b0625",
+    "clean_split_short_nn_evals_per_sec": 7139.41769
+  },
+  "activation_marker": "SM103 portable backend: contiguous half8 C1152 SwiGLU active",
+  "whole_graph_attribution": {
+    "official_kernel_instances": 4026,
+    "official_kernel_total_ns": 137043318,
+    "portable_kernel_instances": 4026,
+    "portable_kernel_total_ns": 116029728,
+    "kernel_speedup": 1.1811052250333638,
+    "portable_kernel": "Sm120Backend::swiGLU1152Half8Kernel"
+  },
+  "final_accumulated_accuracy": {
+    "rows": 8192,
+    "replay_sha256": "8a62462357c81cc6c50974a95b31d47f8dfd62ee3eadf9ee923392dba6942d22",
+    "comparison_sha256": "5745c12600a64995b5ac47bbe12ffebd74b2b7eb46f288c4c1086d22ad4a0f0c",
+    "policy_top1_vs_fp32": 0.9979248046875,
+    "policy_probability_rmse": 0.00009608553227735683,
+    "value_outcome_rmse": 0.0021319063380360603,
+    "score_mean_rmse": 0.0018199598416686058,
+    "ownership_sigmoid_rmse": 0.00023663377214688808,
+    "minimum_request_error_ratio_to_trt16": 0.7202852679370555,
+    "maximum_request_error_ratio_to_trt16": 1.096872168640191,
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true
+  },
+  "comparison_to_tensorrt": {
+    "tensorrt_median_nn_evals_per_sec": 6733.719141,
+    "portable_median_nn_evals_per_sec": 7150.0918305,
+    "gain_percent": 6.183398516947447
+  },
+  "retained": true
+}
