@@ -55,6 +55,8 @@ Options parseOptions(ConfigParser& cfg) {
     cfg.getString("cudaSm103DualFFNTactic") : "disabled";
   options.attentionTactic = cfg.contains("cudaSm103AttentionTactic") ?
     cfg.getString("cudaSm103AttentionTactic") : "disabled";
+  options.qkvAuxTactic = cfg.contains("cudaSm103QKVAuxTactic") ?
+    cfg.getString("cudaSm103QKVAuxTactic") : "disabled";
   options.allowOfficialForwardScaffold =
     getBoolOpt(cfg, "cudaSm103AllowOfficialForwardScaffold", false);
   if(options.allowOfficialForwardScaffold && !options.enabled)
@@ -73,6 +75,14 @@ Options parseOptions(ConfigParser& cfg) {
     throw StringError(
       "cudaSm103AttentionTactic requires cudaSm103Backend=true"
     );
+  if(options.qkvAuxTactic != "disabled" && !options.enabled)
+    throw StringError(
+      "cudaSm103QKVAuxTactic requires cudaSm103Backend=true"
+    );
+  if(options.qkvAuxTactic != "disabled" && !options.reusePortableTactics)
+    throw StringError(
+      "cudaSm103QKVAuxTactic requires cudaSm103ReusePortableTactics=true"
+    );
   if(options.dualFfnTactic != "disabled" &&
      options.dualFfnTactic != CudnnOssB29NoAb12FfnTactic)
     throw StringError(
@@ -84,6 +94,12 @@ Options parseOptions(ConfigParser& cfg) {
     throw StringError(
       string("cudaSm103AttentionTactic must be disabled or ") +
       Fa4Sm103B29AttentionTactic
+    );
+  if(options.qkvAuxTactic != "disabled" &&
+     options.qkvAuxTactic != B29QKVAuxTactic)
+    throw StringError(
+      string("cudaSm103QKVAuxTactic must be disabled or ") +
+      B29QKVAuxTactic
     );
   return options;
 }

@@ -734,3 +734,63 @@ Median is `9058.808862`, spread `0.414%`, `+1.226%` over Stage 06 and
 `+34.529%` over fixed TRT 10.16. Complete configuration identities, auto-drift
 evidence, profiler reports, replay hashes, and long samples are recorded in
 `stage-07-cublaslt-qkv.json`.
+
+## Stage 08 — id70 Q/K/V auxiliary-stream dependency DAG
+
+Status: retained; cumulative on Stage 07 explicit id70, native FA4, and the
+no-AB12 fused FFN.
+
+The queue-depth audit had already disproved a host-window explanation: each
+outer stream stays about 1024 descriptors and 17.45 ms ahead, but same-stream
+FIFO normally leaves only the two stream heads dependency-ready. Stage 08
+therefore changes the DAG without changing a single GEMM algorithm. After
+pre-RMS the primary stream records one ready event; Q retains the Stage 07
+primary id70 state while K and V use two persistent nonblocking aux streams,
+two independent cuBLASLt handles/plans, and private workspaces. K/V record
+done events and the primary waits both before the existing RoPE and FA4.
+Every one of the three plans logs the complete id70/tile23/stages35/cluster5
+tuple and zero algorithm workspace bytes.
+
+The first full replay found a real lifetime bug that short benchmark processes
+could not expose. `replaynn` constructs and destroys a two-handle warmup
+evaluator, then creates a second output evaluator in the same process. C++
+reverse member destruction originally unloaded `Sm103Model`'s native FA4
+module before `Sm120Model` synchronized and destroyed the aux streams. Both a
+normal replay and `CUDA_LAUNCH_BLOCKING=1` consequently failed in generation
+two with FA4 `LAUNCH_FAILED (-4)`. `ComputeHandle::~ComputeHandle` now makes
+the device current and calls an explicit `noexcept` synchronization of both
+aux streams before reverse destruction can unload FA4. Both synchronize
+statuses are checked directly and failure uses `Global::fatalError`, so no
+exception can escape the destructor. No FA4 bridge change and no CUDA error
+clearing were used. The same 8192-row replay then completed; the
+source-contract test pins this ordering, the `noexcept` fatal path, and every
+direct Lt/event API check.
+
+The same-binary 50-warmup/300-iteration A-B-B-A measured controls
+`9043.339415/9032.061925` and aux
+`9178.690707/9258.774635` nnEval/s, a center gain of `2.003%`. NSYS proves
+that this is scheduling, not less work. Across the last 50 forwards on each
+outer stream, both graphs launch exactly 40,596 kernels and exactly 9,900 QKV
+kernels. K/V move as 1650 kernels onto each of four aux streams. Candidate
+minus control has exactly 9900 event records and 13,200 waits: three records
+and four waits for each of 3300 attention boundaries. Kernel sum changes only
+`526.993 -> 525.009 ms`, while union falls `331.831 -> 322.454 ms`
+(`-2.826%`) and overlap rises `195.162 -> 202.555 ms` (`+3.787%`). QKV sum
+actually grows `100.438 -> 109.451 ms`, but its union falls
+`90.124 -> 66.377 ms` (`-26.349%`). Full-trace concurrency-depth-at-least-3
+time grows `9.470 -> 30.456 ms`. This closes the ready-frontier hypothesis.
+
+The altered resource schedule is not byte-identical to Stage 07, consistent
+with the known schedule-sensitive accumulated FP16 rounding in this fused
+graph, but the difference is tiny: policy top-1 versus Stage 07 is 100% and
+probability RMSE is `2.866e-6`. Against FP32, policy RMSE remains
+`9.5291e-5`, top-1 remains `99.8291%`, and the maximum TRT16 request ratio is
+the existing ownership value `1.946x`; every 2.25x request and aggregate gate
+passes.
+
+Five locked 200-warmup/1000-iteration B29/S2 samples are
+`9219.883683, 9201.745296, 9255.677664, 9201.663678, 9178.214200` nnEval/s.
+Median is `9201.745296`, spread `0.842%`, `+1.578%` over Stage 07 and
+`+36.652%` over fixed TRT 10.16. Complete DAG accounting, lifecycle
+case-study, profiler, replay, source, and binary hashes are recorded in
+`stage-08-qkv-aux-streams.json`.

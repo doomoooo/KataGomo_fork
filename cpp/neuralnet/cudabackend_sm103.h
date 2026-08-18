@@ -74,6 +74,32 @@ typedef bool (*Sm103AttentionFn)(
   cudaStream_t stream
 );
 
+// Exact B29 Q/K/V fork-join hook. The implementation is owned by the
+// architecture-neutral Sm120Model library adapter because it reuses the
+// already-audited explicit cuBLASLt id70 projection plan. The selector and
+// callback remain SM103-owned so native SM120 and the default CUDA path cannot
+// install the auxiliary-stream DAG accidentally.
+typedef bool (*Sm103QKVAuxFn)(
+  void* ctx,
+  cudaStream_t primaryStream,
+  const void* qWeights,
+  const void* kWeights,
+  const void* vWeights,
+  const void* input,
+  void* qOutput,
+  void* kOutput,
+  void* vOutput,
+  int matBatchSize,
+  int inputChannels,
+  int qChannels,
+  int kChannels,
+  int vChannels,
+  bool usingFP16
+);
+
+inline constexpr const char* B29QKVAuxTactic =
+  "cublaslt-id70-q-primary-kv-aux2-b29";
+
 struct Options {
   // Default-off so the official CUDA baseline on B300 is unchanged.
   bool enabled = false;
@@ -88,6 +114,9 @@ struct Options {
   std::string dualFfnTactic = "disabled";
   // Exact native FA4/CuTe SM103a candidate identifier, or "disabled".
   std::string attentionTactic = "disabled";
+  // Exact B29 Q/K/V dependency-DAG experiment, or "disabled". This changes
+  // only stream topology; all three projections retain the fixed id70 tuple.
+  std::string qkvAuxTactic = "disabled";
   // Wiring tests may opt into an official-forward-only scaffold. Enabling the
   // SM103 backend without this or reusePortableTactics is a startup error.
   bool allowOfficialForwardScaffold = false;

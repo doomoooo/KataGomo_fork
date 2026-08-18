@@ -16,7 +16,7 @@ class Sm103ProjectionGemmLtContractTests(unittest.TestCase):
         ).read_text()
         cls.core = (REPO / "cpp/neuralnet/cudabackend.cpp").read_text()
         begin = cls.source.index("bool Sm120Model::matMulLt(")
-        end = cls.source.index("bool Sm120Model::conv1x1(", begin)
+        end = cls.source.index("bool Sm120Model::sm103QKVAux(", begin)
         cls.matmul = cls.source[begin:end]
 
     def test_default_off_and_native_sm120_fallback_are_preserved(self) -> None:

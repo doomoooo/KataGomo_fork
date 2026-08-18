@@ -1,0 +1,209 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-profiler-guided-retained-optimization",
+  "stage": "08-cublaslt-id70-qkv-aux-stream-dag",
+  "timestamp_utc": "2026-08-18T13:50:49Z",
+  "status": "retained",
+  "production_ready": false,
+  "gpu_serialization": {
+    "wrapper": "final-migration/environment/with-gpu-lock.sh",
+    "gpu": 0,
+    "all_gpu_actions_locked": true
+  },
+  "parent": {
+    "commit": "d40282a2",
+    "stage": "07-explicit-cublaslt-qkv",
+    "median_nn_evals_per_sec": 9058.808862,
+    "qkv_tactic": "b29-qkv-id70-tile23-stages35-cluster5",
+    "algorithm": {
+      "id": 70,
+      "tile_id": 23,
+      "split_k": 1,
+      "reduction_scheme": 0,
+      "cta_swizzling": 0,
+      "custom_option": 0,
+      "stages_id": 35,
+      "inner_shape_id": 0,
+      "cluster_shape_id": 5,
+      "workspace_bytes": 0
+    }
+  },
+  "hypothesis": {
+    "statement": "The host is already about 1024 pending descriptors per outer stream, so a larger submission window cannot expose future same-stream kernels. Forking Q, K, and V after pre-RMS changes the dependency-ready frontier from at most two outer-stream heads to six sibling grids while preserving the exact Stage07 id70 arithmetic.",
+    "scope": "exact B29/CC10.3/19x19/FP16/NHWC trunk Q/K/V only; heads and reduced precision are excluded",
+    "expected_mechanism": "The 126-block, one-SM, 0.85-wave id70 grids cannot co-reside on one SM because each CTA uses 215.04 KiB, but six ready grids give the scheduler more partial-wave packing choices across otherwise-free SMs. Success requires lower interval union, not lower summed kernel work."
+  },
+  "implementation": {
+    "config_key": "cudaSm103QKVAuxTactic",
+    "candidate_id": "cublaslt-id70-q-primary-kv-aux2-b29",
+    "default": "disabled",
+    "startup_contract": "Requires cudaSm103Backend, cudaSm103ReusePortableTactics, exact CC10.3/B29/FP16/NHWC, cudaUseProjectionGemmLt, the complete fixed id70 tuple, and no strided/fused QKV hook.",
+    "ownership": "Each outer ComputeHandle owns one Sm120Model. That model owns two persistent nonblocking aux streams, two independent LtMatmulState objects, two independent cuBLASLt handles and private workspace allocations, plus three timing-disabled events. No resource is shared across outer lanes or K/V branches.",
+    "dag_per_attention": [
+      "primary records pre-RMS-ready",
+      "K and V aux streams wait ready",
+      "Q launches through the retained primary id70 state",
+      "K and V launch through their independent exact-id70 states",
+      "aux streams record K-done and V-done",
+      "primary waits both done events before the existing RoPE and FA4"
+    ],
+    "event_operations_per_attention": {
+      "records": 3,
+      "waits": 4,
+      "total": 7
+    },
+    "numeric_semantics": "All projections retain CUBLAS_COMPUTE_16F, FP16 inputs/outputs, FP16 alpha=1/beta=0, column-major M384/N10469/K384 layouts, the complete id70 tuple, and zero algorithm workspace bytes.",
+    "runtime_error_checks": "Every Lt launch and event API checks its direct return status. The noexcept teardown directly checks both cudaStreamSynchronize return values and uses Global::fatalError on failure; it never throws from a destructor and never reads or clears unrelated thread-local CUDA error state."
+  },
+  "lifetime_root_cause_case_study": {
+    "trigger": "replaynn creates one two-handle warmup evaluator, destroys it, then creates a second two-handle output evaluator in the same process",
+    "initial_result": "The first implementation passed repeated 300-forward benchmarknn processes but both normal and CUDA_LAUNCH_BLOCKING=1 replaynn failed in the second handle generation with SM103 FA4 LAUNCH_FAILED (-4).",
+    "root_cause": "ComputeHandle member destruction is reverse declaration order: Sm103Model was destroyed first and unloaded the native FA4 module; Sm120Model synchronized and destroyed its auxiliary streams only afterward. The primary join was not an acceptable cross-owner teardown proof.",
+    "fix": "ComputeHandle::~ComputeHandle now makes the device current and explicitly calls noexcept Sm120Model::synchronizeSm103QKVAux before member destruction can unload Sm103 FA4. The method directly checks both stream-synchronize statuses and terminates through Global::fatalError on failure, so no exception can escape the implicit-noexcept destructor. Sm120Model still repeats no-throw synchronization during resource cleanup as defense in depth.",
+    "proof": "With no FA4 bridge change and no CUDA error clearing, the same 8192-row two-generation replay completed and wrote 445383368 bytes. All direct Lt/event API checks and both teardown synchronizations passed.",
+    "test_pin": "python/tests/test_sm103_qkv_aux_contract.py asserts that ComputeHandle invokes synchronizeSm103QKVAux in its destructor body before reverse member destruction reaches Sm103Model, and pins noexcept plus fatal handling of both synchronization failures."
+  },
+  "cpu_and_build": {
+    "tests": {
+      "command": ".final-migration-env/venv/bin/python -m unittest python.tests.test_sm103_qkv_aux_contract python.tests.test_sm103_projection_gemm_lt_contract python.tests.test_sm103_workflow",
+      "passed": 32
+    },
+    "build": {
+      "command": ".final-migration-env/venv/bin/cmake --build .final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4 -j2",
+      "status": "passed",
+      "binary": ".final-migration-env/katago-builds/cuda-sm103-cudnn-oss-b29-fa4/katago",
+      "tested_sha256": "44b7927b0e9fdb8ab50b70e5688412f8bd5c32b0d67af621ed9e68ff0a606fc1"
+    }
+  },
+  "activation_proof": {
+    "outer_handles": 2,
+    "primary_plan_markers": 2,
+    "aux_k_plan_markers": 2,
+    "aux_v_plan_markers": 2,
+    "active_markers": 2,
+    "marker": "SM103 portable backend: QKV aux streams active, tactic=cublaslt-id70-q-primary-kv-aux2-b29",
+    "all_plan_markers": "id70/tile23/splitK1/reduction0/swizzle0/custom0/stages35/inner0/cluster5/workspace0"
+  },
+  "short_symmetric": {
+    "method": "same binary, exact B29/S2, 50 warmups and 300 timed forwards, A-B-B-A",
+    "control_samples_nn_evals_per_sec": [9043.339415, 9032.061925],
+    "candidate_samples_nn_evals_per_sec": [9178.690707, 9258.774635],
+    "control_center_nn_evals_per_sec": 9037.70067,
+    "candidate_center_nn_evals_per_sec": 9218.732671,
+    "gain_percent": 2.0030758664
+  },
+  "whole_graph_nsys": {
+    "method": "same final binary; control and aux each use 20 warmups plus 50 timed forwards per outer stream; steady analysis selects the last 50 of exactly 72 initial-convolution markers on each primary stream",
+    "profiled_nn_evals_per_sec": {
+      "control": 8732.351601,
+      "candidate": 8981.431552,
+      "gain_percent": 2.8524
+    },
+    "control_report": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/nsys-final-control.nsys-rep",
+    "control_report_sha256": "7a2e591e0879aecee0041257d3263cfc4d6ebf1f25dc593dec3b4b92bbe7b45a",
+    "candidate_report": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/nsys-final-aux.nsys-rep",
+    "candidate_report_sha256": "a2619bd41e88202c91e303db91a1648ca4d0203d46566e1b14435a5fca306c77",
+    "control_sqlite_sha256": "5a9c7eb96c910307d0f24f1795161ed2261b5dfd86855997615aae535819a959",
+    "candidate_sqlite_sha256": "e0505e7a2b2d9de21b2c710358a53f919242a37b78b4115102b37805cadee79c",
+    "full_trace_including_initial_plan_timing": {
+      "control": {
+        "streams": 2,
+        "kernel_launches": 58494,
+        "kernel_sum_ms": 758.969970,
+        "kernel_union_ms": 478.990202,
+        "kernel_overlap_ms": 279.979768,
+        "time_at_concurrency_depth_at_least_3_ms": 9.469631,
+        "time_at_concurrency_depth_at_least_4_ms": 0.011104
+      },
+      "candidate": {
+        "streams": 6,
+        "kernel_launches": 58530,
+        "kernel_sum_ms": 756.373146,
+        "kernel_union_ms": 466.179477,
+        "kernel_overlap_ms": 290.193669,
+        "time_at_concurrency_depth_at_least_3_ms": 30.455991,
+        "time_at_concurrency_depth_at_least_4_ms": 2.576856
+      },
+      "interpretation": "The 36 extra launches are exactly nine first-plan timing launches for each of four aux Lt states. Full-trace kernel sum falls 0.3422%, union falls 2.6745%, and overlap rises 3.6481%."
+    },
+    "steady_last_50_per_outer_stream": {
+      "control": {
+        "kernel_launches": 40596,
+        "stream_kernel_counts": {"13": 20298, "14": 20298},
+        "kernel_sum_ms": 526.992639,
+        "kernel_union_ms": 331.830691,
+        "kernel_overlap_ms": 195.161948,
+        "qkv_launches": 9900,
+        "qkv_sum_ms": 100.437915,
+        "qkv_union_ms": 90.123675,
+        "qkv_self_overlap_ms": 10.314240,
+        "cuda_event_record_calls": 298,
+        "cuda_stream_wait_event_calls": 0
+      },
+      "candidate": {
+        "kernel_launches": 40596,
+        "stream_kernel_counts": {"13": 16998, "14": 16998, "47": 1650, "48": 1650, "49": 1650, "50": 1650},
+        "kernel_sum_ms": 525.008897,
+        "kernel_union_ms": 322.454127,
+        "kernel_overlap_ms": 202.554770,
+        "qkv_launches": 9900,
+        "qkv_sum_ms": 109.451393,
+        "qkv_union_ms": 66.376698,
+        "qkv_self_overlap_ms": 43.074695,
+        "cuda_event_record_calls": 10198,
+        "cuda_stream_wait_event_calls": 13200
+      },
+      "exact_dag_accounting": "Across 100 forwards there are 3300 attention boundaries. Candidate minus control is exactly 9900 event records (3 per boundary) and 13200 waits (4 per boundary). K/V move exactly 6600 kernels from the two primary streams to four aux streams; launch count remains identical.",
+      "result": "Kernel sum falls 0.3764%, union falls 2.8257%, and overlap rises 3.7870%. QKV summed service grows 8.9741%, but its union falls 26.3493%; the optimization is entirely dependency-DAG scheduling, not a faster GEMM."
+    },
+    "ncu_reuse": "No new NCU run is needed because every runtime marker proves the complete Stage07 id70 tuple and the kernel family is unchanged. Stage07 NCU remains the physical resource proof: grid126/block256/one-SM/0.85 waves/96 registers/215.04 KiB/no spills."
+  },
+  "full_accuracy": {
+    "rows": 8192,
+    "reference": ".final-migration-env/baselines/b300-20260818/cudnn-oss-b29-correctness/reference-fp32.krnn",
+    "candidate": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/aux-id70-b29-final.krnn",
+    "candidate_sha256": "f1b990de7faa6335b537738cea1dddc19de16a23ef0d05b9f7e73171668c3139",
+    "comparison": ".final-migration-env/profiles/sm103-b29/stage-08-qkv-aux/aux-final-vs-fp32.json",
+    "comparison_sha256": "561e27267f9a06a81f6f60815aa1d5409c81cca0fc6501e2283db63083d824f8",
+    "input_and_target_sections_byte_exact": true,
+    "policy_probability_rmse": 0.00009530255920253694,
+    "policy_top1_vs_fp32": 0.998291015625,
+    "value_outcome_rmse": 0.002132061868906021,
+    "score_mean_rmse": 0.001841496559791267,
+    "ownership_sigmoid_rmse": 0.00023371475981548429,
+    "maximum_policy_abs_error": 0.009579360485076904,
+    "maximum_request_ratio_to_trt16": 1.9463556329433207,
+    "request_gate_multiplier": 2.25,
+    "request_gate_passed": true,
+    "aggregate_gate_passed": true,
+    "stage07_comparison": {
+      "comparison_sha256": "f14dde724d58003758468bea20f51da08e023af0108f4deb98229d2589ac3110",
+      "raw_outputs_byte_identical": false,
+      "policy_top1_vs_stage07": 1.0,
+      "policy_probability_rmse_vs_stage07": 0.000002866016302505159,
+      "interpretation": "The arithmetic tuple is unchanged, but the altered resource schedule changes downstream accumulated FP16 rounding in the already-known schedule-sensitive fused graph. The difference is numerically tiny and the fixed FP32/TRT implementation-error gates pass."
+    }
+  },
+  "long_s2": {
+    "warmups": 200,
+    "iterations_per_sample": 1000,
+    "samples_nn_evals_per_sec": [9219.883683, 9201.745296, 9255.677664, 9201.663678, 9178.214200],
+    "median_nn_evals_per_sec": 9201.745296,
+    "relative_spread": 0.008418344728,
+    "gain_vs_stage07_percent": 1.577872281,
+    "gain_vs_tensorrt_10_16_percent": 36.651753709
+  },
+  "source_sha256": {
+    "cudabackend_cpp": "0acf517441ad6876820fd7325c204bca46bad613a3e0697bd3fea1e79491a3f7",
+    "cudabackend_sm103_cpp": "703c899038b5a81c73fca2bb87c19c5dd575e3036e363c9f28e1fb32a32f40cd",
+    "cudabackend_sm103_h": "c3bb62344a3fb22777b30c065dc996d4ec85e51d4cc75b2a9b45e728119a0d2b",
+    "cudabackend_sm120_cpp": "0e1dd49649ffabe5f6588f5355b2ec99181bc9169ec25128767349ea685c0bb0",
+    "cudabackend_sm120_h": "5c8595089d081e90a36997049fa92fe633f9a0dd9e4b7db96ecd4630c1f36571",
+    "source_contract_test": "73759e2ef77a36aace4b5fad6ceaf1ccb08c28807c4551e52aef83db68529a6a"
+  },
+  "decision": {
+    "outcome": "retain",
+    "reason": "The candidate preserves all 9900 steady QKV launches and the fixed id70 kernel, but exposes a six-grid ready frontier. NSYS proves lower QKV and whole-graph union; replay and long testing pass after fixing the cross-owner teardown lifetime bug.",
+    "effective_optimization_commit_required": true
+  }
+}

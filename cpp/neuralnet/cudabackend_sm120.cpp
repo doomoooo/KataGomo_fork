@@ -1,4 +1,5 @@
 #include "../neuralnet/cudabackend_sm120.h"
+#include "../neuralnet/cudabackend_sm103.h"
 #include "../neuralnet/cudabackend_sm120_kernels.h"
 
 #include "../neuralnet/cudaincludes.h"
@@ -728,6 +729,74 @@ struct Sm120Model::LtMatmulState {
   }
 };
 
+// Per-outer-lane persistent resources for the exact SM103 B29 Q/K/V fork.
+// Every ComputeHandle owns one Sm120Model, so neither streams nor cuBLASLt
+// state cross a server-thread boundary. In particular, K and V never share a
+// handle or workspace while their matmuls may execute concurrently.
+struct Sm120Model::Sm103QKVAuxState {
+  cudaStream_t kStream;
+  cudaStream_t vStream;
+  cudaEvent_t readyEvent;
+  cudaEvent_t kDoneEvent;
+  cudaEvent_t vDoneEvent;
+  unique_ptr<LtMatmulState> kLtState;
+  unique_ptr<LtMatmulState> vLtState;
+
+  explicit Sm103QKVAuxState(const string& qkvTactic)
+    : kStream(NULL), vStream(NULL), readyEvent(NULL), kDoneEvent(NULL),
+      vDoneEvent(NULL), kLtState(), vLtState() {
+    try {
+      CUDA_ERR("SM103 QKV aux K stream", cudaStreamCreateWithFlags(
+        &kStream,cudaStreamNonBlocking));
+      CUDA_ERR("SM103 QKV aux V stream", cudaStreamCreateWithFlags(
+        &vStream,cudaStreamNonBlocking));
+      CUDA_ERR("SM103 QKV aux ready event", cudaEventCreateWithFlags(
+        &readyEvent,cudaEventDisableTiming));
+      CUDA_ERR("SM103 QKV aux K-done event", cudaEventCreateWithFlags(
+        &kDoneEvent,cudaEventDisableTiming));
+      CUDA_ERR("SM103 QKV aux V-done event", cudaEventCreateWithFlags(
+        &vDoneEvent,cudaEventDisableTiming));
+      kLtState = make_unique<LtMatmulState>(qkvTactic);
+      vLtState = make_unique<LtMatmulState>(qkvTactic);
+    }
+    catch(...) {
+      cleanup();
+      throw;
+    }
+  }
+
+  ~Sm103QKVAuxState() {
+    cleanup();
+  }
+
+  void cleanup() noexcept {
+    if(kStream != NULL)
+      (void)cudaStreamSynchronize(kStream);
+    if(vStream != NULL)
+      (void)cudaStreamSynchronize(vStream);
+    kLtState.reset();
+    vLtState.reset();
+    if(vDoneEvent != NULL)
+      (void)cudaEventDestroy(vDoneEvent);
+    if(kDoneEvent != NULL)
+      (void)cudaEventDestroy(kDoneEvent);
+    if(readyEvent != NULL)
+      (void)cudaEventDestroy(readyEvent);
+    if(vStream != NULL)
+      (void)cudaStreamDestroy(vStream);
+    if(kStream != NULL)
+      (void)cudaStreamDestroy(kStream);
+    vDoneEvent = NULL;
+    kDoneEvent = NULL;
+    readyEvent = NULL;
+    vStream = NULL;
+    kStream = NULL;
+  }
+
+  Sm103QKVAuxState(const Sm103QKVAuxState&) = delete;
+  Sm103QKVAuxState& operator=(const Sm103QKVAuxState&) = delete;
+};
+
 bool isSm120Arch(int majorComputeCapability, int minorComputeCapability) {
   return majorComputeCapability == 12 && minorComputeCapability == 0;
 }
@@ -999,6 +1068,31 @@ bool applyMatMulLt(
   return self->matMulLt(
     stream, weights, input, output, workspace, workspaceBytes,
     matBatchSize, inChannels, outChannels, usingFP16);
+}
+
+bool applySm103QKVAux(
+  void* ctx,
+  cudaStream_t primaryStream,
+  const void* qWeights,
+  const void* kWeights,
+  const void* vWeights,
+  const void* input,
+  void* qOutput,
+  void* kOutput,
+  void* vOutput,
+  int matBatchSize,
+  int inputChannels,
+  int qChannels,
+  int kChannels,
+  int vChannels,
+  bool usingFP16
+) {
+  Sm120Model* self = static_cast<Sm120Model*>(ctx);
+  if(self == NULL)
+    return false;
+  return self->sm103QKVAux(
+    primaryStream,qWeights,kWeights,vWeights,input,qOutput,kOutput,vOutput,
+    matBatchSize,inputChannels,qChannels,kChannels,vChannels,usingFP16);
 }
 
 bool applyConv1x1(
@@ -1296,6 +1390,7 @@ Sm120Model::Sm120Model(
   loggedFa4AtMaxBatch(false),
   loggedFusedFFN(false),
   loggedProjectionGemmLt(false),
+  loggedSm103QKVAux(false),
   loggedOuterProjectionDown(false),
   loggedOuterProjectionUp(false),
   loggedInitialGlobal(false),
@@ -1450,6 +1545,21 @@ Sm120Model::Sm120Model(
     ltMatmulState = make_unique<LtMatmulState>(
       options.portableSm103Adapter ? options.projectionGemmLtTacticSm103 :
       Sm103B29ProjectionGemmLtAutotuneTactic);
+  if(options.qkvAuxTacticSm103 != "disabled") {
+    if(!options.portableSm103Adapter ||
+       options.qkvAuxTacticSm103 != Sm103Backend::B29QKVAuxTactic ||
+       !options.useProjectionGemmLt || ltMatmulState == NULL ||
+       options.projectionGemmLtTacticSm103 != Sm103B29ProjectionGemmLtId70Tactic ||
+       options.useQKVStrided || options.useWideQKV ||
+       maxBatchSize != Sm103B29BatchSize ||
+       deviceProp.major != 10 || deviceProp.minor != 3)
+      throw StringError(
+        "SM103 QKV aux tactic requires exact B29/CC10.3/FP16/NHWC, "
+        "fixed cuBLASLt id70, and no strided/fused QKV route"
+      );
+    sm103QKVAuxState = make_unique<Sm103QKVAuxState>(
+      options.projectionGemmLtTacticSm103);
+  }
   if((options.usePersistingL2Trunk || options.usePersistingL2Inner) &&
      nnXLen == 19 && nnYLen == 19 &&
      useFP16 && useNHWC && desc->trunk.trunkNumChannels == 768) {
@@ -1499,6 +1609,11 @@ Sm120Model::Sm120Model(
 }
 
 Sm120Model::~Sm120Model() {
+  // Finish and destroy every auxiliary projection before freeing any
+  // model-owned device allocation. The primary stream already contains the
+  // explicit K/V join; synchronizing each aux stream is sufficient to retire
+  // its Lt handle, plan descriptors, and private workspace safely.
+  sm103QKVAuxState.reset();
   if(dualFfnSharedAHandle != NULL)
     katago_destroy_dual_ffn_shared_a_sm120(dualFfnSharedAHandle);
   if(wideHeadProjectionHandle != NULL)
@@ -1542,6 +1657,21 @@ bool Sm120Model::hasPersistingL2Inner() const {
 
 float* Sm120Model::getFullBoardAreaBuf() const {
   return fullBoardAreaBuf;
+}
+
+void Sm120Model::synchronizeSm103QKVAux() noexcept {
+  if(sm103QKVAuxState == NULL)
+    return;
+  const cudaError_t kStatus = cudaStreamSynchronize(sm103QKVAuxState->kStream);
+  if(kStatus != cudaSuccess)
+    Global::fatalError(
+      "SM103 QKV aux K teardown synchronize failed: " +
+      string(cudaGetErrorString(kStatus)));
+  const cudaError_t vStatus = cudaStreamSynchronize(sm103QKVAuxState->vStream);
+  if(vStatus != cudaSuccess)
+    Global::fatalError(
+      "SM103 QKV aux V teardown synchronize failed: " +
+      string(cudaGetErrorString(vStatus)));
 }
 
 void Sm120Model::apply(
@@ -1973,6 +2103,153 @@ bool Sm120Model::matMulLt(
     if(logger != NULL)
       logger->write(logMessage("shape-keyed autotuned cuBLASLt FP16 MatMul active"));
     loggedProjectionGemmLt = true;
+  }
+  return true;
+}
+
+bool Sm120Model::sm103QKVAux(
+  cudaStream_t primaryStream,
+  const void* qWeights,
+  const void* kWeights,
+  const void* vWeights,
+  const void* input,
+  void* qOutput,
+  void* kOutput,
+  void* vOutput,
+  int matBatchSize,
+  int inputChannels,
+  int qChannels,
+  int kChannels,
+  int vChannels,
+  bool usingFP16
+) {
+  if(options.qkvAuxTacticSm103 == "disabled")
+    return false;
+  if(options.qkvAuxTacticSm103 != Sm103Backend::B29QKVAuxTactic ||
+     sm103QKVAuxState == NULL || ltMatmulState == NULL)
+    throw StringError("SM103 B29 QKV aux tactic selected without live resources");
+  if(primaryStream == NULL || qWeights == NULL || kWeights == NULL ||
+     vWeights == NULL || input == NULL || qOutput == NULL ||
+     kOutput == NULL || vOutput == NULL || !usingFP16 ||
+     matBatchSize != Sm103B29Rows || inputChannels != 384 ||
+     qChannels != 384 || kChannels != 384 || vChannels != 384 ||
+     maxBatchSize != Sm103B29BatchSize || nnXLen != 19 || nnYLen != 19 ||
+     !inputsUseNHWC || !useFP16 || !useNHWC)
+    throw StringError(
+      "SM103 B29 QKV aux runtime contract requires exact "
+      "R10469/K384/Q384/K384/V384 FP16 NHWC"
+    );
+
+  Sm103QKVAuxState& aux = *sm103QKVAuxState;
+  CUDA_ERR("SM103 QKV aux record ready", cudaEventRecord(
+    aux.readyEvent,primaryStream));
+  CUDA_ERR("SM103 QKV aux K wait ready", cudaStreamWaitEvent(
+    aux.kStream,aux.readyEvent,0));
+  CUDA_ERR("SM103 QKV aux V wait ready", cudaStreamWaitEvent(
+    aux.vStream,aux.readyEvent,0));
+
+  // Q retains the exact Stage07 primary-state call path.
+  if(!matMulLt(
+       primaryStream,qWeights,input,qOutput,NULL,0,
+       matBatchSize,inputChannels,qChannels,usingFP16))
+    throw StringError("SM103 B29 QKV aux primary Q id70 launch was bypassed");
+
+  const auto launchAuxProjection = [this,input,matBatchSize,inputChannels](
+    LtMatmulState* state,
+    cudaStream_t stream,
+    const char* role,
+    const void* weights,
+    void* output,
+    int outputChannels
+  ) {
+    if(state == NULL ||
+       state->qkvTactic != Sm103B29ProjectionGemmLtId70Tactic)
+      throw StringError(
+        string("SM103 B29 QKV aux ") + role +
+        " does not own the fixed id70 Lt state");
+    LtMatmulState::Plan* plan = state->getOrCreatePlan(
+      outputChannels,matBatchSize,inputChannels,weights,input,output,stream);
+    if(plan == NULL || !plan->valid)
+      throw StringError(
+        string("SM103 B29 QKV aux ") + role +
+        " id70 plan creation failed: " +
+        (plan == NULL ? string("null plan") : plan->failureReason));
+    if(!plan->identity.complete || !plan->explicitSelection ||
+       plan->selectionTactic != Sm103B29ProjectionGemmLtId70Tactic)
+      throw StringError(
+        string("SM103 B29 QKV aux ") + role +
+        " id70 plan identity is incomplete or drifted");
+    if(plan->workspaceBytes != 0)
+      throw StringError(
+        string("SM103 B29 QKV aux ") + role +
+        " id70 unexpectedly requires workspace bytes=" +
+        Global::uint64ToString(plan->workspaceBytes));
+
+    const __half alpha = __float2half(1.0f);
+    const __half beta = __float2half(0.0f);
+    const cublasStatus_t status = cublasLtMatmul(
+      state->handle,
+      plan->operationDesc,
+      &alpha,
+      weights,
+      plan->aDesc,
+      input,
+      plan->bDesc,
+      &beta,
+      output,
+      plan->cDesc,
+      output,
+      plan->cDesc,
+      &plan->algo,
+      state->workspace,
+      plan->workspaceBytes,
+      stream);
+    if(status != CUBLAS_STATUS_SUCCESS)
+      throw StringError(
+        string("SM103 B29 QKV aux ") + role +
+        " id70 launch failed status=" + Global::intToString((int)status));
+
+    if(!plan->loggedSuccessfulUse && logger != NULL) {
+      ostringstream message;
+      message << "QKV aux cuBLASLt FP16 projection active"
+              << " role=" << role
+              << " selectionTactic=" << plan->selectionTactic
+              << " handle=0x" << hex
+              << reinterpret_cast<uintptr_t>(state)
+              << " stream=0x" << reinterpret_cast<uintptr_t>(stream) << dec
+              << " workspaceBytes=" << plan->workspaceBytes
+              << " algoConfig={id=" << plan->identity.algoId
+              << ",tileId=" << plan->identity.tileId
+              << ",splitK=" << plan->identity.splitK
+              << ",reductionScheme=" << plan->identity.reductionScheme
+              << ",ctaSwizzling=" << plan->identity.ctaSwizzling
+              << ",customOption=" << plan->identity.customOption
+              << ",stagesId=" << plan->identity.stagesId
+              << ",innerShapeId=" << plan->identity.innerShapeId
+              << ",clusterShapeId=" << plan->identity.clusterShapeId << "}";
+      logger->write(logMessage(message.str()));
+      plan->loggedSuccessfulUse = true;
+    }
+  };
+
+  launchAuxProjection(
+    aux.kLtState.get(),aux.kStream,"K",kWeights,kOutput,kChannels);
+  CUDA_ERR("SM103 QKV aux record K done", cudaEventRecord(
+    aux.kDoneEvent,aux.kStream));
+  launchAuxProjection(
+    aux.vLtState.get(),aux.vStream,"V",vWeights,vOutput,vChannels);
+  CUDA_ERR("SM103 QKV aux record V done", cudaEventRecord(
+    aux.vDoneEvent,aux.vStream));
+  CUDA_ERR("SM103 QKV aux primary wait K", cudaStreamWaitEvent(
+    primaryStream,aux.kDoneEvent,0));
+  CUDA_ERR("SM103 QKV aux primary wait V", cudaStreamWaitEvent(
+    primaryStream,aux.vDoneEvent,0));
+
+  if(!loggedSm103QKVAux) {
+    if(logger != NULL)
+      logger->write(logMessage(
+        "QKV aux streams active, tactic=" + options.qkvAuxTacticSm103));
+    loggedSm103QKVAux = true;
   }
   return true;
 }

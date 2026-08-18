@@ -326,6 +326,10 @@ struct Options {
   // SM103-only selector: autotune is discovery; explicit B29 choices pin the
   // complete QKV algorithm tuple and leave initial-global on legacy Hgemm.
   std::string projectionGemmLtTacticSm103 = "autotune";
+  // Internal-only SM103 selector copied from Sm103Backend::Options after the
+  // portable adapter has passed its architecture gate. Never parsed as a
+  // native SM120 option.
+  std::string qkvAuxTacticSm103 = "disabled";
   bool useLinear2ResidualAot = false;
   bool useOutProjectionResidualAot = false;
   std::string outProjectionAotTactic = "disabled";
@@ -447,6 +451,24 @@ bool applyMatMulLt(
   int matBatchSize,
   int inChannels,
   int outChannels,
+  bool usingFP16
+);
+
+bool applySm103QKVAux(
+  void* ctx,
+  cudaStream_t primaryStream,
+  const void* qWeights,
+  const void* kWeights,
+  const void* vWeights,
+  const void* input,
+  void* qOutput,
+  void* kOutput,
+  void* vOutput,
+  int matBatchSize,
+  int inputChannels,
+  int qChannels,
+  int kChannels,
+  int vChannels,
   bool usingFP16
 );
 
@@ -652,6 +674,9 @@ class Sm120Model {
   bool hasPersistingL2Trunk() const;
   bool hasPersistingL2Inner() const;
   float* getFullBoardAreaBuf() const;
+  // ComputeHandle calls this before Sm103Model unloads any native module.
+  // It is a no-op unless the exact SM103 QKV aux tactic owns live streams.
+  void synchronizeSm103QKVAux() noexcept;
 
   // Mirrors Model::apply exactly so ComputeHandle can dispatch without touching the official
   // getOutput/benchmarkOutput paths.
@@ -722,6 +747,23 @@ class Sm120Model {
     int matBatchSize,
     int inChannels,
     int outChannels,
+    bool usingFP16
+  );
+
+  bool sm103QKVAux(
+    cudaStream_t primaryStream,
+    const void* qWeights,
+    const void* kWeights,
+    const void* vWeights,
+    const void* input,
+    void* qOutput,
+    void* kOutput,
+    void* vOutput,
+    int matBatchSize,
+    int inputChannels,
+    int qChannels,
+    int kChannels,
+    int vChannels,
     bool usingFP16
   );
 
@@ -914,6 +956,7 @@ class Sm120Model {
   bool loggedFa4AtMaxBatch;
   bool loggedFusedFFN;
   bool loggedProjectionGemmLt;
+  bool loggedSm103QKVAux;
   bool loggedOuterProjectionDown;
   bool loggedOuterProjectionUp;
   bool loggedInitialGlobal;
@@ -966,6 +1009,8 @@ class Sm120Model {
   int wideHeadV1Offset;
   struct LtMatmulState;
   std::unique_ptr<LtMatmulState> ltMatmulState;
+  struct Sm103QKVAuxState;
+  std::unique_ptr<Sm103QKVAuxState> sm103QKVAuxState;
 
 };
 

@@ -379,6 +379,8 @@ struct CudaHandles {
   void* sm103FusedFFNContext;
   Sm103Backend::Sm103AttentionFn sm103Attention;
   void* sm103AttentionContext;
+  Sm103Backend::Sm103QKVAuxFn sm103QKVAux;
+  void* sm103QKVAuxContext;
 
   CudaHandles(int major, int minor, cudaStream_t stream_, bool ownsStreamForTesting_ = false)
     : stream(stream_),
@@ -437,7 +439,9 @@ struct CudaHandles {
       sm103FusedFFN(NULL),
       sm103FusedFFNContext(NULL),
       sm103Attention(NULL),
-      sm103AttentionContext(NULL)
+      sm103AttentionContext(NULL),
+      sm103QKVAux(NULL),
+      sm103QKVAuxContext(NULL)
   {
     if(stream == NULL)
       throw StringError("CudaHandles: external CUDA stream must not be null");
@@ -2256,6 +2260,10 @@ struct TransformerAttentionBlock {
     void* vBuf;
     bool packedQKV = false;
     bool qkvRopeApplied = false;
+    if(cudaHandles->sm103QKVAux != NULL &&
+       cudaHandles->sm120QKVStrided != NULL)
+      throw StringError(
+        "SM103 B29 QKV aux tactic cannot run with a strided/fused QKV hook");
     if(cudaHandles->sm120QKVStrided != NULL) {
       qkvStorage.emplace(
         scratch->allocator,
@@ -2304,9 +2312,30 @@ struct TransformerAttentionBlock {
       qBuf = qStorage->buf;
       kBuf = kStorage->buf;
       vBuf = vStorage->buf;
-      qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf, workspaceBuf, workspaceBytes);
-      kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf, workspaceBuf, workspaceBytes);
-      vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf, workspaceBuf, workspaceBytes);
+      bool usedSm103QKVAux = false;
+      if(cudaHandles->sm103QKVAux != NULL) {
+        usedSm103QKVAux = cudaHandles->sm103QKVAux(
+          cudaHandles->sm103QKVAuxContext,
+          cudaHandles->stream,
+          qProj.matBuf,
+          kProj.matBuf,
+          vProj.matBuf,
+          trunkScratchBuf,
+          qBuf,
+          kBuf,
+          vBuf,
+          matBatchSize,
+          inChannels,
+          qTotalDim,
+          kTotalDim,
+          vTotalDim,
+          usingFP16);
+      }
+      if(!usedSm103QKVAux) {
+        qProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, qBuf, workspaceBuf, workspaceBytes);
+        kProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, kBuf, workspaceBuf, workspaceBytes);
+        vProj.apply(cudaHandles, scratch, matBatchSize, trunkScratchBuf, vBuf, workspaceBuf, workspaceBytes);
+      }
     }
 
 #ifdef DEBUG_INTERMEDIATE_VALUES
@@ -4372,6 +4401,25 @@ struct ComputeHandle {
     if(sm103PortableTacticsActive)
       activeSm120Options =
         Sm120Backend::makeSm103PortableOptions(context->sm120Options);
+    if(sm103PortableTacticsActive)
+      activeSm120Options.qkvAuxTacticSm103 =
+        context->sm103Options.qkvAuxTactic;
+    if(context->sm103Options.qkvAuxTactic != "disabled") {
+      if(!sm103PortableTacticsActive ||
+         !activeSm120Options.useProjectionGemmLt ||
+         activeSm120Options.projectionGemmLtTacticSm103 !=
+           "b29-qkv-id70-tile23-stages35-cluster5")
+        throw StringError(
+          "cudaSm103QKVAuxTactic requires exact fixed QKV cuBLASLt id70 "
+          "(cudaUseProjectionGemmLt=true and "
+          "cudaProjectionGemmLtTacticSm103="
+          "b29-qkv-id70-tile23-stages35-cluster5)"
+        );
+      if(activeSm120Options.useQKVStrided || activeSm120Options.useWideQKV)
+        throw StringError(
+          "cudaSm103QKVAuxTactic rejects simultaneous strided/fused QKV"
+        );
+    }
     const bool sm120HookOwnerActive =
       nativeSm120BackendActive || sm103PortableTacticsActive;
     // Must be set before building the model: ConvLayer reads it at construction to pick the 1x1 conv path.
@@ -4446,6 +4494,10 @@ struct ComputeHandle {
         cudaHandles->sm120MatMul = &Sm120Backend::applyMatMulLt;
         cudaHandles->sm120MatMulContext = sm120Model.get();
       }
+      if(activeSm120Options.qkvAuxTacticSm103 != "disabled") {
+        cudaHandles->sm103QKVAux = &Sm120Backend::applySm103QKVAux;
+        cudaHandles->sm103QKVAuxContext = sm120Model.get();
+      }
       if(activeSm120Options.outerProjectionDownTactic != "disabled" ||
          activeSm120Options.outerProjectionUpTactic != "disabled") {
         cudaHandles->sm120Conv1x1 = &Sm120Backend::applyConv1x1;
@@ -4513,6 +4565,12 @@ struct ComputeHandle {
     // All following members own device resources, so destroy them with their
     // device current even when the scheduler thread last touched another GPU.
     (void)cudaSetDevice(gpuIdx);
+    // Member destruction runs Sm103Model before Sm120Model. Retire the
+    // SM120-owned auxiliary Q/K/V streams explicitly before Sm103Model can
+    // unload the native FA4 module, and surface any asynchronous aux failure
+    // at its real lifetime boundary instead of letting FA4 observe it later.
+    if(sm120Model != nullptr)
+      sm120Model->synchronizeSm103QKVAux();
     if(eventPipelineGraphExec != NULL) {
       cudaStreamSynchronize(cudaHandles->stream);
       cudaGraphExecDestroy(eventPipelineGraphExec);
