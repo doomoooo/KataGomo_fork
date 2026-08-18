@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-scheduler-window-and-qkv-aux-stream-plan",
+  "timestamp_utc": "2026-08-18T11:43:05Z",
+  "status": "cpu_only_design_no_core_change_no_gpu_run",
+  "scope": {
+    "included": "B29/CC10.3 trunk Q/K/V projections only",
+    "excluded": [
+      "policy and value heads",
+      "changing MatMul FP16 arithmetic",
+      "changing Q/K/V buffers or layouts",
+      "FA4 implementation files",
+      "GPU execution before coordinator authorization"
+    ]
+  },
+  "source_trace": {
+    "nsys_report": ".final-migration-env/profiles/sm103-b29/stage-03-no-ab12/full-graph.nsys-rep",
+    "nsys_report_sha256": "853e7f8dc8907e863b82fae203de6c321a4341bf2102dbb9415a07891d101306",
+    "sqlite": ".final-migration-env/profiles/sm103-b29/stage-03-no-ab12/full-graph.sqlite",
+    "sqlite_sha256": "4d32b244218701aaffef2b78e821e38388d791d27bc88d6a71f1b1421a3d4939",
+    "kernel_events": 49540,
+    "streams": [
+      {
+        "stream_id": 13,
+        "kernel_events": 24770,
+        "priority": 0,
+        "runtime_flag": 2
+      },
+      {
+        "stream_id": 14,
+        "kernel_events": 24770,
+        "priority": 0,
+        "runtime_flag": 2
+      }
+    ]
+  },
+  "submission_window_method": {
+    "join": "Join CUPTI_ACTIVITY_KIND_KERNEL to CUPTI_ACTIVITY_KIND_RUNTIME by correlationId in this single-process/single-context trace.",
+    "lead_sql": "SELECT k.start-r.end AS lead_ns, k.streamId FROM CUPTI_ACTIVITY_KIND_KERNEL k JOIN CUPTI_ACTIVITY_KIND_RUNTIME r ON r.correlationId=k.correlationId ORDER BY k.start;",
+    "pending_descriptor_definition": "At each ordered kernel start t, count matched launch APIs whose runtime end is <=t, subtract the number of kernels whose GPU start is <=t. Compute the same order statistic per stream by first filtering the matched kernel rows by k.streamId.",
+    "order_statistics": "Median uses the midpoint for an even count. p90 and p99 use the sorted value at floor(p*N).",
+    "important_limit": "This counts submitted-but-not-started launch descriptors. It does not show that those grids are dependency-ready and it must not be described as 1024 ready kernels."
+  },
+  "submission_window_result": {
+    "launch_api_to_gpu_start_lead_microseconds": {
+      "minimum": -6.193,
+      "median": 17447.6655,
+      "p90": 17757.78,
+      "p99": 17859.567,
+      "maximum": 17916.48,
+      "negative_minimum_note": "A few microseconds of profiler timestamp skew occur at the leading edge; the stable distribution is strongly positive."
+    },
+    "submitted_not_started_descriptors": {
+      "global_median": 2032,
+      "global_p90": 2041,
+      "global_p99": 2048,
+      "global_maximum": 2048,
+      "stream_13_median": 1016,
+      "stream_13_p90": 1020,
+      "stream_13_p99": 1024,
+      "stream_13_maximum": 1024,
+      "stream_14_median": 1016,
+      "stream_14_p90": 1020,
+      "stream_14_p99": 1024,
+      "stream_14_maximum": 1024
+    },
+    "root_cause_conclusion": "The host already keeps roughly 1024 pending kernel descriptors per outer stream and is about 17.45 ms ahead of GPU execution. Enlarging the CPU submission window cannot remove the observed phase problem. Same-stream FIFO edges keep future descriptors non-ready; with two serial outer streams the scheduler normally sees only the two stream heads as dependency-ready grids. A useful experiment must change the dependency DAG, not merely enqueue farther ahead."
+  },
+  "current_qkv_boundary": {
+    "call_chain": "TransformerAttentionBlock::apply runs preLN, then qProj.apply, kProj.apply, and vProj.apply on CudaHandles::stream with the one CudaHandles::cublas handle, then fused planar Q/K RoPE.",
+    "shape": {
+      "batch": 29,
+      "sequence": 361,
+      "mat_batch_rows": 10469,
+      "input_channels": 384,
+      "q_channels": 384,
+      "k_channels": 384,
+      "v_channels": 384,
+      "precision": "FP16",
+      "layout": "existing planar Q, K, V buffers"
+    },
+    "profile_cardinality": {
+      "forwards_per_stream": 61,
+      "attention_blocks_per_forward": 33,
+      "qkv_gemms_per_forward_per_stream": 99,
+      "qkv_gemm_events_both_streams": 12078
+    },
+    "projection_kernel": {
+      "grid": [6, 42, 1],
+      "grid_ctas": 252,
+      "block": [256, 1, 1],
+      "registers_per_thread": 71,
+      "dynamic_shared_memory_bytes": 231424,
+      "shared_memory_executed_bytes": 233472,
+      "device_sms": 148,
+      "family": "cuBLAS CUTLASS SM100 128x256x64 2-SM cluster FP16 GEMM",
+      "co_residency": "The executed shared-memory allocation consumes the full 233472 B/SM, so another CTA cannot co-reside on the same SM. Concurrency can only distribute clusters over otherwise-free SMs or fill partial-wave tails."
+    },
+    "observed_role_duration_ns": {
+      "stream_13": {
+        "q_average": 8763.771982116245,
+        "k_average": 9423.113263785395,
+        "v_average": 9707.67958271237,
+        "qkv_boundary_span_average": 40591.95429706905,
+        "qkv_boundary_span_median": 39585
+      },
+      "stream_14": {
+        "q_average": 8737.848484848484,
+        "k_average": 9812.857923497268,
+        "v_average": 10752.769498261301,
+        "qkv_boundary_span_average": 36621.77247888724,
+        "qkv_boundary_span_median": 34720
+      }
+    },
+    "qkv_only_timeline": {
+      "summed_kernel_microseconds": 115139.656,
+      "union_microseconds": 108111.019,
+      "sum_minus_union_microseconds": 7028.637,
+      "fraction_of_qkv_busy_time_with_two_or_more_intervals": 0.0649986381129198,
+      "cross_outer_stream_interval_intersection_microseconds": 4357.253
+    }
+  },
+  "aux_stream_hypothesis": {
+    "topology_per_outer_lane": [
+      "Record one preLN-ready event on the primary stream.",
+      "Make two persistent nonblocking auxiliary streams wait on preLN-ready.",
+      "Launch Q on the existing primary cuBLAS handle, K on auxiliary handle 0, and V on auxiliary handle 1.",
+      "Record K-done and V-done timing-disabled events on their auxiliary streams.",
+      "Make the primary stream wait on both done events before the existing RoPE launch."
+    ],
+    "ready_frontier": {
+      "current_at_qkv": "At most Q from each outer lane is dependency-ready initially: two ready grids. K and V descriptors can already be pending, but FIFO makes them non-ready.",
+      "candidate_at_qkv": "Q, K, and V become sibling nodes after preLN: up to three ready grids per lane and six across B29/S2. RoPE remains blocked behind the explicit join.",
+      "meaning": "This exposes a wider dependency-ready frontier to the GPU scheduler. It does not ask the scheduler to violate stream order and does not make the six resource-exclusive CTAs co-resident on one SM."
+    },
+    "idealized_cluster_wave_bound": {
+      "assumptions": "Use the observed 252-CTA 2-SM-cluster family, 148 SMs, equal projection work, and perfect packing across all six simultaneously-ready grids.",
+      "clusters_per_grid": 126,
+      "clusters_per_wave": 74,
+      "strict_grid_by_grid_waves_for_six_grids": 12,
+      "combined_lower_bound_waves_for_six_grids": 11,
+      "maximum_qkv_only_wave_reduction_fraction": 0.08333333333333333,
+      "caution": "This is only a packing ceiling. Actual lane phase, cluster dispatch policy, event overhead, cache interference, and library scheduling can erase it. The candidate should not be expected to produce a large single-stream win."
+    }
+  },
+  "lifetime_and_thread_audit": {
+    "outer_ownership": "NNEvaluator creates one external nonblocking compute stream and one ComputeHandle per NN server thread. B29/S2 therefore has two independent handles and primary streams. A handle is submitted by one worker at a time.",
+    "aux_ownership": "Create exactly two auxiliary streams, two cuBLAS handles, and three events per Sm103Model/ComputeHandle, never globally and never shared between the two outer lanes.",
+    "device": "createComputeHandle sets the target device before construction. ComputeHandle's destructor makes gpuIdx current before member destruction. The aux owner must retain that convention and synchronize/destroy its own resources before Model weights are destroyed.",
+    "buffers": "Q, K, and V SizedBuf allocations are distinct and remain alive until TransformerAttentionBlock::apply returns. The primary waits on K-done and V-done before RoPE and before these buffers can return to SimpleAllocator.",
+    "input_and_weights": "trunkScratchBuf and Q/K/V weights are read-only during the fork. Each GEMM writes a disjoint planar output buffer.",
+    "scratch_scalars": "ScratchBuffers::oneBuf and zeroBuf are immutable host FP16 scalars. Passing the same scalar addresses concurrently preserves current host pointer-mode semantics.",
+    "workspace": "The current MatMulLayer FP16 fallback is cublasHgemm and requiredWorkspaceBytes returns zero. It does not consume workspaceBuf, so caller workspace must not be shared with or repurposed for the aux experiment.",
+    "allocator": "SimpleAllocator is touched only by the outer host thread. Aux work performs no allocation, and the join occurs before the Q/K/V RAII buffers leave scope.",
+    "destruction": "Synchronize both auxiliary streams before destroying their cuBLAS handles, events, or streams. ComputeHandle destroys any graph exec in its destructor body before Sm103Model member destruction, which is the required order if graph support is later enabled."
+  },
+  "minimal_patch_plan": {
+    "configuration": {
+      "key": "cudaSm103QKVAuxTactic",
+      "default": "disabled",
+      "only_candidate_id": "cublas-hgemm-q-primary-kv-aux2-b29",
+      "startup_contract": "Require cudaSm103Backend=true, exact CC10.3, maxBatchSize=29, 19x19, FP16, and NHWC. Reject unknown identifiers. Reject simultaneous QKV-strided/fused-QKV or projection-GEMM-Lt selection so the tactic cannot be silently bypassed or change arithmetic.",
+      "runtime_contract": "At exact rows=10469 and C=Q=K=V=384, a selected hook must either enqueue the complete fork/join or throw. For a smaller dynamic batch it may return false before any enqueue and use the official sequential path."
+    },
+    "backend_api": "Add an Sm103QKVAuxFn callback and context pointer to CudaHandles. Sm103Model owns the aux streams/handles/events, installs the callback only for the exact candidate, validates every dimension before enqueue, and logs activation once.",
+    "projection_call": "In the existing non-strided Q/K/V branch, call the SM103 callback with qProj.matBuf, kProj.matBuf, vProj.matBuf, trunkScratchBuf, the existing qBuf/kBuf/vBuf, ScratchBuffers::oneBuf/zeroBuf, exact dimensions, the primary cublas handle, and primary stream. If it returns false before work, execute the unchanged three MatMulLayer::apply calls.",
+    "cublas_semantics": "Create two permanent cuBLAS handles and bind each to one permanent aux stream. Mirror the primary handle's pointer, math, and atomics modes. Invoke cublasHgemm with exactly CUBLAS_OP_N/CUBLAS_OP_N, m=384, n=10469, k=384, lda=ldb=ldc=384, FP16 alpha=1 and beta=0. Do not switch one handle among streams and do not substitute cuBLASLt.",
+    "events": "Create one ready, one K-done, and one V-done event with cudaEventDisableTiming. Reuse them for all 33 blocks. CUDA event semantics bind cudaStreamWaitEvent to the most recently recorded state at the API call and later re-records do not alter an earlier wait.",
+    "workspace": "Do not add a user workspace in the first exact-semantic prototype. The legacy cublasHgemm path has no caller workspace today. If graph capture or profiling proves per-handle internal-workspace serialization, allocate a separate persistent workspace per aux handle outside capture, never share it, and re-prove kernel identity and bitwise output before retaining it.",
+    "files_expected": [
+      "cpp/neuralnet/cudabackend_sm103.h",
+      "cpp/neuralnet/cudabackend_sm103.cpp",
+      "cpp/neuralnet/cudabackend.cpp",
+      "python/tests/test_sm103_workflow.py or a new focused source-contract test"
+    ],
+    "files_forbidden": [
+      "cpp/neuralnet/fa4_sm103_b29_aot_bridge.cpp",
+      "cpp/neuralnet/fa4_sm103_b29_aot_bridge.h",
+      "cpp/neuralnet/fa4_sm103_b29_aot_stub.cpp",
+      "FA4 generator and validator files"
+    ]
+  },
+  "cuda_graph_review": {
+    "current_state": "cudaEventPipelineUseGraph currently rejects every backend except the SM89 custom backend, so the retained SM103 benchmark does not use full-inference CUDA Graph replay.",
+    "capture_topology": "Multi-stream capture is structurally feasible: the primary capture records ready; waits on that recorded event make both aux streams join the capture; K/V run and record done; primary waits on both done events, rejoining both branches before cudaStreamEndCapture on the origin stream.",
+    "event_flags": "The QKV fork/join events are internal graph dependencies and use default record/wait flags. The existing inputReady/applyComplete events remain external graph nodes using cudaEventRecordExternal/cudaEventWaitExternal.",
+    "requirements": [
+      "Create streams, events, cuBLAS handles, modules, and any workspace before capture.",
+      "Warm both aux cuBLAS handles before capture so no lazy allocation occurs inside capture.",
+      "Keep aux streams/events/handles alive until eventPipelineGraphExec is destroyed.",
+      "Use fixed B29 addresses and verify capture, instantiate, and repeated replay with cudaGraphDebugDotPrint or equivalent dependency inspection.",
+      "Do not relax the current SM89-only full-graph gate merely because the QKV subgraph captures; the complete SM103 official/cuDNN/FA4 path needs its own capture qualification."
+    ],
+    "event_reuse": "Repeated record of the same three events is valid for normal submission because each wait binds the event state current at that API call. Full capture must additionally be stress-tested over all 33 repeated forks and graph replay before enabling the graph gate.",
+    "decision": "Treat full-inference graph support as a follow-up qualification, not as a prerequisite or a workaround for the non-graph aux-stream experiment."
+  },
+  "microbenchmark_and_validation_plan": {
+    "cpu_static_first": [
+      "Parser tests: default disabled, exact identifier only, requires SM103 backend.",
+      "Source-contract tests: exact B29/CC10.3 guards, two nonblocking streams, two distinct handles, three disable-timing events, primary join before RoPE, no FA4 file edits.",
+      "Build with the retained no-AB12 FFN and current attention candidate configuration."
+    ],
+    "isolated_gpu_after_authorization": [
+      "Use real B29 weights and a real preLN output. Compare sequential Q/K/V against aux Q/K/V bitwise, with guard regions and at least 10000 event-reuse iterations.",
+      "Measure S1 sequential versus aux including fork/join overhead. A single-stream win is not required.",
+      "Measure S2 with two independent outer contexts. A coordinator start event feeds both primary lanes; each lane fans out to its own two aux streams; coordinator waits on both lane-complete events before the timing stop.",
+      "Capture and replay the isolated six-stream QKV graph separately; inspect its fork/join DAG and compare bitwise output."
+    ],
+    "ncu": [
+      "Profile one sequential and one aux projection in isolation, not concurrent replay.",
+      "Require the same cuBLAS kernel family, grid 6x42x1, block 256, 71 registers/thread, 231424 B dynamic shared memory, 2-SM cluster behavior, and no new spills.",
+      "If separate handles select a different kernel, stop and investigate rather than accepting it as a scheduling experiment."
+    ],
+    "nsys_short_full_graph": [
+      "Run fixed B29/S2 with the accumulated retained tactics and the aux option as the only new variable.",
+      "Verify six compute stream IDs total for two outer lanes and four aux streams, all nonblocking/equal priority.",
+      "Recompute API-to-GPU lead, pending descriptors, dependency-ready QKV frontier, QKV summed time/union/overlap, whole-graph union, and overlap with SDPA and fused FFN.",
+      "Report cudaEventRecord/cudaStreamWaitEvent call count and CPU API time. The topology adds seven event operations per attention block, 231 per lane-forward, 462 per B29/S2 round, or 28182 calls over the 61-forward source-trace cardinality.",
+      "Do not infer CTA co-residency from overlapping kernel intervals; use the static shared-memory proof and describe interval overlap only as concurrent grid lifetime."
+    ],
+    "retention_gate": [
+      "Full-graph B29/S2 short throughput must beat the accumulated parent with profiler evidence that union time, not only summed QKV time, improved.",
+      "Run the standard five-by-1000 B29/S2 long gate.",
+      "Run full replay and the current 2.25x-TRT implementation-error request gate plus aggregate accuracy gates.",
+      "If effective, commit this tactic alone with its stage evidence. If ineffective, remove runtime wiring and retain only the negative evidence."
+    ]
+  },
+  "preimplementation_decision": "The experiment is technically sound but has a bounded upside. Existing host submission is already deep, and the QKV kernels each consume a full SM shared-memory allocation. Aux streams can expose six sibling grids and improve partial-wave/grid ordering, but cannot create same-SM co-residency or expose post-join RoPE/SDPA/FFN early. Event/API overhead is therefore a first-class falsification condition."
+}
