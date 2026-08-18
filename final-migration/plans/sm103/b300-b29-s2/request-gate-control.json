@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-request-gate-control",
+  "status": "fixed",
+  "backend": "tensorrt",
+  "tensorrt_version": "10.16.1.11",
+  "exact_batch": 29,
+  "streams": 2,
+  "rows": 8192,
+  "board": [
+    19,
+    19
+  ],
+  "reference": {
+    "backend": "cuda",
+    "precision": "FP32",
+    "replay_sha256": "789a6f927b90d85c67b30766c7a271e1a711954f87bfe61132c0c58e3626a08b"
+  },
+  "candidate": {
+    "backend": "tensorrt",
+    "precision": "FP16",
+    "replay_sha256": "6a277439c748b56575fa6b549507347b9ff1e51b3a492107cae434359539dc86"
+  },
+  "corpus": {
+    "name": "2026-08-01-19x19-8192-seed20260803-full19.npz",
+    "sha256": "0b2f2838df51ff98847f5bf595f9670350e993c5e178a92855c21e80e75762c5"
+  },
+  "comparison_sha256": "db42f7395c5e2f70c6d805f943f8f41eae752ed2ec947057300d78d0e09db6c2",
+  "request_gate_control": {
+    "policyProbability": {
+      "maximumAbs": 0.011099457740783691,
+      "maximumRmse": 0.000622167659457773
+    },
+    "valueProbability": {
+      "maximumAbs": 0.03413337469100952,
+      "maximumRmse": 0.027866413816809654
+    },
+    "scoreRaw": {
+      "maximumAbs": 0.4619755744934082,
+      "maximumRmse": 0.19242839515209198
+    },
+    "ownershipProbability": {
+      "maximumAbs": 0.007325530052185059,
+      "maximumRmse": 0.0015376248629763722
+    }
+  },
+  "acceptance": {
+    "kind": "per_metric_control_multiplier",
+    "maximum_control_multiplier": 2.0,
+    "aggregate_gates_remain_required": true,
+    "all_request_metrics_must_pass": true
+  }
+}

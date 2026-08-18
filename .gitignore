@@ -95,6 +95,7 @@ tests/results/matchsgfs2/
 .final-migration-env/
 final-migration/records/*
 !final-migration/records/README.md
+!final-migration/records/sm103-b29-optimization-stages.md
 final-migration/archive/apt/*.deb
 final-migration/archive/wheels/*
 final-migration/archive/git/*.bundle

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-fixed-batch-baseline-anchor",
+  "status": "fixed",
+  "production_tactic_plan_ready": false,
+  "selection": {
+    "batch": 29,
+    "streams": 2,
+    "provenance": "user_fixed_after_long_confirmation"
+  },
+  "target": {
+    "architecture": "sm103",
+    "accelerated_target": "sm_103a",
+    "compute_capability": [
+      10,
+      3
+    ],
+    "gpu_class": "b300",
+    "gpu_name": "NVIDIA B300 SXM6 AC",
+    "multi_processor_count": 148,
+    "fixed_board": [
+      19,
+      19
+    ],
+    "precision": "FP16/NHWC"
+  },
+  "model": {
+    "name": "b11c768h12nbt3tflrs-fson-silu",
+    "sha256": "1881600caab9e9d85a3dd6a019e9b8e7d2c237b5f984e13ed49a8645be3077c6",
+    "flattened_rows": 10469
+  },
+  "baseline": {
+    "backend": "tensorrt",
+    "tensorrt_version": "10.16.1.11",
+    "binary_sha256": "883024dc8bbc02e7f6b05b0431034652931acc760b76e7fd455dc996af278612",
+    "config_sha256": "807c646c5e4f6f5a3193f6da4c216782486ec2a3c3015e543a34f605ce2c0e3f",
+    "source_result": ".final-migration-env/baselines/b300-20260818/trt10-peak-confirm/result.json",
+    "source_result_sha256": "b167a3435a0789f0337b8499260f42876988c6cad7694b90dbb02bbcc2a31768",
+    "measurement_kind": "long_stable",
+    "iterations": 1000,
+    "warmup": 20,
+    "samples": 5,
+    "relative_spread": 0.0044150056421250064,
+    "combined_nn_evals_per_sec_median": 6733.719141,
+    "combined_nn_evals_per_sec_min": 6731.432126,
+    "combined_nn_evals_per_sec_max": 6761.161534
+  },
+  "optimization_contract": {
+    "batch_selection_fixed": true,
+    "candidate_results_must_use_batch": 29,
+    "candidate_results_must_use_streams": 2,
+    "candidate_results_must_target": "sm_103a",
+    "candidate_results_require_correctness": true,
+    "candidate_results_require_long_stability": true,
+    "request_gate_control": "final-migration/plans/sm103/b300-b29-s2/request-gate-control.json",
+    "maximum_request_metric_control_multiplier": 2.0
+  }
+}
