@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-incremental-tactic-evidence",
+  "stage": "02b",
+  "tactic": "rmsnorm_c384_warp4_vec8",
+  "status": "retained",
+  "config_delta": {
+    "cudaRMSNormTacticSm120": "warp4-vec8"
+  },
+  "incumbent": {
+    "name": "cublas_hgemm_beta1_residual",
+    "samples_nn_evals_per_sec": [
+      5617.3029,
+      5583.296655
+    ],
+    "median_nn_evals_per_sec": 5600.2997775
+  },
+  "challenger": {
+    "samples_nn_evals_per_sec": [
+      5978.789799,
+      5969.539899
+    ],
+    "median_nn_evals_per_sec": 5974.164849000001,
+    "relative_spread": 0.00154831683319688,
+    "gain_percent": 6.675804623924897
+  },
+  "measurement": {
+    "batch": 29,
+    "streams": 2,
+    "iterations_per_sample": 1000,
+    "warmup": 80,
+    "binary_sha256": "b514d85c5e4d8b33dc0ab2eb26a26030d199d6a5d53a1c48b6b66c21bb3f8738"
+  },
+  "activation_marker": "SM103 portable backend: vec8 C384 RMSNorm active",
+  "whole_graph_attribution": {
+    "official_kernel_total_ns": 106790629,
+    "portable_kernel_total_ns": 50570860,
+    "instances": 8052,
+    "speedup": 2.111311984827635,
+    "portable_kernel": "Sm120Backend::rmsNorm384Vec8Kernel"
+  },
+  "accuracy_closure": "final accumulated portable set passed the 8192-row aggregate and TRT16-relative request gates",
+  "retained": true
+}

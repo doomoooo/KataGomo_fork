@@ -26,6 +26,7 @@
     "cudaSm89Forward": false
   },
   "portable_tactics": {
+    "cudaRMSNormTacticSm120": "warp4-vec8",
     "cudaUseFusedResidual": true,
     "cudaUseFusedResidualGemmSm120": true
   },
@@ -45,9 +46,9 @@
     "cudaUseFusedValueTerminalSm120": false
   },
   "latest_gate": {
-    "name": "cublas_hgemm_beta1_residual",
-    "median_nn_evals_per_sec": 5600.2997775,
-    "gain_vs_previous_percent": 11.99714946634911,
-    "relative_spread": 0.006072218693832158
+    "name": "rmsnorm_c384_warp4_vec8",
+    "median_nn_evals_per_sec": 5974.164849000001,
+    "gain_vs_previous_percent": 6.675804623924897,
+    "relative_spread": 0.00154831683319688
   }
 }
