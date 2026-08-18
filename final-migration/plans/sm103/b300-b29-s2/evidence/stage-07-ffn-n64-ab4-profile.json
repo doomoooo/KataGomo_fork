@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "kind": "katago-sm103-b29-profiler-guided-negative-result",
+  "stage": "07-ffn-m128n64-ab4-two-resident-cta",
+  "status": "dropped_at_isolated_s2_cutoff",
+  "production_ready": false,
+  "gpu_serialization": {
+    "wrapper": "final-migration/environment/with-gpu-lock.sh",
+    "gpu": 0,
+    "label": "stage07-ffn-n64",
+    "all_gpu_actions_locked": true
+  },
+  "hypothesis": {
+    "statement": "Halve the accepted no-AB12 packed N tile from 128 to 64, retain four A/B stages and two C stages, and reach two resident CTAs per B300 SM without the rejected AB3 pipeline starvation.",
+    "only_shape_tested": {
+      "mma_tiler_mn": [128, 64],
+      "cluster_shape_mn": [1, 1],
+      "accumulator_stages": 2,
+      "ab_stages": 4,
+      "c_stages": 2,
+      "k_tile": 64,
+      "k_tiles": 6
+    },
+    "static_shared_memory_bytes": {
+      "a_per_ab_stage": 16384,
+      "b_per_ab_stage": 8192,
+      "ab_per_stage": 24576,
+      "four_ab_stages": 98304,
+      "c_epilogue_subtile_mn": [128, 32],
+      "two_c_stages": 16384,
+      "aligned_control": 1024,
+      "predicted_dynamic_per_cta": 115712,
+      "driver_per_cta": 1024,
+      "predicted_total_per_cta": 116736,
+      "b300_per_sm": 233472,
+      "predicted_resident_ctas_per_sm": 2
+    },
+    "cost": "The persistent grid remains 148 CTAs, but packed-N work tiles and A-tile loads per full output double from 18 to 36."
+  },
+  "cpu_contract": {
+    "status": "passed",
+    "tests": 12,
+    "test_command": ".final-migration-env/venv/bin/python -m unittest python.tests.test_sm103_cudnn_oss_b29_no_ab12_n64_ab4 python.tests.test_sm103_cudnn_oss_b29_no_ab12_n64_ab4_validate",
+    "cutlass_dsl_version": "4.7.0",
+    "cutlass_epilogue_helper_sha256": "b4aa719f4bb4af9e721ce77b9a23b4d141c5c01b4b59d8dc18811e4a157df0cb",
+    "packed_mapping": {
+      "pair_order": ["linear_gate", "linear1"],
+      "channels_per_component": 32,
+      "packed_channels_per_tile": 64,
+      "complete_pairs_per_tile": 1,
+      "pair_split_across_tiles": false
+    },
+    "source_files": {
+      "candidate_sha256": "86286f6e092f5e1e2ae59874f2d5de054a91425da33f5ab4fc7f9057e427328f",
+      "exporter_sha256": "a6fdba6f2fdbba80a8b432e11202da1d60c9d054905afc535ba44e900b6aa7e1",
+      "validator_sha256": "ecdd0e23e204f2fae6607d0c11a2bff2606d97e7f46cf1f8faf8193d02b59f0d",
+      "contract_test_sha256": "68378f25cb52beeaca8ebdb63add0b1b15b9ddf34ca2064a3705a0c0541837de",
+      "validator_test_sha256": "47582a2796f22ea15ed096e8a06d7bafe90542415ada5094f0e77bc1fae04c27"
+    }
+  },
+  "correctness_case_study": {
+    "initial_derivative": {
+      "derivative_sha256": "7b246f9b3bfdf8dbb4e1b05287e6153a7e9c4bb55d3e1e7fbbe5a14a8ca4ab8f",
+      "object_sha256": "86e4dd6f167bf754a3054db0010729b25058011d3157658f5e970c2e351773f8",
+      "library_sha256": "3490a99294eecbba1d1589fc4ab5723d47283d4730505c079df4c65cc662b729",
+      "launch_status": 0,
+      "ab12_untouched": true,
+      "output_nan_count": 0,
+      "output_max_abs_error": 0.10355377197265625,
+      "output_rmse": 0.001532672788016498,
+      "diagnosis": "Not a precision tradeoff: errors stayed in the same output channel groups but varied across persistent M/N work tiles."
+    },
+    "cpipe2_only_intermediate": {
+      "derivative_sha256": "98e917482a1ec1ae5d245ffc7b8c3efcbf79b3ec964cdd02736ad66240f72e9d",
+      "object_sha256": "1360c4bab466bb2006dd8540dd497d6d22885871fe76193bb748aebb4a937f7c",
+      "library_sha256": "e5d7f448fa11c23f19ffdaa666edf090c5a937360fcbb969236892871ef7858b",
+      "five_identical_input_output_sha256": [
+        "1038097a2b7af2cfbfc34ea13ebd8f5c8bae438f458f9471a380c6387e7196ce",
+        "226ae0aaf4f76e0579380fa34ed8ed8b322c563f0c78327be665af744911fcc4",
+        "6d1213dec29a3d00256e3206db0ab599665b6f74417ddfacd4221288871e22e4",
+        "863974538549d4e9375014929e1efe2986a63d64951b1dba6d89b12285118e02",
+        "438ac2f2c3b1df26ef7a1266a7e1415005182e26cd075a3240ee2b5d4bd537a8"
+      ],
+      "bad_mn_tile_counts": [215, 216, 216, 213, 222],
+      "root_cause": "For N64, subtile_cnt=2. The inherited num_prev_subtiles=tile_count*subtile_cnt makes modulo-C2 buffer selection start at zero for every work tile, so C buffer 1 is never used. Reducing the TMA flight depth to two alone cannot prevent immediate reuse of C buffer 0."
+    },
+    "final_fix": {
+      "c_tma_pipeline_stages": "self.num_c_stage (2)",
+      "c_buffer_rotation": "tile_count * (subtile_cnt // 2) + subtile_idx // 2",
+      "result": "deterministic tight correctness passed"
+    }
+  },
+  "final_artifact": {
+    "candidate_id": "cudnn-fe-1_27-oss-dense-gemm-swiglu-proj-fp16-roundtrip-no-ab12-m128n64-ab4-cpipe2-altc2-b29",
+    "numeric_semantics_selector": "projection-fp16-roundtrip-no-ab12-m128n64-ab4-cpipe2-altc2",
+    "artifact_dir": ".final-migration-env/aot/cudnn-oss-b29-no-ab12-m128n64-ab4-cpipe2-altc2-sm103-20260818",
+    "derivative_sha256": "eb566ede31bd98db3887035560c30e676b9c330bfbc50793e2ea6b36cdde9ed0",
+    "patch_sha256": "6ba739aaaea6f382ac959cf265969bde34fa2b21b7213dfd5b4f5933877e8c3c",
+    "manifest_sha256": "65c5473f34103ecc1688d930fd21b39fc7ecad0f6606973affef034da0cf0b43",
+    "object_sha256": "b14be94b452442e4d3df442f16b85721aad92af63387fdde6637ba42a590606e",
+    "library_sha256": "c006b848b953e43016f3f6fe2b0911a96be5cc778d5f3ee6702748d0a8b36e09",
+    "runtime_requires_python": false,
+    "runtime_requires_tvm_ffi": false
+  },
+  "isolated_correctness": {
+    "status": "passed",
+    "reference": "accepted no-AB12 projection-FP16-roundtrip fast SwiGLU",
+    "output_max_abs_error": 0.00006103515625,
+    "output_rmse": 2.2917204489658616e-7,
+    "output_max_rel_error": 0.0018779343226924539,
+    "ab12_untouched": true
+  },
+  "isolated_s1_s2": {
+    "record": ".final-migration-env/benchmarks/sm103-b29-stage07-ffn-n64-ab4-20260818/isolated-timing.json",
+    "record_sha256": "755f487a1e5736d083f54a90cb3a7b27e79c989cda24b1c3fc4affde37f443ef",
+    "method": "preallocated native C ABI, CUDA coordinator events, warmup 1000, five repeats of 1000 iterations",
+    "parent_control_ms": {
+      "s1": 0.023288363138834634,
+      "s2_round": 0.04351699320475261
+    },
+    "candidate_ms": {
+      "s1_samples": [
+        0.028040607452392577,
+        0.02864691162109375,
+        0.0289401912689209,
+        0.028863744735717775,
+        0.028795360565185547
+      ],
+      "s1_median": 0.028795360565185547,
+      "s2_round_samples": [
+        0.051612159729003904,
+        0.05156227111816406,
+        0.051641632080078125,
+        0.05290732955932617,
+        0.05399843215942383
+      ],
+      "s2_round_median": 0.051641632080078125
+    },
+    "relative_to_parent": {
+      "s1_ratio": 1.2364699224896443,
+      "s1_regression_percent": 23.646992248964427,
+      "s2_ratio": 1.186700373279425,
+      "s2_regression_percent": 18.670037327942502
+    },
+    "s2_regression_cutoff_percent": 10.0,
+    "cutoff_passed": false
+  },
+  "profiler_gates": {
+    "ncu_run": false,
+    "full_graph_nsys_run": false,
+    "full_graph_throughput_run": false,
+    "request_accuracy_gate_run": false,
+    "reason": "The user-defined isolated S2 cutoff closes any candidate more than 10% slower than current; this candidate was 18.67% slower."
+  },
+  "decision": {
+    "outcome": "drop",
+    "retained_parent": "no-ab12 M128xN128/AB5 fused FFN",
+    "core_or_cmake_modified": false,
+    "commit_created": false,
+    "reason": "The resource arithmetic is viable and the N64-specific C-buffer race was fixed, but doubling persistent packed-N work tiles and A-tile loads costs 18.67% in isolated S2, beyond the fixed 10% shutdown gate."
+  }
+}

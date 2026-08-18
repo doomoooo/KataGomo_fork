@@ -577,3 +577,36 @@ NCU, whole-graph NSYS, long throughput, and replay. The committed Stage 06
 FP32 core is unchanged. Typed root-cause history, artifact hashes, correctness
 metrics, and the full timing matrix are recorded in
 `stage-06b-fa4-accumulator-modes.json`.
+
+## Stage 07 — fused FFN M128xN64/AB4 resource reshaping
+
+Status: dropped at the fixed isolated S2 `+10%` cutoff.
+
+Stage 05 proved that `115712 B` dynamic shared memory admits two FFN CTAs per
+B300 SM, but reducing the M128xN128 parent to AB3 starved its six-K64
+mainloop.  The only follow-up shape therefore halved packed N from 128 to 64
+and retained AB4/C2.  Static accounting again lands exactly on the boundary:
+four `24576 B` A/B stages, two `8192 B` C stages, and `1024 B` aligned control
+storage total `115712 B`.  Each N64 tile contains exactly one complete
+gate-N32/linear1-N32 pair; no packed pair crosses a tile boundary.
+
+The first native launch exposed a real N64-specific implementation race, not
+a precision compromise.  Although launch status was zero, AB12 remained
+untouched, and no output was NaN, output max/RMSE error was
+`0.103554/0.001533`.  The inherited C-store logic counted raw packed subtiles:
+with `subtile_cnt=2`, `tile_count*subtile_cnt mod C2` is always zero, so every
+persistent tile reused C buffer zero while buffer one stayed idle.  Five
+identical launches after reducing only the C TMA flight depth produced five
+different output hashes and `213-222` corrupt M/N tiles.  The final derivative
+both binds the TMA flight depth to C2 and rotates buffers by completed
+gate/linear1 pairs.  Tight correctness then passed at `6.104e-5` max absolute
+error and `2.292e-7` RMSE, with AB12 still untouched.
+
+The corrected final artifact has derivative/object/DSO hashes
+`eb566ede31bd... / b14be94b4524... / c006b848b953...`.  It nevertheless
+measured S1 `28.795 us` and S2 round `51.642 us`, versus the accepted parent
+`23.288/43.517 us`: regressions of `23.65%` and `18.67%`.  This exceeds the
+user-fixed S2 shutdown threshold, so the candidate stopped before NCU,
+full-graph NSYS, throughput, or request replay.  No core/CMake path changed
+and no commit is created.  CPU contracts, race diagnosis, all samples, and
+complete hashes are in `stage-07-ffn-n64-ab4-profile.json`.
