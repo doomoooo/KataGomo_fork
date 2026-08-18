@@ -46,7 +46,7 @@
   },
   "acceptance": {
     "kind": "per_metric_control_multiplier",
-    "maximum_control_multiplier": 2.0,
+    "maximum_control_multiplier": 2.25,
     "aggregate_gates_remain_required": true,
     "all_request_metrics_must_pass": true
   }

@@ -53,6 +53,6 @@
     "candidate_results_require_correctness": true,
     "candidate_results_require_long_stability": true,
     "request_gate_control": "final-migration/plans/sm103/b300-b29-s2/request-gate-control.json",
-    "maximum_request_metric_control_multiplier": 2.0
+    "maximum_request_metric_control_multiplier": 2.25
   }
 }

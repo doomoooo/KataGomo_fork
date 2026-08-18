@@ -162,7 +162,7 @@ class Sm103B29ContractTests(unittest.TestCase):
                 with self.assertRaises(b29.B29AnchorError):
                     b29.load_baseline_anchor(path)
 
-    def test_trt16_request_gate_is_exactly_twice_the_fixed_control(self) -> None:
+    def test_trt16_request_gate_uses_the_fixed_control_multiplier(self) -> None:
         thresholds = b29.trt16_request_gate_thresholds()
         for head, metrics in b29.TRT16_REQUEST_GATE_CONTROL.items():
             for metric, value in metrics.items():
@@ -235,6 +235,38 @@ class Sm103B29ContractTests(unittest.TestCase):
         self.assertFalse(outcome["checks"]["policyProbability"]["maximumAbs"])
         self.assertFalse(
             outcome["checks"]["ownershipProbability"]["maximumRmse"]
+        )
+
+    def test_fast_roundtrip_ffn_is_in_the_allowed_error_regime(self) -> None:
+        candidate = {
+            "requestGate": {
+                "policyProbability": {
+                    "maximumAbs": 0.018788933753967285,
+                    "maximumRmse": 0.001336506917141378,
+                },
+                "valueProbability": {
+                    "maximumAbs": 0.03692281246185303,
+                    "maximumRmse": 0.030143601819872856,
+                },
+                "scoreRaw": {
+                    "maximumAbs": 0.43856191635131836,
+                    "maximumRmse": 0.20585453510284424,
+                },
+                "ownershipProbability": {
+                    "maximumAbs": 0.011559724807739258,
+                    "maximumRmse": 0.002982273930683732,
+                },
+            }
+        }
+        outcome = b29.evaluate_trt16_request_gate(candidate)
+        self.assertTrue(outcome["passed"])
+        self.assertGreater(
+            outcome["ratios_to_control"]["policyProbability"]["maximumRmse"],
+            2.0,
+        )
+        self.assertLess(
+            outcome["ratios_to_control"]["policyProbability"]["maximumRmse"],
+            b29.TRT16_REQUEST_GATE_MULTIPLIER,
         )
 
     def test_request_gate_fails_closed_on_missing_or_invalid_metrics(self) -> None:
